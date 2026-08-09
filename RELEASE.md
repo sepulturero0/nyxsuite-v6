@@ -9,6 +9,25 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.5.6
+
+- Nyxify now offers Scan Banned Rows, Remove Banned, and Warm Up Banned
+  controls in both the extension popup and the web dashboard, backed by new
+  local API endpoints (`/replace_banned/scan`, `/replace_banned/remove`,
+  `/replace_banned/warmup`).
+- Remove Banned clears a banned row's SnapBoard AdsPower ID, forces a proxy
+  rotation (the rotation request now carries an explicit `force` flag so the
+  proxy actually changes), and removes the row from the local store. Warm Up
+  Banned pushes the SnapBoard status to "Warm Up" first. Both actions continue
+  per row instead of aborting the whole batch when a single row fails.
+- The SnapBoard OTP/SMS fetch window is now one minute (was 30 seconds), so
+  SnapBoard has more time to detect a code before the fresh email/number
+  recovery path triggers.
+- When verification fetches an OTP, Nyxify now always clicks the SnapBoard
+  Check Code / Check SMS button and waits for a fresh code instead of trusting
+  a stale row value, and fails fast with an explicit "button not found" error
+  when the check button cannot be clicked.
+
 ### NyxSuite v6.5.5
 
 - Restored Nyxify wrong-code recovery for email and SMS verification: when
@@ -51,79 +70,6 @@ repo, and downloads the newest non-draft release asset matching
   controls, backed by the existing `lockG5` and `lockTV` SnapBoard lock keys.
 - Added regression coverage for formatted phone fields, alternate phone-step
   submit buttons, and the segmented provider-lock popup contract.
-
-### NyxSuite v6.4.8
-
-- Nyxify now clears unrelated browser tabs immediately after cookie warm-up and
-  before the Snapchat signup handoff.
-- The post-warmup cleanup keeps `start.adspower.net` AdsPower tabs open, while
-  closing stale warm-up pages, extension tabs, and other unrelated pages.
-- Signup now starts from a cleaner AdsPower browser state, reducing the chance
-  that stale tabs interfere with the handoff.
-- Added regression coverage for the exact warm-up -> cleanup -> signup ordering
-  and for preserving the AdsPower tab while closing unrelated tabs.
-
-### NyxSuite v6.4.7
-
-- Nyxify now refreshes the signup form after one second when "Agree and
-  Continue" stays disabled and no visible reCAPTCHA badge/iframe is present.
-- reCAPTCHA detection now requires a visible badge or frame, so a background
-  loader alone no longer blocks the fast signup refresh path.
-- Nyx now detects Chrome's Bitmoji SDK "webpage temporarily down / moved
-  permanently" error page and refreshes it during initial load, post-OAuth
-  redirect, and editor waits.
-- Persistent signup stalls still flow into the existing delete-profile,
-  proxy-rotate, and recreate-profile retry logic after the bounded refresh
-  budget is exhausted.
-- Added regression tests for captchaless disabled submits, visible reCAPTCHA
-  detection, and Bitmoji SDK transient-load refreshes.
-
-### NyxSuite v6.4.6
-
-- Added a new Nyxmoji `cute_preset` outfit style with 40 curated cute/seductive
-  silhouettes expanded into 120 total looks across soft cute, seductive classic,
-  and pretty casual colorways.
-- Cute preset garments use only catalog-backed selectors and verified swatch
-  colors, leaving pieces in their natural color when a matching pretty color is
-  not available.
-- Existing outfit presets remain unchanged while the dashboard now exposes
-  "Cute Preset" as an outfit style option.
-- Live color application now scopes preferred preset colors to the active
-  garment panel and preserves fallback garment color metadata.
-
-### NyxSuite v6.4.5
-
-- Completed the Nyxmoji apparel catalog from the real Bitmoji editor, expanding
-  the released apparel coverage to 246 outfits, 291 tops, 131 bottoms,
-  27 dresses, 78 footwear options, 10 socks, and 94 outerwear options.
-- Fixed fashion-panel scrolling so virtualized outfit, top, bottom, footwear,
-  dress, sock, and outerwear selectors are collected from the actual
-  `.fashion-traits-container` instead of only the first visible batch.
-- Original `outfit=<id>` presets now render through atomic Bitmoji outfit params
-  with `clothing_type=0`, while mix-and-match garments continue to receive live
-  selector and swatch verification.
-- Colour verification now treats the active swatch as the selected item's base
-  render state, fixing single-colour garments whose active swatch correctly
-  produces no body URL change.
-- The live scanner now skips hidden duplicate virtualized tiles, starts
-  selection from the current viewport before resetting, and can prefer a direct
-  `sdk.bitmoji.com/web-builder` tab when the parent iframe is unreliable.
-
-### NyxSuite v6.4.4
-
-- Nyxmoji live catalog scans now verify every required garment selector against
-  the real Bitmoji editor: Outfits, Tops, Bottoms, Dresses, Footwear, and
-  Outerwear all write only after complete selector and colour audits.
-- The scanner now handles real outfit tiles, virtualized garment lists, and
-  virtualized colour pickers without falling back to stale or wrong selectors.
-- Colour variants are linked to the selected garment's real Bitmoji render
-  params instead of generic synthesized tones, including garments with no
-  colour picker.
-- AdsPower profile attachment is safer when the Local API is unavailable, and
-  scanner restoration resets the captured Bitmoji builder iframe without saving
-  draft avatar changes.
-- The bundled Nyxmoji catalog has been regenerated from a complete live audit
-  of AdsPower profile `k1f2la8v`.
 
 ### NyxSuite v6.4.3
 

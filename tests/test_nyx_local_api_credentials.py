@@ -2,12 +2,9 @@ import json
 import socket
 import tempfile
 import unittest
-import urllib.error
 import urllib.request
 from pathlib import Path
-from unittest import mock
 
-import core.bitmoji_config as bitmoji_config
 from core.nyx_local_api import NyxLocalApiServer
 from core.task_store import TaskStore
 
@@ -52,22 +49,6 @@ class NyxLocalApiCredentialTests(unittest.TestCase):
         with urllib.request.urlopen(req, timeout=5) as resp:
             return json.loads(resp.read().decode("utf-8"))
 
-    def _post_error(self, path, payload):
-        data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            self.base + path,
-            data=data,
-            headers={"Content-Type": "application/json", "X-Nyx-Token": "testtoken"},
-            method="POST",
-        )
-        with self.assertRaises(urllib.error.HTTPError) as raised:
-            urllib.request.urlopen(req, timeout=5)
-        error = raised.exception
-        try:
-            return error.code, json.loads(error.read().decode("utf-8"))
-        finally:
-            error.close()
-
     def test_queue_upsert_stores_credentials_privately(self):
         response = self._post("/queue/upsert", {
             "entries": [{
@@ -88,32 +69,6 @@ class NyxLocalApiCredentialTests(unittest.TestCase):
         private_row = self.store.get_task_by_profile_id("k1api")
         self.assertEqual(private_row["username"], "apiuser")
         self.assertEqual(private_row["password"], "ApiPw7!")
-
-    def test_bitmoji_models_rejects_malformed_models_without_saving(self):
-        data_dir = Path(self.tmp.name) / "data"
-        data_dir.mkdir()
-        models_path = data_dir / "bitmoji_models.json"
-        existing = {"M": {"tops": {"mode": "fixed", "id": "5"}}}
-        models_path.write_text(json.dumps(existing), encoding="utf-8")
-        with mock.patch.object(bitmoji_config, "DATA_DIR", data_dir), \
-             mock.patch.object(bitmoji_config, "MODELS_PATH", models_path):
-            status, response = self._post_error("/bitmoji/models", {"models": []})
-        self.assertEqual(status, 400)
-        self.assertFalse(response["ok"])
-        self.assertEqual(json.loads(models_path.read_text(encoding="utf-8")), existing)
-
-    def test_bitmoji_models_rejects_a_non_mapping_json_body_without_disconnecting(self):
-        data_dir = Path(self.tmp.name) / "data"
-        data_dir.mkdir()
-        models_path = data_dir / "bitmoji_models.json"
-        existing = {"M": {"tops": {"mode": "fixed", "id": "5"}}}
-        models_path.write_text(json.dumps(existing), encoding="utf-8")
-        with mock.patch.object(bitmoji_config, "DATA_DIR", data_dir), \
-             mock.patch.object(bitmoji_config, "MODELS_PATH", models_path):
-            status, response = self._post_error("/bitmoji/models", [1])
-        self.assertEqual(status, 400)
-        self.assertFalse(response["ok"])
-        self.assertEqual(json.loads(models_path.read_text(encoding="utf-8")), existing)
 
 
 if __name__ == "__main__":

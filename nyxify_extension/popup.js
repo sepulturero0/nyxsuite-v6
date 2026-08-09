@@ -565,14 +565,34 @@ function runBotAction(action, loadingMessage, fallbackMessage) {
 
 function setReplaceBannedStatus(message, rows) {
   const status = document.getElementById("replaceBannedStatus");
-  const replaceButton = document.getElementById("replaceBannedButton");
+  const removeButton = document.getElementById("removeBannedButton");
+  const warmupButton = document.getElementById("warmupBannedButton");
+  const ids = document.getElementById("bannedAdspowerIds");
   latestBannedRows = Array.isArray(rows) ? rows : latestBannedRows;
   if (status) {
     status.textContent = String(message || "");
   }
-  if (replaceButton) {
-    replaceButton.disabled = latestBannedRows.length === 0;
+  if (ids) {
+    ids.value = formatBannedAdspowerIds(latestBannedRows);
   }
+  if (removeButton) {
+    removeButton.disabled = latestBannedRows.length === 0;
+  }
+  if (warmupButton) {
+    warmupButton.disabled = latestBannedRows.length === 0;
+  }
+}
+
+function formatBannedAdspowerIds(rows) {
+  const seen = new Set();
+  return (Array.isArray(rows) ? rows : [])
+    .map((row) => String((row && (row.adspower_id || row.adspower_profile_id || row.profile_id)) || "").trim())
+    .filter((id) => {
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .join("\n");
 }
 
 function scanBannedRows() {
@@ -592,27 +612,51 @@ function scanBannedRows() {
   });
 }
 
-function replaceBannedRows() {
+function removeBannedRows() {
   if (!latestBannedRows.length) {
     setReplaceBannedStatus("Scan banned rows first.", []);
     return;
   }
-  const replaceButton = document.getElementById("replaceBannedButton");
-  if (replaceButton) {
-    replaceButton.disabled = true;
+  const removeButton = document.getElementById("removeBannedButton");
+  if (removeButton) {
+    removeButton.disabled = true;
   }
-  setReplaceBannedStatus(`Replacing ${latestBannedRows.length} banned row(s)...`, latestBannedRows);
-  chrome.runtime.sendMessage({ type: "NYXIFY_REPLACE_BANNED_ROWS", rows: latestBannedRows }, (response) => {
+  setReplaceBannedStatus(`Removing ${latestBannedRows.length} banned row(s)...`, latestBannedRows);
+  chrome.runtime.sendMessage({ type: "NYXIFY_REMOVE_BANNED_ROWS", rows: latestBannedRows }, (response) => {
     if (!response || !response.ok) {
-      setReplaceBannedStatus((response && response.error) || "Replace banned failed.", latestBannedRows);
+      setReplaceBannedStatus((response && response.error) || "Remove banned failed.", latestBannedRows);
       return;
     }
     const payload = response.payload || {};
     setReplaceBannedStatus(
-      payload.message || `Replace banned finished for ${Number(payload.count || 0)} row(s).`,
+      payload.message || `Remove banned finished for ${Number(payload.count || 0)} row(s).`,
       []
     );
-    refreshPopupStatus("Replace banned finished.", true);
+    refreshPopupStatus("Remove banned finished.", true);
+  });
+}
+
+function warmupBannedRows() {
+  if (!latestBannedRows.length) {
+    setReplaceBannedStatus("Scan banned rows first.", []);
+    return;
+  }
+  const warmupButton = document.getElementById("warmupBannedButton");
+  if (warmupButton) {
+    warmupButton.disabled = true;
+  }
+  setReplaceBannedStatus(`Changing ${latestBannedRows.length} banned row(s) to Warm Up...`, latestBannedRows);
+  chrome.runtime.sendMessage({ type: "NYXIFY_WARMUP_BANNED_ROWS", rows: latestBannedRows }, (response) => {
+    if (!response || !response.ok) {
+      setReplaceBannedStatus((response && response.error) || "Warm Up update failed.", latestBannedRows);
+      return;
+    }
+    const payload = response.payload || {};
+    setReplaceBannedStatus(
+      payload.message || `Warm Up status updated for ${Number(payload.count || 0)} row(s).`,
+      latestBannedRows
+    );
+    refreshPopupStatus("Warm Up banned finished.", true);
   });
 }
 
@@ -828,7 +872,8 @@ document.getElementById("clearQueueButton").addEventListener("click", () => {
   runBotAction("clear_queue", "Clearing Nyxify queue...", "Nyxify queue cleared.");
 });
 document.getElementById("scanBannedButton").addEventListener("click", scanBannedRows);
-document.getElementById("replaceBannedButton").addEventListener("click", replaceBannedRows);
+document.getElementById("removeBannedButton").addEventListener("click", removeBannedRows);
+document.getElementById("warmupBannedButton").addEventListener("click", warmupBannedRows);
 
 [
   "popupTemporaryName",

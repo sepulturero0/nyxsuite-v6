@@ -142,12 +142,28 @@ async function callAction(p, path, payload) {
 
 function updateReplaceBannedDashboardSummary(message, rows) {
   const summary = el("replace-banned-summary-nyxify");
-  const replaceBtn = el("replace-banned-nyxify");
+  const removeBtn = el("remove-banned-nyxify");
+  const warmupBtn = el("warmup-banned-nyxify");
+  const ids = el("banned-adspower-ids-nyxify");
   if (Array.isArray(rows)) {
     state.nyxify.bannedRows = rows;
   }
   if (summary) summary.textContent = message || "";
-  if (replaceBtn) replaceBtn.disabled = !state.nyxify.bannedRows.length;
+  if (ids) ids.value = formatBannedAdspowerIds(state.nyxify.bannedRows);
+  if (removeBtn) removeBtn.disabled = !state.nyxify.bannedRows.length;
+  if (warmupBtn) warmupBtn.disabled = !state.nyxify.bannedRows.length;
+}
+
+function formatBannedAdspowerIds(rows) {
+  const seen = new Set();
+  return (Array.isArray(rows) ? rows : [])
+    .map(row => String((row && (row.adspower_id || row.adspower_profile_id || row.profile_id)) || "").trim())
+    .filter(id => {
+      if (!id || seen.has(id)) return false;
+      seen.add(id);
+      return true;
+    })
+    .join("\n");
 }
 
 async function scanBannedFromDashboard() {
@@ -172,20 +188,37 @@ async function scanBannedFromDashboard() {
   }
 }
 
-async function replaceBannedFromDashboard() {
+async function removeBannedFromDashboard() {
   const rows = state.nyxify.bannedRows || [];
   if (!rows.length) {
     updateReplaceBannedDashboardSummary("Scan banned rows first.", []);
     return;
   }
-  const replaceBtn = el("replace-banned-nyxify");
-  if (replaceBtn) replaceBtn.disabled = true;
-  updateReplaceBannedDashboardSummary(`Replacing ${rows.length} banned row(s)...`, rows);
-  const result = await callAction("nyxify", "/replace_banned/replace", { rows });
+  const removeBtn = el("remove-banned-nyxify");
+  if (removeBtn) removeBtn.disabled = true;
+  updateReplaceBannedDashboardSummary(`Removing ${rows.length} banned row(s)...`, rows);
+  const result = await callAction("nyxify", "/replace_banned/remove", { rows });
   if (result && result.ok !== false) {
-    updateReplaceBannedDashboardSummary(result.message || "Replace banned finished.", []);
+    updateReplaceBannedDashboardSummary(result.message || "Remove banned finished.", []);
   } else {
-    updateReplaceBannedDashboardSummary((result && (result.error || result.message)) || "Replace banned failed.", rows);
+    updateReplaceBannedDashboardSummary((result && (result.error || result.message)) || "Remove banned failed.", rows);
+  }
+}
+
+async function warmupBannedFromDashboard() {
+  const rows = state.nyxify.bannedRows || [];
+  if (!rows.length) {
+    updateReplaceBannedDashboardSummary("Scan banned rows first.", []);
+    return;
+  }
+  const warmupBtn = el("warmup-banned-nyxify");
+  if (warmupBtn) warmupBtn.disabled = true;
+  updateReplaceBannedDashboardSummary(`Changing ${rows.length} banned row(s) to Warm Up...`, rows);
+  const result = await callAction("nyxify", "/replace_banned/warmup", { rows });
+  if (result && result.ok !== false) {
+    updateReplaceBannedDashboardSummary(result.message || "Warm Up banned finished.", rows);
+  } else {
+    updateReplaceBannedDashboardSummary((result && (result.error || result.message)) || "Warm Up update failed.", rows);
   }
 }
 
@@ -1021,7 +1054,8 @@ el("fullauto-save-signup").addEventListener("click", async () => {
 
 el("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b) setActive(b.dataset.tab); });
 el("scan-banned-nyxify").addEventListener("click", scanBannedFromDashboard);
-el("replace-banned-nyxify").addEventListener("click", replaceBannedFromDashboard);
+el("remove-banned-nyxify").addEventListener("click", removeBannedFromDashboard);
+el("warmup-banned-nyxify").addEventListener("click", warmupBannedFromDashboard);
 
 // Sort on column header click
 document.addEventListener("click", e => {

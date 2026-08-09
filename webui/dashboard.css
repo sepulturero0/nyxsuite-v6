@@ -67,6 +67,7 @@ main{padding:16px 20px;max-width:1760px;margin:0 auto}
 .replace-banned-dashboard{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end;border:1px solid var(--line-soft);border-radius:var(--r-sm);background:rgba(12,20,36,.72);padding:6px 8px}
 .replace-banned-dashboard .detail{font-size:12px}
 .replace-banned-dashboard .detail:empty{display:none}
+.replace-banned-dashboard .banned-adspower-ids{flex:1 1 160px;min-height:58px;max-width:220px;resize:vertical;white-space:pre}
 .panel-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px;margin-bottom:8px}
 .panel-head-btns{display:flex;gap:6px;flex-shrink:0}
 .runner-status-strip{display:flex;align-items:center;justify-content:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:8px;min-height:34px}

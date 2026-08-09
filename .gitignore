@@ -52,5 +52,12 @@ Thumbs.db
 desktop.ini
 OPENCODE_PROMPT_v*.md
 
+# Local private agent memory
+Agent Memory/
+Codex Memory/
+
+# Local passive-observation run data (never commit)
+artifacts/
+
 # Generated per-install agent token (secret — never commit)
 agent_token.txt

@@ -128,12 +128,14 @@
             </div>
             <div class="replace-banned-panel">
               <div>
-                <strong>Replace banned</strong>
+                <strong>Remove banned</strong>
                 <p id="replaceBannedStatus" class="muted"></p>
+                <textarea id="bannedAdspowerIds" class="input banned-adspower-ids" rows="3" readonly></textarea>
               </div>
-              <div class="button-row button-row-compact button-row-two replace-banned-actions">
+              <div class="button-row button-row-compact replace-banned-actions">
                 <button id="scanBannedButton" class="button button-secondary" type="button">Scan banned</button>
-                <button id="replaceBannedButton" class="button button-danger" type="button" disabled>Replace all</button>
+                <button id="removeBannedButton" class="button button-danger" type="button" disabled>Remove banned</button>
+                <button id="warmupBannedButton" class="button button-secondary" type="button" disabled>Warm Up banned</button>
               </div>
             </div>
             <div class="inline-settings">

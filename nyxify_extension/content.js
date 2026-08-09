@@ -27,7 +27,7 @@
   var USERNAME_UPDATE_POLL_INTERVAL_MS = 1200;
   var SNAPBOARD_REFRESH_POLL_INTERVAL_MS = 1200;
   var SNAPBOARD_REFRESH_ACK_KEY = "nyxifySnapboardRefreshAck";
-  var OTP_FETCH_TIMEOUT_MS = 30000;
+  var OTP_FETCH_TIMEOUT_MS = 60000;
   var EMAIL_FETCH_TIMEOUT_MS = 45000;
   // SnapBoard's "get new email / number" (redo) buttons enforce a ~60s cooldown
   // after each order. Wait a little past that so a reorder click isn't a no-op.
@@ -1536,8 +1536,6 @@
       var config = await getStoredConfig();
       var apiConfig = getLocalApiConfig(config);
       if (!apiConfig.localApiUrl) return;
-      if (config.proxyBlockerEnabled === false && config.proxyCheckerEnabled === false) return;
-
       var headers = {};
       if (apiConfig.localToken) headers["X-Nyxify-Token"] = apiConfig.localToken;
 
@@ -1546,6 +1544,7 @@
       });
       var payload = await response.json();
       if (!response.ok || !payload.ok || !payload.row_key) return;
+      if (!payload.force && config.proxyBlockerEnabled === false && config.proxyCheckerEnabled === false) return;
 
       var rowKey = normalizeText(payload.row_key);
       var rowId = extractRowId(rowKey);
@@ -1863,47 +1862,55 @@
   }
 
   async function clickCheckCodeUntilOtp(rowId, timeoutMs) {
-    var startedAt = Date.now();
-    var latestCode = getOtpTextForRow(rowId);
-    var popupSnapshot = captureOtpPopupSnapshot();
-    while (!latestCode && (Date.now() - startedAt) < timeoutMs) {
-      clickCheckCode(rowId);
-      latestCode = await waitForOtpCode(
-        rowId,
-        Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
-        popupSnapshot
-      );
-      if (latestCode) {
-        return latestCode;
-      }
-      if (hasNoPendingOrderToast("email")) {
-        return "";
-      }
-      await sleep(300);
-    }
-    return latestCode || "";
+    return clickAuthCodeUntilFound(rowId, timeoutMs, false);
   }
 
   async function clickCheckSmsUntilOtp(rowId, timeoutMs) {
+    return clickAuthCodeUntilFound(rowId, timeoutMs, true);
+  }
+
+  async function clickAuthCodeUntilFound(rowId, timeoutMs, sms) {
     var startedAt = Date.now();
-    var latestCode = getSmsTextForRow(rowId);
     var popupSnapshot = captureOtpPopupSnapshot();
-    while (!latestCode && (Date.now() - startedAt) < timeoutMs) {
-      clickCheckSms(rowId);
-      latestCode = await waitForSmsCode(
-        rowId,
-        Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
-        popupSnapshot
-      );
-      if (latestCode) {
-        return latestCode;
+    while ((Date.now() - startedAt) < timeoutMs) {
+      var clicked = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
+      if (clicked) {
+        var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+          rowId,
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
+          popupSnapshot
+        );
+        if (latestCode) {
+          return { ok: true, code: latestCode };
+        }
+        if (hasNoPendingOrderToast(sms ? "phone" : "email")) {
+          return {
+            ok: false,
+            terminal: true,
+            error: sms
+              ? "No pending phone order for this account. Request a number first."
+              : "No pending email order for this account. Get email first.",
+          };
+        }
+        await sleep(300);
+      } else {
+        // Never proceed without having actually clicked the check button; fail
+        // fast when it can't be found/clicked instead of burning the window.
+        await sleep(500);
+        if ((Date.now() - startedAt) >= OTP_CLICK_RETRY_INTERVAL_MS) {
+          return {
+            ok: false,
+            error: sms
+              ? "Check SMS button not found on SnapBoard row."
+              : "Check Code button not found on SnapBoard row.",
+          };
+        }
       }
-      if (hasNoPendingOrderToast("phone")) {
-        return "";
-      }
-      await sleep(300);
     }
-    return latestCode || "";
+    return {
+      ok: false,
+      error: sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.",
+    };
   }
 
   async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks) {
@@ -1985,17 +1992,15 @@
         return;
       }
 
-      var code = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
-      if (!code) {
+      var codeResult = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
+      if (!codeResult.ok || !codeResult.code) {
         headers["Content-Type"] = "application/json";
         await fetch(apiConfig.localApiUrl + "/otp/result", {
           method: "POST",
           headers: headers,
           body: JSON.stringify({
             row_key: rowKey,
-            error: hasNoPendingOrderToast("email")
-              ? "No pending email order for this account. Get email first."
-              : "OTP code not found on SnapBoard row.",
+            error: codeResult.error || "OTP code not found on SnapBoard row.",
           }),
         });
         return;
@@ -2007,7 +2012,7 @@
         headers: headers,
         body: JSON.stringify({
           row_key: rowKey,
-          code: code,
+          code: codeResult.code,
         }),
       });
     } catch (error) {
@@ -2372,18 +2377,16 @@
           sendResponse({ ok: false, error: "SnapBoard row email does not match pending OTP account." });
           return;
         }
-        var code = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
-        if (!code) {
+        var codeResult = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
+        if (!codeResult.ok || !codeResult.code) {
           sendResponse({
             ok: false,
-            terminal: hasNoPendingOrderToast("email"),
-            error: hasNoPendingOrderToast("email")
-              ? "No pending email order for this account. Get email first."
-              : "OTP code not found on SnapBoard row.",
+            terminal: !!codeResult.terminal,
+            error: codeResult.error || "OTP code not found on SnapBoard row.",
           });
           return;
         }
-        sendResponse({ ok: true, code: code });
+        sendResponse({ ok: true, code: codeResult.code });
         return;
       }
 
@@ -2404,18 +2407,16 @@
           sendResponse({ ok: false, error: "SnapBoard row phone does not match pending SMS account." });
           return;
         }
-        var smsCode = await clickCheckSmsUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
-        if (!smsCode) {
+        var smsResult = await clickCheckSmsUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
+        if (!smsResult.ok || !smsResult.code) {
           sendResponse({
             ok: false,
-            terminal: hasNoPendingOrderToast("phone"),
-            error: hasNoPendingOrderToast("phone")
-              ? "No pending phone order for this account. Request a number first."
-              : "SMS code not found on SnapBoard row.",
+            terminal: !!smsResult.terminal,
+            error: smsResult.error || "SMS code not found on SnapBoard row.",
           });
           return;
         }
-        sendResponse({ ok: true, code: smsCode });
+        sendResponse({ ok: true, code: smsResult.code });
         return;
       }
 

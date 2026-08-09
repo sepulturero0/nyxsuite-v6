@@ -15,7 +15,7 @@ class _ProxyRotateStore:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._pending = {}   # row_key -> {"dispatched": bool, "created_at": float, "max_clicks": int|None}
+        self._pending = {}   # row_key -> {"dispatched": bool, "created_at": float, "max_clicks": int|None, "force": bool}
         self._results = {}   # row_key -> {"proxy": str|None, "error": str|None, "done_at": float}
 
     def _normalize_max_clicks(self, max_clicks):
@@ -27,12 +27,13 @@ class _ProxyRotateStore:
             return None
         return max(1, min(10, parsed))
 
-    def request(self, row_key, max_clicks=None):
+    def request(self, row_key, max_clicks=None, force=False):
         with self._lock:
             self._pending[row_key] = {
                 "dispatched": False,
                 "created_at": time.monotonic(),
                 "max_clicks": self._normalize_max_clicks(max_clicks),
+                "force": bool(force),
             }
             self._results.pop(row_key, None)
 
@@ -44,6 +45,7 @@ class _ProxyRotateStore:
                     return {
                         "row_key": key,
                         "max_clicks": val.get("max_clicks"),
+                        "force": bool(val.get("force")),
                     }
             return None
 
@@ -743,7 +745,7 @@ class NyxifyLocalApiServer:
                 "row": item,
             }
 
-        self.proxy_rotate_store.request(row_key, max_clicks=3)
+        self.proxy_rotate_store.request(row_key, max_clicks=3, force=True)
         proxy, proxy_error = self._wait_for_value_result(
             self.proxy_rotate_store,
             row_key,
@@ -829,16 +831,95 @@ class NyxifyLocalApiServer:
             "row": item,
         }
 
-    def replace_banned_rows(self, rows=None):
-        candidates = []
+    def _remove_one_banned_row(self, row):
+        item = _ReplaceBannedScanStore._normalize_row(row)
+        if not item:
+            return {"ok": False, "status": "failed", "error": "Row key is required.", "row": row or {}}
+
+        row_key = item["row_key"]
+        warnings = []
+
+        self.adspower_update_store.request(row_key, "")
+        adspower_clear_ok, adspower_clear_error = self._wait_for_update_success(
+            self.adspower_update_store,
+            row_key,
+            timeout_seconds=30,
+        )
+        if not adspower_clear_ok:
+            warnings.append(adspower_clear_error or "SnapBoard AdsPower ID clear was not confirmed.")
+
+        self.proxy_rotate_store.request(row_key, max_clicks=3)
+        proxy, proxy_error = self._wait_for_value_result(
+            self.proxy_rotate_store,
+            row_key,
+            "proxy",
+            timeout_seconds=80,
+        )
+        if not proxy:
+            return {
+                "ok": False,
+                "status": "failed",
+                "row_key": row_key,
+                "adspower_id": item.get("adspower_id", ""),
+                "error": proxy_error or "Proxy did not change.",
+                "row": item,
+                "warnings": warnings,
+            }
+
+        updated = self.store.remove_for_banned_account(row_key=row_key, proxy_address=proxy)
+
+        return {
+            "ok": not warnings,
+            "status": "partial" if warnings else "removed",
+            "row_key": row_key,
+            "adspower_id": item.get("adspower_id", ""),
+            "proxy": proxy,
+            "local_updated": bool(updated),
+            "warnings": warnings,
+            "row": item,
+        }
+
+    def _warmup_one_banned_row(self, row):
+        item = _ReplaceBannedScanStore._normalize_row(row)
+        if not item:
+            return {"ok": False, "status": "failed", "error": "Row key is required.", "row": row or {}}
+
+        row_key = item["row_key"]
+        self.status_update_store.request(row_key, "Warm Up")
+        status_ok, status_error = self._wait_for_update_success(
+            self.status_update_store,
+            row_key,
+            timeout_seconds=30,
+        )
+        if not status_ok:
+            return {
+                "ok": False,
+                "status": "failed",
+                "row_key": row_key,
+                "adspower_id": item.get("adspower_id", ""),
+                "error": status_error or "SnapBoard Warm Up status was not confirmed.",
+                "row": item,
+            }
+        return {
+            "ok": True,
+            "status": "warmup",
+            "row_key": row_key,
+            "adspower_id": item.get("adspower_id", ""),
+            "row": item,
+        }
+
+    def _banned_candidates(self, rows=None):
         if rows:
             candidates = [
                 _ReplaceBannedScanStore._normalize_row(row, index=index)
                 for index, row in enumerate(rows or [])
             ]
-            candidates = [row for row in candidates if row]
-        else:
-            candidates, _updated_at = self.replace_banned_scan_store.banned_rows()
+            return [row for row in candidates if row]
+        candidates, _updated_at = self.replace_banned_scan_store.banned_rows()
+        return candidates
+
+    def replace_banned_rows(self, rows=None):
+        candidates = self._banned_candidates(rows)
 
         results = [self._replace_one_banned_row(row) for row in candidates]
         replaced = sum(1 for item in results if item.get("status") == "replaced")
@@ -853,6 +934,90 @@ class NyxifyLocalApiServer:
             "results": results,
             "rows": self.store.list_tasks(limit=500),
             "message": f"Replace banned finished: {replaced} replaced, {partial} partial, {failed} failed.",
+        }
+
+    def remove_banned_rows(self, rows=None):
+        candidates = self._banned_candidates(rows)
+        results = []
+        for row in candidates:
+            item = _ReplaceBannedScanStore._normalize_row(row)
+            if not item:
+                results.append({"ok": False, "status": "failed", "error": "Row key is required.", "row": row or {}})
+                continue
+            results.append({
+                "ok": True,
+                "status": "pending",
+                "row_key": item["row_key"],
+                "adspower_id": item.get("adspower_id", ""),
+                "proxy": "",
+                "warnings": [],
+                "row": item,
+            })
+
+        for result in results:
+            if not result.get("row_key"):
+                continue
+            row_key = result["row_key"]
+            self.adspower_update_store.request(row_key, "")
+            adspower_clear_ok, adspower_clear_error = self._wait_for_update_success(
+                self.adspower_update_store,
+                row_key,
+                timeout_seconds=30,
+            )
+            if not adspower_clear_ok:
+                result["ok"] = False
+                result["warnings"].append(
+                    adspower_clear_error or "SnapBoard AdsPower ID clear was not confirmed."
+                )
+
+        for result in results:
+            if not result.get("row_key"):
+                continue
+            row_key = result["row_key"]
+            self.proxy_rotate_store.request(row_key, max_clicks=3, force=True)
+            proxy, proxy_error = self._wait_for_value_result(
+                self.proxy_rotate_store,
+                row_key,
+                "proxy",
+                timeout_seconds=80,
+            )
+            if not proxy:
+                result["ok"] = False
+                result["status"] = "failed"
+                result["error"] = proxy_error or "Proxy did not change."
+                continue
+
+            result["proxy"] = proxy
+            self.store.remove_for_banned_account(row_key=row_key, proxy_address=proxy)
+            result["status"] = "removed" if result.get("ok") else "partial"
+
+        removed = sum(1 for item in results if item.get("status") == "removed")
+        partial = sum(1 for item in results if item.get("status") == "partial")
+        failed = sum(1 for item in results if item.get("status") == "failed")
+        return {
+            "ok": failed == 0,
+            "count": len(results),
+            "removed": removed,
+            "partial": partial,
+            "failed": failed,
+            "warmup": 0,
+            "results": results,
+            "rows": self.store.list_tasks(limit=500),
+            "message": f"Remove banned finished: {removed} removed, {partial} partial, {failed} failed.",
+        }
+
+    def warmup_banned_rows(self, rows=None):
+        candidates = self._banned_candidates(rows)
+        results = [self._warmup_one_banned_row(row) for row in candidates]
+        warmup = sum(1 for item in results if item.get("status") == "warmup")
+        failed = sum(1 for item in results if item.get("status") == "failed")
+        return {
+            "ok": failed == 0,
+            "count": len(results),
+            "warmup": warmup,
+            "failed": failed,
+            "results": results,
+            "message": f"Warm Up status update finished: {warmup} updated, {failed} failed.",
         }
 
     def start(self):
@@ -1177,6 +1342,7 @@ class NyxifyLocalApiServer:
                                 "ok": True,
                                 "row_key": request.get("row_key"),
                                 "max_clicks": request.get("max_clicks"),
+                                "force": bool(request.get("force")),
                             },
                         )
                     else:
@@ -1291,6 +1457,36 @@ class NyxifyLocalApiServer:
                     rows = payload.get("rows")
                     result = outer.replace_banned_rows(rows=rows if isinstance(rows, list) else None)
                     self._write_json(200 if result.get("ok") else 207, result)
+                    return
+
+                if self.path == "/replace_banned/remove":
+                    rows = payload.get("rows")
+                    result = outer.remove_banned_rows(rows=rows if isinstance(rows, list) else None)
+                    self._write_json(200 if result.get("ok") else 207, result)
+                    return
+
+                if self.path == "/replace_banned/warmup":
+                    rows = payload.get("rows")
+                    result = outer.warmup_banned_rows(rows=rows if isinstance(rows, list) else None)
+                    self._write_json(200 if result.get("ok") else 207, result)
+                    return
+
+                if self.path == "/replace_banned/remove_result":
+                    row_key = str(payload.get("row_key", "")).strip()
+                    proxy = str(payload.get("proxy", "")).strip()
+                    if not row_key:
+                        self._write_json(400, {"ok": False, "error": "Row key is required."})
+                        return
+                    count = outer.store.remove_for_banned_account(row_key=row_key, proxy_address=proxy)
+                    self._write_json(
+                        200,
+                        {
+                            "ok": True,
+                            "count": count,
+                            "message": "Remove banned result stored.",
+                            "rows": outer.store.list_tasks(limit=500),
+                        },
+                    )
                     return
 
                 if self.path == "/usernames":

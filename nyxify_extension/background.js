@@ -1260,12 +1260,23 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
-  if (message && message.type === "NYXIFY_REPLACE_BANNED_ROWS") {
-    callLocalNyxify("POST", "/replace_banned/replace", {
+  if (message && message.type === "NYXIFY_REMOVE_BANNED_ROWS") {
+    removeBannedRowsDirectly(Array.isArray(message.rows) ? message.rows : [])
+      .then(async (payload) => {
+        await appendEventLog(payload.message || "Remove banned finished.");
+        invalidatePopupStatusCache();
+        sendResponse({ ok: payload.ok !== false, payload });
+      })
+      .catch((error) => sendResponse({ ok: false, error: error.message }));
+    return true;
+  }
+
+  if (message && message.type === "NYXIFY_WARMUP_BANNED_ROWS") {
+    callLocalNyxify("POST", "/replace_banned/warmup", {
       rows: Array.isArray(message.rows) ? message.rows : undefined,
     })
       .then(async (payload) => {
-        await appendEventLog(payload.message || "Replace banned finished.");
+        await appendEventLog(payload.message || "Warm Up banned finished.");
         invalidatePopupStatusCache();
         sendResponse({ ok: payload.ok !== false, payload });
       })
@@ -1596,6 +1607,89 @@ function sendMessageToSnapboardTab(message) {
       resolve(response || { ok: false, error: "Empty SnapBoard response." });
     });
   });
+}
+
+function normalizeBannedRowForRemoval(row) {
+  const safe = row || {};
+  const rowKey = String(safe.row_key || "").trim().toLowerCase();
+  return {
+    ...safe,
+    row_key: rowKey,
+    adspower_id: String(safe.adspower_id || safe.adspower_profile_id || safe.profile_id || "").trim(),
+  };
+}
+
+async function removeBannedRowsDirectly(rows) {
+  const candidates = (Array.isArray(rows) ? rows : [])
+    .map((row) => normalizeBannedRowForRemoval(row))
+    .filter((row) => row.row_key);
+  if (!candidates.length) {
+    return {
+      ok: false,
+      count: 0,
+      removed: 0,
+      failed: 0,
+      results: [],
+      message: "Scan banned rows first.",
+    };
+  }
+
+  const results = candidates.map((row) => ({
+    ok: true,
+    row_key: row.row_key,
+    adspower_id: row.adspower_id,
+    proxy: "",
+    errors: [],
+  }));
+
+  for (const result of results) {
+    const response = await sendMessageToSnapboardTab({
+      type: "NYXIFY_SNAPBOARD_ACTION",
+      action: "adspower_update",
+      row_key: result.row_key,
+      adspower_id: "",
+    });
+    if (!response || !response.ok) {
+      result.ok = false;
+      result.errors.push((response && response.error) || "SnapBoard AdsPower id update failed.");
+    }
+  }
+
+  for (const result of results) {
+    const response = await sendMessageToSnapboardTab({
+      type: "NYXIFY_SNAPBOARD_ACTION",
+      action: "proxy_rotate",
+      row_key: result.row_key,
+      max_clicks: 3,
+      force: true,
+    });
+    if (response && response.ok && response.proxy) {
+      result.proxy = response.proxy;
+      try {
+        await callLocalNyxify("POST", "/replace_banned/remove_result", {
+          row_key: result.row_key,
+          proxy: result.proxy,
+        });
+      } catch (error) {
+        result.ok = false;
+        result.errors.push(error.message || "Local remove-banned result update failed.");
+      }
+    } else {
+      result.ok = false;
+      result.errors.push((response && response.error) || "SnapBoard proxy rotation failed.");
+    }
+  }
+
+  const failed = results.filter((result) => !result.ok).length;
+  const removed = results.length - failed;
+  return {
+    ok: failed === 0,
+    count: results.length,
+    removed,
+    failed,
+    results,
+    message: `Remove banned finished: ${removed} removed, ${failed} failed.`,
+  };
 }
 
 // --- SnapBoard staleness recovery ------------------------------------------
@@ -1971,6 +2065,7 @@ async function processBridgeActionsOnce() {
         action: "proxy_rotate",
         row_key: proxyPayload.row_key,
         max_clicks: proxyPayload.max_clicks,
+        force: !!proxyPayload.force,
       });
       await callLocalNyxify("POST", "/proxy/rotate_result", {
         row_key: proxyPayload.row_key,

@@ -1,5 +1,30 @@
 # Changelog
 
+## 6.5.6 - Nyxify banned-row workflow and OTP pickup hardening
+
+### Nyxify: scan, remove, and warm-up banned rows directly
+- The Nyxify extension popup and web dashboard now expose Scan Banned Rows,
+  Remove Banned, and Warm Up Banned controls backed by the new
+  `/replace_banned/scan`, `/replace_banned/remove`, and `/replace_banned/warmup`
+  local API endpoints.
+- Remove Banned clears the row's SnapBoard Ads Power ID, rotates the proxy with
+  a forced change, and removes the row from the local store; Warm Up first
+  pushes the SnapBoard status to "Warm Up", and both actions report partial
+  failures per row instead of aborting the batch.
+- Proxy rotation requests accept an explicit `force` flag so replace-banned
+  recovery always gets a different proxy instead of reusing the previous value.
+
+### Nyxify: verification OTP pickup hardening
+- The SnapBoard OTP fetch window is now one minute (was 30 seconds) for both
+  email and SMS codes, giving SnapBoard more time to detect the code before the
+  recovery path (fresh email/number + resubmit) is triggered.
+- When the verification phase fetches an OTP, Nyxify now always clicks the
+  SnapBoard Check Code / Check SMS button first and waits for a fresh code
+  instead of trusting a stale row value.
+- If the Check Code / Check SMS button cannot be found or clicked, the bridge
+  now fails fast with an explicit error instead of spending the whole window
+  waiting and reporting a generic "code not found".
+
 ## 6.5.5 - Nyxify wrong-code verification recovery
 
 ### Nyxify: recover rejected email and SMS OTP codes
@@ -47,81 +72,6 @@
   yellow AM/G5 and SP/TV segmented controls.
 - AM/SP keep the default provider behavior, while G5/TV save the existing
   `lockG5` and `lockTV` config keys that drive SnapBoard provider locking.
-
-## 6.4.8 - Post-warmup tab cleanup before signup
-
-### Nyxify: prune unrelated browser tabs after cookie warm-up
-- After cookie warm-up completes, Nyxify now closes every non-AdsPower browser
-  tab before opening Snapchat signup.
-- The cleanup preserves `start.adspower.net` AdsPower tabs so the profile stays
-  anchored while stale warm-up, extension, or random website tabs are removed.
-- Added regression coverage for the warm-up -> tab cleanup -> signup handoff
-  ordering and the "keep AdsPower, close unrelated tabs" rule.
-
-## 6.4.7 - Signup and Bitmoji transient refresh recovery
-
-### Nyxify: recover disabled submit states faster when reCAPTCHA is missing
-- When Snapchat's "Agree and Continue" stays disabled and no visible reCAPTCHA
-  badge/iframe is present, Nyxify now waits only one second before refreshing
-  and refilling the signup form.
-- The reCAPTCHA detector now counts only visible widgets, so a background
-  `window.grecaptcha` loader no longer prevents the fast refresh path.
-- Repeated disabled-submit refreshes still use the existing cleanup/retry budget
-  so persistent failures delete the AdsPower profile, rotate/requeue, and create
-  a fresh profile.
-
-### Nyx: refresh Bitmoji SDK Chrome error pages
-- Chrome's Bitmoji SDK "webpage temporarily down / moved permanently" page is
-  now treated as a transient load error instead of being misclassified as the
-  avatar editor from the `sdk.bitmoji.com/web-builder` URL alone.
-- Nyx refreshes that Bitmoji load-error page up to three times while opening the
-  editor, after OAuth, and while waiting for the editor UI.
-- Added regression coverage for captchaless signup submit recovery, visible
-  reCAPTCHA detection, and Bitmoji SDK transient-load refreshes.
-
-## 6.4.6 - Nyxmoji cute outfit preset
-
-### Nyxmoji: curated cute/seductive preset combinations
-- Added a new `cute_preset` outfit style with 40 curated silhouettes expanded
-  across three coordinated colorways: soft cute, seductive classic, and pretty
-  casual.
-- The preset now randomly chooses from 120 catalog-backed looks while keeping
-  existing default, mixed, casual, sexy, and no-dresses presets unchanged.
-- Cute preset colors are selected only from verified garment swatches, falling
-  back to the garment's natural color when a matching pretty color is not
-  available.
-- Tightened live color selection so preset preferred colors use the active
-  garment panel and fallback garment metadata instead of stale or mismatched
-  color pickers.
-
-## 6.4.5 - Complete Nyxmoji apparel catalog
-
-### Nyxmoji: apparel selectors now cover the full live Bitmoji inventory
-- Completed the Nyxmoji live apparel catalog from AdsPower profile `k1f2la8v`,
-  expanding the bundled selector data to 246 outfits, 291 tops, 131 bottoms,
-  27 dresses, 78 footwear options, 10 socks, and 94 outerwear options.
-- Fixed fashion virtual-scroll enumeration so apparel panels use the real
-  fashion scroll container and no longer stop at the first rendered batch.
-- Added original `outfit=<id>` preset handling with atomic `outfit` /
-  `clothing_type=0` render params, while keeping live swatch verification for
-  tops, bottoms, dresses, footwear, and outerwear.
-- Fixed active-swatch verification for single-colour garments and hidden
-  duplicate virtualized outfit tiles.
-
-## 6.4.4 - Nyxmoji live selector/catalog repair
-
-### Nyxmoji: selectors and colours now come from a complete live Bitmoji audit
-- Repaired the live scanner so every required clothing selector is validated
-  against the real Bitmoji editor before the catalog can be written.
-- Broadened exact garment selection to cover both mix-and-match tiles and
-  Bitmoji's outfit image tiles while keeping stale-panel and wrong-selector
-  protections.
-- Fixed virtualized colour picker enumeration/clicking and verified colour
-  variants through the selected garment's real body render params.
-- Regenerated `data/bitmoji_catalog.json` from a complete live AdsPower
-  `k1f2la8v` scan covering 40 features with zero garment audit errors.
-- Added regression coverage for AdsPower CDP fallback, selector matching,
-  colour swatch verification, and scanner restoration.
 
 ## 6.4.1 - Nyxify phone-step handoff speed
 

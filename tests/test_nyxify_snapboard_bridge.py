@@ -2,6 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from core.nyxify_local_api import NyxifyLocalApiServer
 from core.nyxify_task_store import NyxifyTaskStore
 
 
@@ -152,18 +153,130 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("const password = String(row.password || \"\").trim();", background)
         self.assertIn("password: entry.password", background)
 
-    def test_replace_banned_local_api_endpoints_are_wired(self):
+    def test_remove_banned_rotates_proxy_and_clears_snapboard_adspower_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+            task_id, _action = store.upsert_task(
+                row_key="snapboard:505811",
+                model="Clea",
+                ip_address="198.51.100.10",
+                proxy_address="198.51.100.10:9000:user:pass",
+                username="olduser",
+                email="old@example.com",
+                password="KyotoRiver%12",
+                adspower_id="k1old",
+            )
+            store.update_task_state(task_id, status="DONE", last_step="completed")
+            api = NyxifyLocalApiServer(store)
+
+            def wait_for_value(wait_store, row_key, value_key, timeout_seconds=75):
+                self.assertIs(wait_store, api.proxy_rotate_store)
+                self.assertEqual(row_key, "snapboard:505811")
+                self.assertEqual(value_key, "proxy")
+                return "203.0.113.44:9100:user:pass", ""
+
+            def wait_for_success(wait_store, row_key, timeout_seconds=30):
+                self.assertIs(wait_store, api.adspower_update_store)
+                self.assertEqual(row_key, "snapboard:505811")
+                request = wait_store.pop_pending()
+                self.assertEqual(request["adspower_id"], "")
+                return True, ""
+
+            api._wait_for_value_result = wait_for_value
+            api._wait_for_update_success = wait_for_success
+
+            result = api.remove_banned_rows(rows=[{
+                "row_key": "snapboard:505811",
+                "model": "Clea",
+                "ip_address": "198.51.100.10",
+                "adspower_id": "k1old",
+                "status": "Banned",
+            }])
+
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["removed"], 1)
+            self.assertEqual(result["warmup"], 0)
+            row = store.list_tasks()[0]
+            self.assertEqual(row["status"], "DONE")
+            self.assertEqual(row["last_step"], "remove_banned_proxy_changed")
+            self.assertEqual(row["proxy_address"], "203.0.113.44:9100:user:pass")
+            self.assertEqual(row["adspower_id"], "")
+            self.assertEqual(row["username"], "olduser")
+            self.assertEqual(row["email"], "old@example.com")
+
+    def test_remove_banned_api_clears_every_adspower_id_before_rotating_proxies(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+            rows = []
+            for index, row_key in enumerate(["snapboard:505811", "snapboard:505812"]):
+                store.upsert_task(
+                    row_key=row_key,
+                    model="Clea",
+                    ip_address=f"198.51.100.{10 + index}",
+                    proxy_address=f"198.51.100.{10 + index}:9000:user:pass",
+                    username=f"olduser{index}",
+                    email=f"old{index}@example.com",
+                    password="KyotoRiver%12",
+                    adspower_id=f"k1old{index}",
+                )
+                rows.append({
+                    "row_key": row_key,
+                    "model": "Clea",
+                    "ip_address": f"198.51.100.{10 + index}",
+                    "adspower_id": f"k1old{index}",
+                    "status": "Banned",
+                })
+            api = NyxifyLocalApiServer(store)
+            events = []
+
+            def wait_for_value(wait_store, row_key, value_key, timeout_seconds=75):
+                events.append(("proxy", row_key))
+                return f"203.0.113.{row_key[-1]}:9100:user:pass", ""
+
+            def wait_for_success(wait_store, row_key, timeout_seconds=30):
+                events.append(("adspower", row_key))
+                return True, ""
+
+            api._wait_for_value_result = wait_for_value
+            api._wait_for_update_success = wait_for_success
+
+            result = api.remove_banned_rows(rows=rows)
+
+            self.assertTrue(result["ok"])
+            self.assertEqual([event[0] for event in events], ["adspower", "adspower", "proxy", "proxy"])
+
+    def test_remove_banned_forces_proxy_rotation_even_when_proxy_toggles_are_off(self):
+        api = (ROOT / "core" / "nyxify_local_api.py").read_text(encoding="utf-8")
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("force=True", api)
+        self.assertIn('"force": bool(request.get("force"))', api)
+        self.assertIn("if (!payload.force && config.proxyBlockerEnabled === false && config.proxyCheckerEnabled === false) return;", content)
+
+    def test_popup_remove_banned_clears_all_adspower_ids_before_proxy_rotation(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        api = (ROOT / "core" / "nyxify_local_api.py").read_text(encoding="utf-8")
+
+        self.assertIn("async function removeBannedRowsDirectly", background)
+        direct_fn = background.split("async function removeBannedRowsDirectly", 1)[1].split("\nasync function ", 1)[0]
+        self.assertLess(direct_fn.index('action: "adspower_update"'), direct_fn.index('action: "proxy_rotate"'))
+        self.assertIn('"/replace_banned/remove_result"', direct_fn)
+        self.assertIn("force: true", direct_fn)
+        self.assertIn('if self.path == "/replace_banned/remove_result":', api)
+
+    def test_remove_banned_local_api_endpoints_are_wired(self):
         api = (ROOT / "core" / "nyxify_local_api.py").read_text(encoding="utf-8")
         controller = (ROOT / "core" / "nyxify_controller.py").read_text(encoding="utf-8")
 
         self.assertIn("class _ReplaceBannedScanStore", api)
         self.assertIn('"/replace_banned/snapshot"', api)
         self.assertIn('"/replace_banned/scan"', api)
-        self.assertIn('"/replace_banned/replace"', api)
-        self.assertIn("replace_for_banned_account", api)
+        self.assertIn('"/replace_banned/remove"', api)
+        self.assertIn('"/replace_banned/warmup"', api)
+        self.assertIn("remove_for_banned_account", api)
         self.assertIn('"delete_adspower_profile"', controller)
 
-    def test_nyxify_extension_scans_and_replaces_banned_rows(self):
+    def test_nyxify_extension_scans_and_removes_banned_rows(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         popup_html = (ROOT / "nyxify_extension" / "popup.html").read_text(encoding="utf-8")
@@ -173,11 +286,16 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("NYXIFY_SCAN_BANNED_ROWS", content)
         self.assertIn("NYXIFY_SNAPBOARD_STATUS_ROWS", background)
         self.assertIn("NYXIFY_SCAN_BANNED_ROWS", background)
-        self.assertIn("NYXIFY_REPLACE_BANNED_ROWS", background)
+        self.assertIn("NYXIFY_REMOVE_BANNED_ROWS", background)
+        self.assertIn("NYXIFY_WARMUP_BANNED_ROWS", background)
         self.assertIn('id="scanBannedButton"', popup_html)
-        self.assertIn('id="replaceBannedButton"', popup_html)
+        self.assertIn('id="removeBannedButton"', popup_html)
+        self.assertIn('id="warmupBannedButton"', popup_html)
+        self.assertIn('id="bannedAdspowerIds"', popup_html)
         self.assertIn("scanBannedRows", popup_js)
-        self.assertIn("replaceBannedRows", popup_js)
+        self.assertIn("removeBannedRows", popup_js)
+        self.assertIn("warmupBannedRows", popup_js)
+        self.assertIn("formatBannedAdspowerIds", popup_js)
 
     def test_nyx_snapboard_menu_replace_and_add_to_nyx_pending(self):
         content = (ROOT / "nyx_extension" / "content.js").read_text(encoding="utf-8")
@@ -200,11 +318,14 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         css = (ROOT / "webui" / "dashboard.css").read_text(encoding="utf-8")
 
         self.assertIn('id="scan-banned-nyxify"', html)
-        self.assertIn('id="replace-banned-nyxify"', html)
+        self.assertIn('id="remove-banned-nyxify"', html)
+        self.assertIn('id="warmup-banned-nyxify"', html)
+        self.assertIn('id="banned-adspower-ids-nyxify"', html)
         self.assertNotIn("Scan SnapBoard for banned rows.", html)
         self.assertNotIn("Scan SnapBoard for banned rows.", popup_html)
         self.assertIn("scanBannedFromDashboard", dashboard)
-        self.assertIn("replaceBannedFromDashboard", dashboard)
+        self.assertIn("removeBannedFromDashboard", dashboard)
+        self.assertIn("warmupBannedFromDashboard", dashboard)
         self.assertIn("command-grid", css)
         nyx_config = dashboard.split("nyxify: {", 1)[0]
         self.assertNotIn('["Clear Queue", "/queue/clear", "bad"]', nyx_config)

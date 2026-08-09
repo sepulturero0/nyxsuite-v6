@@ -571,6 +571,29 @@ class NyxifyTaskStore:
             )
             return cursor.rowcount
 
+    def remove_for_banned_account(self, row_key, proxy_address=""):
+        normalized_row_key = _normalize_text(row_key)
+        normalized_proxy = _normalize_text(proxy_address)
+        if not normalized_row_key:
+            return 0
+
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE tasks
+                SET proxy_address = ?,
+                    adspower_id = '',
+                    adspower_profile_id = '',
+                    adspower_name = '',
+                    last_step = 'remove_banned_proxy_changed',
+                    error = '',
+                    updated_at = ?
+                WHERE row_key = ?
+                """,
+                (normalized_proxy, utc_now_iso(), normalized_row_key),
+            )
+            return cursor.rowcount
+
     def clear_all_tasks(self):
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM tasks")
