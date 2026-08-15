@@ -220,20 +220,9 @@ class BitmojiOutfitMixin:
                 await ctx.evaluate(
                     """() => {
                         const input = document.querySelector("input#tuck-toggle[type='checkbox'], .tuck-container input[type='checkbox']");
-                        const label = document.querySelector("label[for='tuck-toggle'].switch, .tuck-container .switch");
-                        if (input?.checked) return true;
-                        if (label) {
-                            label.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true, cancelable: true, view: window }));
-                            label.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true, view: window }));
-                            label.dispatchEvent(new MouseEvent('pointerup', { bubbles: true, cancelable: true, view: window }));
-                            label.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true, view: window }));
-                            label.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
-                        } else if (input) {
-                            input.checked = true;
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                        return !!input?.checked;
+                        if (!input) return false;
+                        if (!input.checked) input.click();
+                        return !!input.checked;
                     }"""
                 )
             except Exception:
@@ -241,43 +230,44 @@ class BitmojiOutfitMixin:
 
         await self.human_delay(0.3, 0.6, kind="think")
 
-        try:
-            return await tuck_checkbox.is_checked()
-        except Exception:
-            return False
+        # The caption flips to "Tucked!" once the store commits the toggle;
+        # poll briefly so a slow re-render isn't mistaken for a failure.
+        for _ in range(5):
+            tuck_state = await self._read_tuck_state(ctx)
+            if tuck_state == "checked":
+                return True
+            if tuck_state in (None, "missing", "disabled"):
+                return False
+            await asyncio.sleep(0.3)
+        return False
 
     async def _read_tuck_state(self, ctx):
         try:
             return await ctx.evaluate(
                 """() => {
-                    const input = document.querySelector("input#tuck-toggle[type='checkbox'], .tuck-container input[type='checkbox']");
-                    if (!input) return "missing";
-                    const inputStyle = window.getComputedStyle(input);
-                    if (inputStyle.display === "none" || inputStyle.visibility === "hidden") return "missing";
-                    if (input.disabled || input.getAttribute("aria-disabled") === "true") return "disabled";
-                    const container = input.closest(".tuck-toggle-container, .tuck-container");
-                    if (container) {
-                        if (container.classList.contains("disabled") || container.classList.contains("is-disabled")) return "disabled";
-                        const containerStyle = window.getComputedStyle(container);
-                        if (containerStyle.pointerEvents === "none") return "disabled";
-                        if (parseFloat(containerStyle.opacity || "1") < 0.5) return "disabled";
-                    }
-                    const label = document.querySelector("label[for='tuck-toggle'].switch, .tuck-container .switch");
+                    const container = document.querySelector(".tuck-container");
+                    if (!container) return "missing";
+                    const containerStyle = window.getComputedStyle(container);
+                    if (containerStyle.display === "none" || containerStyle.visibility === "hidden") return "missing";
+                    if (containerStyle.pointerEvents === "none") return "disabled";
+                    if (parseFloat(containerStyle.opacity || "1") < 0.5) return "disabled";
+                    const input = container.querySelector("input#tuck-toggle[type='checkbox'], .tuck-container input[type='checkbox']");
+                    if (input && (input.disabled || input.getAttribute("aria-disabled") === "true")) return "disabled";
+                    const label = container.querySelector("label[for='tuck-toggle'].switch, .tuck-container .switch");
                     if (label) {
                         const labelStyle = window.getComputedStyle(label);
-                        if (labelStyle.display === "none" || labelStyle.visibility === "hidden") return "disabled";
                         if (labelStyle.pointerEvents === "none") return "disabled";
                         if (parseFloat(labelStyle.opacity || "1") < 0.5) return "disabled";
                         if (label.classList.contains("disabled") || label.classList.contains("is-disabled")) return "disabled";
                     }
-                    const text = document.querySelector(".tuck-text, .tuck-container .tuck-text");
-                    if (text) {
-                        const textStyle = window.getComputedStyle(text);
-                        if (textStyle.display === "none" || textStyle.visibility === "hidden") return "disabled";
-                        const content = (text.textContent || "").trim();
-                        if (!content) return "disabled";
+                    const caption = container.querySelector(".tuck-text, .tuck-container .tuck-text");
+                    if (caption) {
+                        const text = (caption.textContent || "").trim();
+                        if (/untucked/i.test(text)) return "ready";
+                        if (/tucked/i.test(text)) return "checked";
                     }
-                    return input.checked ? "checked" : "ready";
+                    if (input) return input.checked ? "checked" : "ready";
+                    return "ready";
                 }"""
             )
         except Exception:
@@ -1573,7 +1563,6 @@ class BitmojiOutfitMixin:
                 fallback_param="top", blocked_ids=BLOCKED_TOP_IDS,
                 fallback_pool=outfit.get("top_pool"),
             )
-            await self.enable_tuck_if_available()
             await self.pick_configured_color_option(
                 profile_id, model, ("tops", "outfits"), outfit_seed,
                 preferred_color=self.outfit_preferred_color_for_selection(top_entry, selected_top),
@@ -1586,6 +1575,15 @@ class BitmojiOutfitMixin:
                 "categories.bottoms", bottom_entry["selector"], profile_id,
                 fallback_param="bottom", fallback_pool=outfit.get("bottom_pool"),
             )
+            # Tuck only becomes clickable once BOTH pieces are in place: the
+            # SDK's handleTucking disables the toggle while the current bottom
+            # is still underwear/none, and re-enables it on the bottom click.
+            # Waiting until now is the only state where a tuckable top+bottom
+            # pair actually exposes an enabled switch. A preset with
+            # tuck_in=false skips tucking entirely (top stays in its default
+            # state) while still carrying on with colour selection.
+            if outfit.get("tuck_in", True):
+                await self.enable_tuck_if_available()
             await self.pick_configured_color_option(
                 profile_id, model, ("bottoms",), outfit_seed,
                 preferred_color=self.outfit_preferred_color_for_selection(bottom_entry, selected_bottom),
@@ -2071,6 +2069,15 @@ class BitmojiOutfitMixin:
                     )
         target_hex = None
         configured_colour_requested = False
+        preferred_hex_requested = (
+            isinstance(preferred_color, dict)
+            and bool(str(preferred_color.get("hex") or "").strip())
+        )
+        if preferred_hex_requested and str(preferred_color.get("source") or "") == "shared_outfit":
+            return await self.pick_random_color_option(
+                profile_id, outfit_seed, preferred_color=preferred_color,
+                active_panel_only=selected_item_is_verified_color_capable,
+            )
         try:
             from core.bitmoji_config import load_models as _load_models, resolve_option_color
             models = _load_models()
@@ -2107,10 +2114,6 @@ class BitmojiOutfitMixin:
                         f"{selected_option_id}"
                     )
                 return False
-            preferred_hex_requested = (
-                isinstance(preferred_color, dict)
-                and bool(str(preferred_color.get("hex") or "").strip())
-            )
             return await self.pick_random_color_option(
                 profile_id, outfit_seed, preferred_color=preferred_color,
                 active_panel_only=preferred_hex_requested,

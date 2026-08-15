@@ -163,13 +163,20 @@
 
     <section class="panel hidden" id="panel-bitmoji">
       <div class="bm-toolbar">
-        <div class="bm-head">
+<div class="bm-head">
+          <div class="bm-editor-switch" role="tablist" aria-label="Nyxmoji editor mode">
+            <button class="bm-editor-mode active" data-bm-editor="model" type="button">Model</button>
+            <button class="bm-editor-mode" data-bm-editor="outfit" type="button">Outfit</button>
+          </div>
           <label class="label" for="bm-model">Model</label>
           <select id="bm-model" class="input input-inline"></select>
+<select id="bm-outfit-preset" class="input input-inline" style="display:none"></select>
+          <button id="bm-outfit-add" class="btn" type="button" style="display:none">Add Outfit</button>
+          <button id="bm-outfit-rename" class="btn" type="button" style="display:none">Rename</button>
+          <button id="bm-outfit-delete" class="btn btn-ghost" type="button" style="display:none">Delete</button>
           <span id="bm-status" class="detail"></span>
         </div>
         <div class="bm-toolbar-actions">
-          <button id="bm-recommend" class="btn" type="button" title="Fill random pools with a recommended starting look">✨ Recommend</button>
           <button id="bm-import" class="btn" type="button" title="Load a saved Nyxmoji config file">Import</button>
           <button id="bm-export" class="btn" type="button" title="Download this Nyxmoji config">Export</button>
           <button id="bm-save" class="btn primary" type="button">Save</button>
@@ -185,7 +192,11 @@
           </div>
           <div class="bm-stage-foot">
             <span id="bm-model-tag" class="bm-model-tag"></span>
-            <button id="bm-shuffle" class="btn btn-ghost" type="button" title="Preview a different random combination">⟳ Shuffle preview</button>
+            <label id="bm-outfit-tuck-wrap" class="bm-tuck-toggle" style="display:none" title="Tuck the top into the bottom when the outfit supports it">
+              <span id="bm-outfit-tuck-label" class="bm-tuck-toggle-label"></span>
+              <input id="bm-outfit-tuck" class="bm-tuck-toggle-input" type="checkbox" role="switch">
+              <span class="bm-tuck-toggle-switch" aria-hidden="true"></span>
+            </label>
           </div>
         </div>
         <div class="bm-side">
@@ -197,7 +208,6 @@
             <div class="bm-side-actions">
               <div class="bm-mode-group" id="bm-mode-group" role="tablist">
                 <button class="bm-mode-btn" data-mode="preset" type="button">Preset</button>
-                <button class="bm-mode-btn" data-mode="fixed" type="button">Fixed</button>
                 <button class="bm-mode-btn" data-mode="random" type="button">Random</button>
               </div>
               <button id="bm-clear-feature" class="btn btn-sm btn-ghost" type="button" title="Reset this feature to Preset" style="display:none">Reset</button>

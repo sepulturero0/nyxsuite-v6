@@ -29,6 +29,7 @@ from core.process_utils import APP_DATA_DIR
 DATA_DIR = APP_DATA_DIR / "data"
 CATALOG_PATH = DATA_DIR / "bitmoji_catalog.json"
 MODELS_PATH = DATA_DIR / "bitmoji_models.json"
+SHARED_OUTFIT_FEATURES = {"outfits", "tops", "bottoms", "dresses", "footwear", "outerwear", "sock"}
 
 # Each feature carries both its catalog-extraction rule and the live-editor click
 # template. ``kind`` is "img" (identified by an image-URL query param) or "color"
@@ -528,6 +529,8 @@ def sanitize_models(models: object, catalog: dict | None = None) -> dict:
             continue
         entries: dict[str, dict] = {}
         for feature, selection in feature_map.items():
+            if feature in SHARED_OUTFIT_FEATURES:
+                continue
             if feature not in FEATURES or not isinstance(selection, dict):
                 continue
             mode = str(selection.get("mode") or "").strip().lower()

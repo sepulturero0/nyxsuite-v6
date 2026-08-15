@@ -101,6 +101,37 @@ def test_nyxify_popup_provider_locks_use_yellow_segmented_controls():
     assert "lockTV" in popup_js
 
 
+def test_nyx_popup_outfit_style_options_match_dashboard():
+    popup_html = read("nyx_extension/popup.html")
+    popup_js = read("nyx_extension/popup.js")
+    dashboard_js = read("webui/dashboard.js")
+
+    for value in ["default", "mix", "casual", "sexy", "custom"]:
+        assert f'value="{value}"' in popup_html
+        assert f'opt("{value}"' in dashboard_js
+
+    for removed in ["mixed", "no_dresses"]:
+        assert f'value="{removed}"' not in popup_html
+
+    assert "normalizeOutfitStyle" in popup_js
+    assert "mixed" in popup_js
+    assert "return \"mix\"" in popup_js
+
+
+def test_dashboard_uses_shared_outfit_editor_and_hides_outfits_category():
+    dashboard_js = read("webui/dashboard.js")
+    dashboard_html = read("webui/index.html")
+
+    assert 'fetch(NYX_BASE + "/bitmoji/outfits"' in dashboard_js
+    assert 'BM_OUTFIT_FEATURES = ["tops", "bottoms", "dresses", "footwear"]' in dashboard_js
+    assert 'f !== "outfits"' in dashboard_js
+    # Model mode must not show any leftover single-model outfit features either.
+    assert 'f !== "sock"' in dashboard_js
+    assert "colors_by_option" in dashboard_js
+    assert "bm-outfit-preset" in dashboard_html
+    assert "bm-outfit-add" in dashboard_html
+
+
 def version_decl(name, text):
     match = re.search(rf'^{name}\s*=\s*"([^"]+)"', text, re.MULTILINE)
     assert match, f"{name} declaration not found"
@@ -108,7 +139,7 @@ def version_decl(name, text):
 
 
 def test_extension_version_metadata_is_synced():
-    expected_version = "6.5.6"
+    expected_version = "6.5.7"
     version_py = read("core/version.py")
     nyx_manifest = json.loads(read("nyx_extension/manifest.json"))
     nyxify_manifest = json.loads(read("nyxify_extension/manifest.json"))

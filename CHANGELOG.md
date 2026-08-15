@@ -1,5 +1,24 @@
 # Changelog
 
+## 6.5.7 - Nyxmoji outfit system and tuck-in
+
+### Nyxmoji: outfits applied reliably with tuck-in
+- Nyx now selects a full outfit (tops, bottoms, footwear, and colors) from the
+  dashboard-configured presets and applies it after the bottom is selected, so
+  tuck-in works correctly on every run.
+- The dashboard Nyxmoji panel gained a tuck-in toggle at the bottom of the
+  Bitmoji preview; each preset remembers whether the outfit should be tucked
+  in, and the live editor tucks the shirt in when the preset says so.
+- The Bitmoji preview now reflects the tuck-in state (is_tucked render
+  parameter), so the preview matches the final avatar.
+
+### Nyx popup: outfit style sync
+- The Nyx popup now shows an Outfit style selector (Default / Mix / Casual /
+  Sexy / Custom) that syncs with the runner, and the runner accepts the new
+  mix/custom style values alongside the legacy mixed style.
+- Custom outfits are edited per user in the dashboard Nyxmoji panel; the popup
+  selector stays empty by design.
+
 ## 6.5.6 - Nyxify banned-row workflow and OTP pickup hardening
 
 ### Nyxify: scan, remove, and warm-up banned rows directly

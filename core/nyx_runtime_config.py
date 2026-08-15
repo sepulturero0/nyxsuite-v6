@@ -9,6 +9,7 @@ DEFAULTS = {
     "max_parallel_profiles": 5,
     "ignore_done_profiles": True,
     "outfit_style": "default",
+    "outfit_custom_preset_id": "",
     "automation_speed": 1.0,
     "hair_randomizer_enabled": False,
     "launch_on_windows_startup": False,
@@ -24,7 +25,7 @@ DEFAULTS = {
     "adspower_port": "",
 }
 
-VALID_OUTFIT_STYLES = {"default", "mixed", "casual", "sexy", "no_dresses", "cute_preset"}
+VALID_OUTFIT_STYLES = {"default", "mix", "casual", "sexy", "custom", "no_dresses", "cute_preset"}
 VALID_HUBSTAFF_STOP_MODES = {"queue_finished", "timer"}
 VALID_ADSPOWER_CONTROL_MODES = {"auto", "api", "gui"}
 
@@ -39,6 +40,8 @@ def _safe_int(value, default):
 
 def _safe_outfit_style(value, default):
     normalized = str(value or "").strip().lower()
+    if normalized == "mixed":
+        normalized = "mix"
     return normalized if normalized in VALID_OUTFIT_STYLES else default
 
 
@@ -106,6 +109,10 @@ def load_nyx_config():
         "max_parallel_profiles": _safe_int(raw.get("max_parallel_profiles"), DEFAULTS["max_parallel_profiles"]),
         "ignore_done_profiles": _safe_bool(raw.get("ignore_done_profiles"), DEFAULTS["ignore_done_profiles"]),
         "outfit_style": _safe_outfit_style(raw.get("outfit_style"), DEFAULTS["outfit_style"]),
+        "outfit_custom_preset_id": _safe_text(
+            raw.get("outfit_custom_preset_id"),
+            DEFAULTS["outfit_custom_preset_id"],
+        ),
         "automation_speed": _safe_automation_speed(raw.get("automation_speed"), DEFAULTS["automation_speed"]),
         "hair_randomizer_enabled": _safe_bool(
             raw.get("hair_randomizer_enabled"), DEFAULTS["hair_randomizer_enabled"]
@@ -142,6 +149,10 @@ def save_nyx_config(updates):
             updates.get("ignore_done_profiles"), current["ignore_done_profiles"]
         ),
         "outfit_style": _safe_outfit_style(updates.get("outfit_style", current["outfit_style"]), current["outfit_style"]),
+        "outfit_custom_preset_id": _safe_text(
+            updates.get("outfit_custom_preset_id"),
+            current["outfit_custom_preset_id"],
+        ),
         "automation_speed": _safe_automation_speed(updates.get("automation_speed", current["automation_speed"]), current["automation_speed"]),
         "hair_randomizer_enabled": _safe_bool(
             updates.get("hair_randomizer_enabled"), current["hair_randomizer_enabled"]

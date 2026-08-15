@@ -205,6 +205,19 @@ function syncLatestDailyRows(rows) {
 
 const DEFAULT_ACCOUNTS_PER_HOUR = 7;
 
+function normalizeOutfitStyle(value) {
+  const normalized = String(value || "").trim().toLowerCase();
+  if (normalized === "mixed") return "mix";
+  return ["default", "mix", "casual", "sexy", "custom"].includes(normalized) ? normalized : "default";
+}
+
+function updatePopupCustomPresetVisibility() {
+  const field = document.getElementById("popupCustomPresetField");
+  if (!field) return;
+  const styleSelect = document.getElementById("popupOutfitStyle");
+  field.style.display = styleSelect && normalizeOutfitStyle(styleSelect.value) === "custom" ? "" : "none";
+}
+
 function normalizeAccountsPerHour(value) {
   const parsed = parseFloat(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -803,7 +816,7 @@ function applyPopupStatusSnapshot(status) {
   const pendingEntries = safeStatus.pendingEntries || [];
   const lastSeenEntries = safeStatus.lastSeenEntries || [];
   const lastSync = safeStatus.lastSync || null;
-  const runnerStatus = safeStatus.runnerStatus || {};
+const runnerStatus = safeStatus.runnerStatus || {};
   const runnerConfig = runnerStatus.config || {};
   const eventLog = safeStatus.eventLog || [];
   const scrapeStatus = safeStatus.scrapeStatus || {};
@@ -812,7 +825,7 @@ function applyPopupStatusSnapshot(status) {
 
   const popupSettingsSignature = [
     config.enabled !== false,
-    runnerConfig.outfit_style || "default",
+    normalizeOutfitStyle(runnerConfig.outfit_style),
     config.rowLimit || 100,
     runnerConfig.pending_threshold || 1,
     runnerConfig.max_parallel_profiles || 5,
@@ -821,7 +834,7 @@ function applyPopupStatusSnapshot(status) {
   ].join("|");
   if (popupSettingsSignature !== lastPopupSettingsSignature) {
     lastPopupSettingsSignature = popupSettingsSignature;
-    document.getElementById("popupOutfitStyle").value = runnerConfig.outfit_style || "default";
+    document.getElementById("popupOutfitStyle").value = normalizeOutfitStyle(runnerConfig.outfit_style);
     document.getElementById("popupRowLimit").value = config.rowLimit || 100;
     document.getElementById("popupPendingThreshold").value = runnerConfig.pending_threshold || 1;
     document.getElementById("popupMaxParallel").value = runnerConfig.max_parallel_profiles || 5;
@@ -833,6 +846,7 @@ function applyPopupStatusSnapshot(status) {
     setAutomationSpeedDisplay(speedInput ? speedInput.value : speedPercent);
     document.getElementById("popupHairRandomizer").checked = runnerConfig.hair_randomizer_enabled === true;
   }
+  updatePopupCustomPresetVisibility();
 
   applyPrimaryStatus(config.enabled === false ? "Nyx is off." : `${pendingEntries.length} pending to sync from extension.`);
 
@@ -973,7 +987,7 @@ function savePopupSettings(options = {}) {
       localApiUrl: undefined,
       localToken: undefined,
       enabled: true,
-      outfitStyle: document.getElementById("popupOutfitStyle").value,
+outfitStyle: normalizeOutfitStyle(document.getElementById("popupOutfitStyle").value),
       rowLimit: document.getElementById("popupRowLimit").value,
       pendingThreshold: document.getElementById("popupPendingThreshold").value,
       maxParallelProfiles: document.getElementById("popupMaxParallel").value,
@@ -1225,6 +1239,7 @@ document.getElementById("popupAutomationSpeed").addEventListener("change", flush
 document.getElementById("popupAutomationSpeed").addEventListener("blur", flushPopupSettingsSave);
 [
   "popupOutfitStyle",
+  "popupCustomPreset",
   "popupRowLimit",
   "popupPendingThreshold",
   "popupMaxParallel",
@@ -1237,6 +1252,7 @@ document.getElementById("popupAutomationSpeed").addEventListener("blur", flushPo
     }
     element.addEventListener("change", () => {
       popupSettingsDirty = true;
+      if (id === "popupOutfitStyle") updatePopupCustomPresetVisibility();
     });
     element.addEventListener("change", flushPopupSettingsSave);
     element.addEventListener("blur", flushPopupSettingsSave);

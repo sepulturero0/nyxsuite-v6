@@ -1,8 +1,10 @@
 import random
 import hashlib
+import re
 import time
 
 from core.bitmoji_config import build_selector, catalog_option, load_catalog_raw, option_colors
+from core.bitmoji_outfit_config import get_custom_preset, load_outfit_config
 from core.nyx_runtime_config import load_nyx_config
 from snap_selectors.selectors import BITMOJI_SELECTORS
 
@@ -212,6 +214,130 @@ def _cute_entry(feature, option_id, colorway, index, catalog):
     return entry
 
 
+def _selector_option_id(selector, param_names):
+    text = str(selector or "")
+    for param in param_names:
+        match = re.search(rf"{re.escape(param)}=(\d+)", text)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _selector_feature_and_id(selector):
+    text = str(selector or "")
+    if "/avatar/one_piece?" in text:
+        return "dresses", _selector_option_id(text, ("bottom", "top"))
+    if "/avatar/top?" in text:
+        return "tops", _selector_option_id(text, ("top",))
+    if "/avatar/bottom?" in text:
+        return "bottoms", _selector_option_id(text, ("bottom",))
+    if "/avatar/footwear?" in text:
+        return "footwear", _selector_option_id(text, ("footwear",))
+    if "/avatar/outerwear?" in text:
+        return "outerwear", _selector_option_id(text, ("outerwear",))
+    return "", ""
+
+
+def _exact_entry_from_legacy(entry):
+    if isinstance(entry, dict):
+        selector = str(entry.get("selector") or "")
+        converted = dict(entry)
+    else:
+        selector = str(entry or "")
+        converted = {}
+    feature, option_id = _selector_feature_and_id(selector)
+    exact_selector = build_selector(feature, option_id) if feature and option_id else ""
+    converted["selector"] = exact_selector or selector
+    return converted
+
+
+def _exact_entries(entries):
+    return [_exact_entry_from_legacy(entry) for entry in entries]
+
+
+def _random_custom_entry(feature, selection, rng):
+    pool = selection.get("pool") if isinstance(selection, dict) else None
+    option_ids = [str(option_id).strip() for option_id in (pool or []) if str(option_id).strip()]
+    if not option_ids:
+        return None
+    option_id = rng.choice(option_ids)
+    selector = build_selector(feature, option_id)
+    if not selector:
+        raise ValueError(f"Could not build Nyxmoji selector for {feature}={option_id}")
+    entry = {"selector": selector}
+    colors_by_option = selection.get("colors_by_option") if isinstance(selection, dict) else None
+    colors = colors_by_option.get(option_id) if isinstance(colors_by_option, dict) else None
+    colors = [str(color).strip() for color in (colors or []) if str(color).strip()]
+    if colors:
+        entry["preferred_color"] = {"hex": rng.choice(colors), "source": "shared_outfit"}
+    return entry
+
+
+def _custom_pool_entries(feature, selection, rng):
+    pool = selection.get("pool") if isinstance(selection, dict) else None
+    entries = []
+    for option_id in [str(item).strip() for item in (pool or []) if str(item).strip()]:
+        selector = build_selector(feature, option_id)
+        if not selector:
+            continue
+        entry = {"selector": selector}
+        colors_by_option = selection.get("colors_by_option") if isinstance(selection, dict) else None
+        colors = colors_by_option.get(option_id) if isinstance(colors_by_option, dict) else None
+        colors = [str(color).strip() for color in (colors or []) if str(color).strip()]
+        if colors:
+            entry["preferred_color"] = {"hex": rng.choice(colors), "source": "shared_outfit"}
+        entries.append(entry)
+    return entries
+
+
+def _generate_custom_outfit(rng, preset_id=""):
+    config = load_outfit_config()
+    preset = get_custom_preset(config, preset_id)
+    if not preset:
+        raise ValueError("Custom outfit style is selected, but no custom outfit preset is configured.")
+    features = preset.get("features") if isinstance(preset.get("features"), dict) else {}
+    tops = features.get("tops")
+    bottoms = features.get("bottoms")
+    dresses = features.get("dresses")
+    footwear = features.get("footwear")
+
+    shoe_entry = _random_custom_entry("footwear", footwear, rng) if footwear else None
+    if dresses and (not tops or not bottoms or rng.random() < 0.25):
+        dress_entry = _random_custom_entry("dresses", dresses, rng)
+        if dress_entry and shoe_entry:
+            return {
+                "preset": "custom",
+                "preset_id": str(preset.get("id") or ""),
+                "preset_name": str(preset.get("name") or ""),
+                "tuck_in": bool(preset.get("tuck_in", True)),
+                "mode": "dress",
+                "dress": dress_entry,
+                "shoes": shoe_entry,
+                "dress_pool": _custom_pool_entries("dresses", dresses, rng),
+                "shoes_pool": _custom_pool_entries("footwear", footwear, rng),
+            }
+
+    if not tops or not bottoms or not footwear:
+        raise ValueError("Custom outfit preset needs tops, bottoms, and footwear pools.")
+
+    top_entry = _random_custom_entry("tops", tops, rng)
+    bottom_entry = _random_custom_entry("bottoms", bottoms, rng)
+    shoe_entry = shoe_entry or _random_custom_entry("footwear", footwear, rng)
+    return {
+        "preset": "custom",
+        "preset_id": str(preset.get("id") or ""),
+        "preset_name": str(preset.get("name") or ""),
+        "tuck_in": bool(preset.get("tuck_in", True)),
+        "mode": "separates",
+        "top": top_entry,
+        "bottom": bottom_entry,
+        "shoes": shoe_entry,
+        "top_pool": _custom_pool_entries("tops", tops, rng),
+        "bottom_pool": _custom_pool_entries("bottoms", bottoms, rng),
+        "shoes_pool": _custom_pool_entries("footwear", footwear, rng),
+    }
+
+
 def cute_preset_look_variants(catalog=None):
     """Return the 120 curated cute/seductive outfit variants.
 
@@ -292,19 +418,26 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
     outfits = BITMOJI_SELECTORS["outfits"]
     runtime_config = load_nyx_config()
     outfit_style = str(runtime_config.get("outfit_style", "default")).strip().lower()
+    if outfit_style == "mixed":
+        outfit_style = "mix"
 
     if outfit_style == CUTE_PRESET_STYLE:
         return _generate_cute_preset_outfit(rng)
 
+    if outfit_style == "custom":
+        return _generate_custom_outfit(rng, runtime_config.get("outfit_custom_preset_id", ""))
+
     if outfit_style == "default":
-        available_tops = _filter_blocked_outfits(outfits["tops"], BLOCKED_TOP_IDS, "top")
-        available_sandals = _filter_blocked_outfits(outfits["sandals"], BLOCKED_FOOTWEAR_IDS, "footwear")
-        available_sneakers = _filter_blocked_outfits(outfits["sneakers"], BLOCKED_FOOTWEAR_IDS, "footwear")
+        available_tops = _exact_entries(_filter_blocked_outfits(outfits["tops"], BLOCKED_TOP_IDS, "top"))
+        available_dresses = _exact_entries(outfits["dresses"])
+        available_bottoms = _exact_entries(outfits["bottoms"])
+        available_sandals = _exact_entries(_filter_blocked_outfits(outfits["sandals"], BLOCKED_FOOTWEAR_IDS, "footwear"))
+        available_sneakers = _exact_entries(_filter_blocked_outfits(outfits["sneakers"], BLOCKED_FOOTWEAR_IDS, "footwear"))
 
         dress_probability = 0.20
         use_dress = rng.random() < dress_probability
         if use_dress:
-            dress = rng.choice(outfits["dresses"])
+            dress = rng.choice(available_dresses)
             if not available_sandals:
                 raise ValueError("No allowed sandals available after filtering blocked footwear IDs.")
             shoes = rng.choice(available_sandals)
@@ -312,7 +445,7 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
                 "mode": "dress",
                 "dress": dress,
                 "shoes": shoes,
-                "dress_pool": list(outfits["dresses"]),
+                "dress_pool": list(available_dresses),
                 "shoes_pool": list(available_sandals),
             }
 
@@ -320,7 +453,7 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
             raise ValueError("No allowed tops available after filtering blocked outfit IDs.")
 
         top = rng.choice(available_tops)
-        bottom = rng.choice(outfits["bottoms"])
+        bottom = rng.choice(available_bottoms)
         if not available_sneakers:
             raise ValueError("No allowed sneakers available after filtering blocked footwear IDs.")
 
@@ -331,7 +464,7 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
             "bottom": bottom,
             "shoes": shoes,
             "top_pool": list(available_tops),
-            "bottom_pool": list(outfits["bottoms"]),
+            "bottom_pool": list(available_bottoms),
             "shoes_pool": list(available_sneakers),
         }
 
@@ -341,7 +474,7 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
     elif outfit_style == "sexy":
         style_pool = SEXY_OUTFITS
         dress_probability = 0.0
-    elif outfit_style == "mixed":
+    elif outfit_style == "mix":
         style_pool = {
             "tops": _merge_style_items(CASUAL_OUTFITS["tops"], SEXY_OUTFITS["tops"]),
             "bottoms": _merge_style_items(CASUAL_OUTFITS["bottoms"], SEXY_OUTFITS["bottoms"]),
@@ -361,9 +494,10 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
         style_pool = CASUAL_OUTFITS
         dress_probability = 0.18
 
-    available_tops = _filter_blocked_outfits(style_pool["tops"], BLOCKED_TOP_IDS, "top")
-    available_dresses = style_pool["dresses"]
-    available_footwear = _filter_blocked_outfits(style_pool["footwear"], BLOCKED_FOOTWEAR_IDS, "footwear")
+    available_tops = _exact_entries(_filter_blocked_outfits(style_pool["tops"], BLOCKED_TOP_IDS, "top"))
+    available_bottoms = _exact_entries(style_pool["bottoms"])
+    available_dresses = _exact_entries(style_pool["dresses"])
+    available_footwear = _exact_entries(_filter_blocked_outfits(style_pool["footwear"], BLOCKED_FOOTWEAR_IDS, "footwear"))
 
     use_dress = bool(available_dresses) and rng.random() < dress_probability
     if use_dress:
@@ -383,7 +517,7 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
         raise ValueError("No allowed tops available after filtering blocked outfit IDs.")
 
     top = rng.choice(available_tops)
-    bottom = rng.choice(style_pool["bottoms"])
+    bottom = rng.choice(available_bottoms)
     if not available_footwear:
         raise ValueError("No allowed footwear available after filtering blocked footwear IDs.")
 
@@ -395,6 +529,6 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
         "bottom": bottom,
         "shoes": shoes,
         "top_pool": list(available_tops),
-        "bottom_pool": list(style_pool["bottoms"]),
+        "bottom_pool": list(available_bottoms),
         "shoes_pool": list(available_footwear),
     }

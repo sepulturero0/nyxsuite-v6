@@ -9,6 +9,23 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.5.7
+
+- The Nyxmoji outfit system now applies outfits reliably end-to-end: Nyx
+  selects a full outfit (tops, bottoms, footwear, and colors) from the
+  dashboard-configured presets and applies it after the bottom is selected, so
+  tuck-in works correctly on every run.
+- Added a tuck-in toggle at the bottom of the Bitmoji preview in the dashboard
+  Nyxmoji panel; each preset remembers whether the outfit should be tucked in,
+  and the live editor tucks the shirt in when the preset says so.
+- The Bitmoji preview now reflects the tuck-in state (is_tucked render
+  parameter), so the preview matches the final avatar.
+- The Nyx popup now shows an Outfit style selector (Default / Mix / Casual /
+  Sexy / Custom) that syncs with the runner, and the runner accepts the new
+  mix/custom style values alongside the legacy mixed style.
+- Custom outfits are edited per user in the dashboard Nyxmoji panel; the popup
+  selector stays empty by design.
+
 ### NyxSuite v6.5.6
 
 - Nyxify now offers Scan Banned Rows, Remove Banned, and Warm Up Banned

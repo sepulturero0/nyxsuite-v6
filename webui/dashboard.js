@@ -702,7 +702,8 @@ function renderNyxAdvanced() {
   const body = el("nyx-advanced-body");
   if (!body) return;
   const v = state.nyx.config || {};
-  const opt = (val, label) => `<option value="${val}" ${v.outfit_style === val ? "selected" : ""}>${label}</option>`;
+  const outfitStyle = v.outfit_style === "mixed" ? "mix" : v.outfit_style;
+  const opt = (val, label) => `<option value="${val}" ${outfitStyle === val ? "selected" : ""}>${label}</option>`;
   const mode = currentAdsPowerControlMode();
   const modeOpt = (val, label) => `<option value="${val}" ${mode === val ? "selected" : ""}>${label}</option>`;
   body.innerHTML = `
@@ -711,7 +712,7 @@ function renderNyxAdvanced() {
       <label class="adv-field"><span>Max parallel</span><input id="cfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 5)}"></label>
       <label class="adv-field"><span>Automation speed (%)</span><input id="cfg-automation_speed" class="input" type="number" min="5" max="100" value="${escapeAttr(Math.round((Number(v.automation_speed) || 1) * 50))}"></label>
       <label class="adv-field"><span>Outfit style</span><select id="cfg-outfit_style" class="input">
-        ${opt("default", "Default")}${opt("mixed", "Mixed")}${opt("casual", "Casual")}${opt("sexy", "Sexy")}${opt("no_dresses", "No Dresses")}${opt("cute_preset", "Cute Preset")}
+        ${opt("default", "Default")}${opt("mix", "Mix")}${opt("casual", "Casual")}${opt("sexy", "Sexy")}${opt("custom", "Custom")}
       </select></label>
       <div class="adv-field toggle-row"><span class="toggle-text">Hair randomizer</span><label class="toggle-switch"><input id="cfg-hair_randomizer_enabled" type="checkbox" ${v.hair_randomizer_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
 
@@ -1315,19 +1316,78 @@ el("proxyrank-ban-red").addEventListener("click", banBadProxyRows);
 
   // ---------- Configure Nyxmoji (editor) ----------
 const bm = {
-  catalog: {}, order: [], groups: {}, models: {}, modelNames: [], presets: {}, renderParams: {},
+  catalog: {}, order: [], outfitOrder: [], groups: {}, models: {}, modelNames: [], presets: {}, renderParams: {},
   baseAvatar: "", current: "", active: "", previewPick: {}, featGroup: {}, openGroups: new Set(), loaded: false,
-  optFilter: "",
+  optFilter: "", editorMode: "model", outfitConfig: {}, activeOutfit: "", outfitColorTarget: {},
 };
 const NYX_BASE = PRODUCTS.nyx.base;
 const nyxmoji = globalThis.NyxmojiHelpers;
+const BM_OUTFIT_FEATURES = ["tops", "bottoms", "dresses", "footwear"];
 const BM_HINTS = {
-  preset: m => `Using ${m}'s built-in look. Browse every option below — click one to pin it (Fixed).`,
-  fixed: () => "Always use the one option you pick below.",
+  preset: m => `Using ${m}'s built-in look. Browse every option below — click one to make it a one-item Random pool.`,
   random: () => "Tick every option to allow — the bot picks one at random for each profile. Use Select all / Clear to build the pool fast.",
 };
 
 function bmIsOutfit(f) { return (bm.catalog[f] && bm.catalog[f].type) === "outfit"; }
+function bmIsOutfitFeature(f) { return BM_OUTFIT_FEATURES.includes(f); }
+function bmIsOutfitMode() { return bm.editorMode === "outfit"; }
+function bmActiveFeature() { return bmIsOutfitMode() ? bm.activeOutfit : bm.active; }
+function bmActiveOrder() { return bmIsOutfitMode() ? bm.outfitOrder : bm.order; }
+// Fixed is no longer offered in the UI — a one-option Random pool does the same.
+// Convert any legacy Fixed selections to that form so old configs keep working.
+function normalizeFixedModes() {
+  Object.values(bm.models || {}).forEach(cfg => {
+    Object.values(cfg || {}).forEach(sel => {
+      if (!sel || sel.mode !== "fixed") return;
+      const id = String(sel.id || "");
+      const pool = id ? [id] : [];
+      sel.mode = "random";
+      sel.pool = pool;
+      if (sel.color) sel.colors = [sel.color];
+      delete sel.id; delete sel.color;
+    });
+  });
+}
+function bmDefaultOutfitConfig() {
+  return { active_custom_preset_id: "", custom_presets: {} };
+}
+function ensureOutfitPreset() {
+  if (!bm.outfitConfig || typeof bm.outfitConfig !== "object") bm.outfitConfig = bmDefaultOutfitConfig();
+  if (!bm.outfitConfig.custom_presets || typeof bm.outfitConfig.custom_presets !== "object") bm.outfitConfig.custom_presets = {};
+  let active = bm.outfitConfig.active_custom_preset_id || Object.keys(bm.outfitConfig.custom_presets)[0] || "";
+  if (!active || !bm.outfitConfig.custom_presets[active]) {
+    active = "default";
+    bm.outfitConfig.custom_presets[active] = {
+      id: active,
+      name: "Custom",
+      tuck_in: true,
+      features: {},
+    };
+  }
+  bm.outfitConfig.active_custom_preset_id = active;
+  const preset = bm.outfitConfig.custom_presets[active];
+  if (!preset.features || typeof preset.features !== "object") preset.features = {};
+  return preset;
+}
+function outfitCfg() { return ensureOutfitPreset().features; }
+function activeCfg() { return bmIsOutfitMode() ? outfitCfg() : modelCfg(); }
+function stripModelOutfitConfig(models) {
+  if (!models || typeof models !== "object") return {};
+  const dead = ["outfits", ...BM_OUTFIT_FEATURES, "outerwear", "sock"];
+  Object.values(models).forEach(cfg => {
+    if (!cfg || typeof cfg !== "object") return;
+    dead.forEach(feature => delete cfg[feature]);
+  });
+  return models;
+}
+function bmColorTarget(feature, sel) {
+  const pool = (sel && Array.isArray(sel.pool)) ? sel.pool.map(String) : [];
+  const current = String(bm.outfitColorTarget[feature] || "");
+  if (current && pool.includes(current)) return current;
+  const first = pool[0] || "";
+  if (first) bm.outfitColorTarget[feature] = first;
+  return first;
+}
 function bmFeatureColors(feature, sel) {
   const feat = bm.catalog[feature];
   if (!feat || !sel || !bmIsOutfit(feature)) return [];
@@ -1338,6 +1398,26 @@ function bmFeatureColors(feature, sel) {
 function bmPruneFeatureColors(feature, sel) {
   if (!sel || !bmIsOutfit(feature)) return;
   const feat = bm.catalog[feature];
+  if (bmIsOutfitMode()) {
+    const pool = (sel.pool || []).map(String);
+    const colorsByOption = sel.colors_by_option || {};
+    const next = {};
+    pool.forEach(optionId => {
+      if (!nyxmoji.optionColorsAreVerified(feat, optionId)) {
+        const kept = Array.isArray(colorsByOption[optionId]) ? colorsByOption[optionId].filter(Boolean) : [];
+        if (kept.length) next[optionId] = kept;
+        return;
+      }
+      const valid = nyxmoji.filterConfiguredColors(
+        colorsByOption[optionId],
+        nyxmoji.verifiedColorsForOption(feat, optionId),
+      );
+      if (valid.length) next[optionId] = valid;
+    });
+    if (Object.keys(next).length) sel.colors_by_option = next;
+    else delete sel.colors_by_option;
+    return;
+  }
   const colors = bmFeatureColors(feature, sel);
   if (sel.mode === "fixed") {
     if (!nyxmoji.optionColorsAreVerified(feat, sel.id)) return;
@@ -1359,21 +1439,29 @@ function bmColorsForPickedOption(feature, optionId, configuredColors) {
 async function loadBitmoji() {
   el("bm-status").textContent = "Loading…";
   try {
-    const [cat, mod] = await Promise.all([
+    const [cat, mod, outfitData] = await Promise.all([
       fetch(NYX_BASE + "/bitmoji/catalog", { headers: tokenHeaders() }).then(r => r.json()),
       fetch(NYX_BASE + "/bitmoji/models", { headers: tokenHeaders() }).then(r => r.json()),
+      fetch(NYX_BASE + "/bitmoji/outfits", { headers: tokenHeaders() }).then(r => r.json()).catch(() => ({})),
     ]);
     bm.catalog = (cat && cat.catalog) || {};
-    bm.order = ((cat && cat.feature_order) || Object.keys(bm.catalog)).filter(f => bm.catalog[f] && bm.catalog[f].options && bm.catalog[f].options.length);
+    const fullOrder = ((cat && cat.feature_order) || Object.keys(bm.catalog))
+      .filter(f => bm.catalog[f] && bm.catalog[f].options && bm.catalog[f].options.length);
+    bm.order = fullOrder.filter(f => !bmIsOutfit(f) && f !== "outfits" && f !== "sock");
+    bm.outfitOrder = fullOrder.filter(f => bmIsOutfitFeature(f));
     bm.groups = (cat && cat.groups) || {};
     bm.baseAvatar = (cat && cat.base_avatar) || "";
     bm.renderParams = (cat && cat.render_params) || {};
-    bm.models = (mod && mod.models) || {};
+    bm.models = stripModelOutfitConfig((mod && mod.models) || {});
+    normalizeFixedModes();
     bm.modelNames = (mod && mod.model_names) || [];
     bm.presets = (mod && mod.model_presets) || {};
+    bm.outfitConfig = (outfitData && outfitData.outfits) || bmDefaultOutfitConfig();
+    ensureOutfitPreset();
     bm.loaded = true;
     if (!bm.current || !bm.modelNames.includes(bm.current)) bm.current = bm.modelNames[0] || "";
     if (!bm.active || !bm.order.includes(bm.active)) bm.active = bm.order[0] || "";
+    if (!bm.activeOutfit || !bm.outfitOrder.includes(bm.activeOutfit)) bm.activeOutfit = bm.outfitOrder[0] || "";
     el("bm-status").textContent = "";
     renderBitmojiModels();
     renderBitmojiAll();
@@ -1385,6 +1473,42 @@ async function loadBitmoji() {
 function renderBitmojiModels() {
   el("bm-model").innerHTML = bm.modelNames.map(m =>
     `<option value="${escapeAttr(m)}"${m === bm.current ? " selected" : ""}>${escapeHtml(m)}</option>`).join("");
+  document.querySelectorAll(".bm-editor-mode").forEach(btn => {
+    btn.classList.toggle("active", btn.dataset.bmEditor === bm.editorMode);
+  });
+  const outfitMode = bmIsOutfitMode();
+  el("bm-model").style.display = outfitMode ? "none" : "";
+  const modelLabel = document.querySelector('label[for="bm-model"]');
+  if (modelLabel) modelLabel.style.display = outfitMode ? "none" : "";
+  ["bm-outfit-preset", "bm-outfit-add", "bm-outfit-rename", "bm-outfit-delete"].forEach(id => {
+    const node = el(id);
+    if (node) node.style.display = outfitMode ? "" : "none";
+  });
+  const tuckWrap = el("bm-outfit-tuck-wrap");
+  if (tuckWrap) tuckWrap.style.display = outfitMode ? "" : "none";
+  renderOutfitPresetSelect();
+  renderOutfitTuckButton();
+}
+
+function renderOutfitTuckButton() {
+  const input = el("bm-outfit-tuck");
+  const label = el("bm-outfit-tuck-label");
+  if (!input) return;
+  ensureOutfitPreset();
+  const tucked = bm.outfitConfig.custom_presets[bm.outfitConfig.active_custom_preset_id].tuck_in !== false;
+  input.checked = tucked;
+  if (label) label.textContent = tucked ? "Tucked" : "Not Tucked";
+}
+
+function renderOutfitPresetSelect() {
+  const select = el("bm-outfit-preset");
+  if (!select) return;
+  ensureOutfitPreset();
+  const presets = bm.outfitConfig.custom_presets || {};
+  select.innerHTML = Object.keys(presets).map(id => {
+    const preset = presets[id] || {};
+    return `<option value="${escapeAttr(id)}"${id === bm.outfitConfig.active_custom_preset_id ? " selected" : ""}>${escapeHtml(preset.name || id)}</option>`;
+  }).join("");
 }
 
 function modelCfg() {
@@ -1394,7 +1518,9 @@ function modelCfg() {
 
 function renderBitmojiAll() {
   if (!bm.loaded) return;
-  el("bm-model-tag").textContent = bm.current;
+  const preset = ensureOutfitPreset();
+  el("bm-model-tag").textContent = bmIsOutfitMode() ? `Outfit: ${preset.name || preset.id}` : bm.current;
+  renderBitmojiModels();
   renderCatBar();
   renderSide();
   samplePreviewPicks();   // draw a real random sample so the preview isn't just pool[0]
@@ -1403,18 +1529,26 @@ function renderBitmojiAll() {
 
 
 function renderCatBar() {
-  const cfg = modelCfg();
+  const cfg = activeCfg();
+  const order = bmActiveOrder();
   const grouped = (bm.groups && Object.keys(bm.groups).length) ? bm.groups : {};
   // Build feature→group lookup and store on bm for click handler
   const featGroup = {};
-  Object.keys(grouped).forEach(g => { (grouped[g] || []).forEach(f => { featGroup[f] = g; }); });
+  if (bmIsOutfitMode()) {
+    order.forEach(f => { featGroup[f] = "Outfit"; });
+  } else {
+    Object.keys(grouped).forEach(g => {
+      (grouped[g] || []).filter(f => order.includes(f)).forEach(f => { featGroup[f] = g; });
+    });
+  }
   bm.featGroup = featGroup;
   // Auto-open the active feature's group
-  const activeGroup = featGroup[bm.active];
+  const activeFeature = bmActiveFeature();
+  const activeGroup = featGroup[activeFeature];
   if (activeGroup) bm.openGroups.add(activeGroup);
   let currentGroup = "";
   let html = "";
-  bm.order.forEach(f => {
+  order.forEach(f => {
     const feat = bm.catalog[f];
     if (!feat) return;
     const g = featGroup[f] || "";
@@ -1427,7 +1561,7 @@ function renderCatBar() {
         + `<div class="bm-cat-features" style="${open ? "" : "display:none"}">`;
     }
     const configured = !!cfg[f];
-    html += `<button type="button" class="bm-cat${f === bm.active ? " active" : ""}${configured ? " has-config" : ""}" data-feature="${escapeAttr(f)}">
+    html += `<button type="button" class="bm-cat${f === activeFeature ? " active" : ""}${configured ? " has-config" : ""}" data-feature="${escapeAttr(f)}">
       <span class="bm-cat-dot"></span><span class="bm-cat-name">${escapeHtml(feat.label || f)}</span></button>`;
   });
   if (currentGroup) html += `</div>`;  // close last group
@@ -1463,21 +1597,27 @@ function bmOptCellHtml(feat, o, on, extraClass) {
 }
 
 function renderSide() {
-  const f = bm.active; const feat = bm.catalog[f];
+  const f = bmActiveFeature(); const feat = bm.catalog[f];
   if (!feat) { el("bm-options").innerHTML = ""; renderOptTools(null, "preset"); return; }
-  const sel = modelCfg()[f] || { mode: "preset" };
+  const cfg = activeCfg();
+  if (bmIsOutfitMode() && !cfg[f]) cfg[f] = { mode: "random", pool: [] };
+  const sel = cfg[f] || { mode: "preset" };
+  if (sel.mode === "fixed") {  // legacy configs — Fixed is now a one-item Random pool
+    sel.mode = "random";
+    sel.pool = [String(sel.id || "")].filter(Boolean);
+    if (sel.color) sel.colors = [sel.color];
+    delete sel.id; delete sel.color;
+  }
   const mode = sel.mode || "preset";
   bmPruneFeatureColors(f, sel);
   el("bm-feature-title").textContent = feat.label || f;
   el("bm-feature-count").textContent = feat.options.length + " options";
-  let hintText = (BM_HINTS[mode] || (() => ""))(bm.current);
-  if (f === "outfits" || f === "tops") {
-    const other = f === "outfits" ? "tops" : "outfits";
-    const bothCfg = modelCfg()[f] && modelCfg()[other];
-    hintText += "  Note: Outfits and Tops are the same top slot" + (bothCfg ? " — both are configured, so whichever applies last wins." : ".");
-  }
+  let hintText = bmIsOutfitMode()
+    ? "Shared outfit pool. Each profile picks a random item from this pool; colours are configured per selected item."
+    : (BM_HINTS[mode] || (() => ""))(bm.current);
   el("bm-mode-hint").textContent = hintText;
-  el("bm-clear-feature").style.display = (mode === "preset") ? "none" : "";
+  el("bm-clear-feature").style.display = (mode === "preset" && !bmIsOutfitMode()) ? "none" : "";
+  el("bm-mode-group").style.display = bmIsOutfitMode() ? "none" : "";
   document.querySelectorAll("#bm-mode-group .bm-mode-btn").forEach(b =>
     b.classList.toggle("active", b.dataset.mode === mode));
   renderOptTools(feat, mode);
@@ -1497,13 +1637,40 @@ function renderSide() {
     }
     return `<span class="bm-pool-chip" title="${escapeAttr(id)}">${escapeHtml(id)}</span>`;
   };
+  const poolThumbImg = id => {
+    const o = optById[String(id)];
+    if (o && o.preview) return `<img loading="lazy" src="${escapeAttr(o.preview)}" alt="">`;
+    return `<span class="bm-pool-chip" title="${escapeAttr(id)}">${escapeHtml(id)}</span>`;
+  };
   let info = `<div class="bm-selection-info">`;
-  if (mode === "fixed") {
-    info += sel.id
-      ? `<div class="bm-pool-head">Selected</div><div class="bm-pool-grid">${thumb(sel.id)}</div>`
-      : `<div class="bm-pool-empty">Click an option above to fix it.</div>`;
-    const selectedColor = nyxmoji.filterConfiguredColors([sel.color], bmFeatureColors(f, sel))[0];
-    if (selectedColor) info += `<div class="bm-pool-head">Color</div><div class="bm-pool-grid"><span class="bm-pool-chip bm-pool-color" title="${escapeAttr(selectedColor)}" style="background:${escapeAttr(selectedColor)}"></span></div>`;
+  if (bmIsOutfitMode()) {
+    const pool = sel.pool || [];
+    const colorTarget = bmColorTarget(f, sel);
+    info += `<div class="bm-pool-head">Shared random pool — <strong>${pool.length}</strong> selected</div>`;
+    if (pool.length) {
+      info += `<div class="bm-pool-grid">`;
+      pool.forEach(itemId => {
+        const colors = (sel.colors_by_option && Array.isArray(sel.colors_by_option[itemId])) ? sel.colors_by_option[itemId] : [];
+        const verified = nyxmoji.filterConfiguredColors(colors, nyxmoji.verifiedColorsForOption(feat, itemId));
+        const swatches = verified.length
+          ? `<span class="bm-thumb-colors">${verified.map(c => `<i class="bm-thumb-color" title="${escapeAttr(c)}" style="background:${escapeAttr(c)}"></i>`).join("")}</span>`
+          : "";
+        info += `<span class="bm-pool-thumb" title="${escapeAttr(itemId)}">${poolThumbImg(itemId)}`
+          + `<button type="button" class="bm-pool-remove" data-remove-id="${escapeAttr(itemId)}" title="Remove from pool">×</button>`
+          + `<span class="bm-thumb-count" title="Colours configured for this item">${verified.length}</span>`
+          + `${swatches}</span>`;
+      });
+      info += `</div>`;
+    } else {
+      info += `<div class="bm-pool-empty">Tick options above to add them to the shared outfit pool.</div>`;
+    }
+    if (colorTarget) {
+      const selectedColors = (sel.colors_by_option && Array.isArray(sel.colors_by_option[colorTarget])) ? sel.colors_by_option[colorTarget] : [];
+      info += `<div class="bm-pool-head">Colours for ${escapeHtml(colorTarget)} — <strong>${selectedColors.length}</strong></div>`;
+      info += selectedColors.length
+        ? `<div class="bm-pool-grid">${selectedColors.map(c => `<span class="bm-pool-chip bm-pool-color" title="${escapeAttr(c)}" style="background:${escapeAttr(c)}"></span>`).join("")}</div>`
+        : `<div class="bm-pool-empty">No colours selected for this item.</div>`;
+    }
   } else if (mode === "random") {
     const pool = sel.pool || [];
     info += `<div class="bm-pool-head">Random pool — <strong>${pool.length}</strong> selected</div>`;
@@ -1537,8 +1704,8 @@ function renderOptTools(feat, mode) {
 
 function renderOptions(feature, feat, sel, mode) {
   const filter = String(bm.optFilter || "").trim().toLowerCase();
-  const presetVal = mode === "preset" ? bmPresetOptionId(feature) : null;
-  const chosen = mode === "fixed" ? [sel.id] : (mode === "random" ? (sel.pool || []) : []);
+  const presetVal = mode === "preset" && !bmIsOutfitMode() ? bmPresetOptionId(feature) : null;
+  const chosen = mode === "random" ? (sel.pool || []) : [];
   const chosenSet = new Set(chosen.map(String));
   const matches = o => !filter || String(o.id).toLowerCase().includes(filter);
   const shown = feat.options.filter(matches);
@@ -1554,13 +1721,16 @@ function renderOptions(feature, feat, sel, mode) {
   // Garment colours are catalogued per option. A verified empty list is an
   // intentional colourless garment, so it has no colour controls at all.
   if (feat.type === "outfit" && mode !== "preset") {
-    const colors = bmFeatureColors(feature, sel);
-    const selectedColors = nyxmoji.filterConfiguredColors(
-      mode === "fixed" ? [sel.color] : sel.colors,
-      colors,
-    );
+    const colorTarget = bmIsOutfitMode() ? bmColorTarget(feature, sel) : "";
+    const colors = bmIsOutfitMode()
+      ? (colorTarget ? nyxmoji.verifiedColorsForOption(feat, colorTarget) : [])
+      : bmFeatureColors(feature, sel);
+    const configuredColors = bmIsOutfitMode()
+      ? ((sel.colors_by_option && colorTarget) ? sel.colors_by_option[colorTarget] : [])
+      : sel.colors;
+    const selectedColors = nyxmoji.filterConfiguredColors(configuredColors, colors);
     const poolColors = new Set(selectedColors.map(color => color.toLowerCase()));
-    const label = mode === "random" ? "Colours (pool)" : "Colour";
+    const label = bmIsOutfitMode() ? `Colours for ${colorTarget || "selected item"}` : "Colours (pool)";
     if (colors.length) {
       html += `<div class="bm-color-block"><div class="bm-color-head"><span class="bm-color-label">${label}</span>`;
       if (mode === "random") {
@@ -1580,11 +1750,11 @@ function renderOptions(feature, feat, sel, mode) {
 const bmRandOf = arr => arr[Math.floor(Math.random() * arr.length)];
 
 // Conservative sampler used on load / re-render: only re-rolls features the
-// operator set to Random, drawing from THAT pool. Fixed and preset features keep
+// operator set to Random, drawing from THAT pool. Preset features keep
 // the model's chosen/baseline look, so opening a model shows its clean preset.
 function samplePreviewPicks() {
-  const cfg = bm.models[bm.current] || {};
-  bm.order.forEach(f => {
+  const cfg = activeCfg();
+  bmActiveOrder().forEach(f => {
     const rp = bm.renderParams[f];
     const feat = bm.catalog[f];
     if (!rp || !feat || !feat.options || !feat.options.length) return;
@@ -1594,40 +1764,13 @@ function samplePreviewPicks() {
     if (!pool.length) { delete bm.previewPick[f]; return; }
     const optionId = bmRandOf(pool);
     bm.previewPick[f] = optionId;
-    const colors = bmColorsForPickedOption(f, optionId, sel.colors);
+    const colors = bmIsOutfitMode()
+      ? nyxmoji.filterConfiguredColors(
+        (sel.colors_by_option && sel.colors_by_option[optionId]) || [],
+        nyxmoji.verifiedColorsForOption(feat, optionId),
+      )
+      : bmColorsForPickedOption(f, optionId, sel.colors);
     if (colors.length) bm.previewPick[f + ":color"] = bmRandOf(colors);
-    else delete bm.previewPick[f + ":color"];
-  });
-}
-
-// The Shuffle button: roll a brand-new complete look, like generating a random
-// Bitmoji. Fixed pins are respected; Random features draw from their pool; every
-// other (preset / unconfigured) feature draws from its FULL catalog — so every
-// press visibly changes, covering all possibilities. renderAvatar() falls back to
-// the last good / base look if a rare param combo can't render, so it never blanks.
-function shuffleAllPicks() {
-  const cfg = bm.models[bm.current] || {};
-  bm.order.forEach(f => {
-    const rp = bm.renderParams[f];
-    const feat = bm.catalog[f];
-    if (!rp || !feat || !feat.options || !feat.options.length) return;
-    const sel = cfg[f];
-    if (sel && sel.mode === "fixed") {  // honour the pin — keep the fixed id/colour
-      delete bm.previewPick[f]; delete bm.previewPick[f + ":color"]; return;
-    }
-    let pool;
-    if (sel && sel.mode === "random") {
-      pool = (sel.pool || []).map(String).filter(id => feat.options.some(o => String(o.id) === id));
-    } else {
-      pool = feat.options.map(o => String(o.id));  // preset / unconfigured → whole catalog
-    }
-    if (!pool.length) { delete bm.previewPick[f]; delete bm.previewPick[f + ":color"]; return; }
-    const optionId = bmRandOf(pool);
-    bm.previewPick[f] = optionId;
-    const colorPool = sel && sel.mode === "random"
-      ? bmColorsForPickedOption(f, optionId, sel.colors)
-      : [];
-    if (colorPool.length) bm.previewPick[f + ":color"] = bmRandOf(colorPool);
     else delete bm.previewPick[f + ":color"];
   });
 }
@@ -1658,9 +1801,9 @@ function buildAvatarUrl() {
   p.set("scale", "1");  // lighter render — preview re-fetches on every change
   const preset = bm.presets[bm.current] || {};
   Object.keys(preset).forEach(k => p.set(k, preset[k]));
-  const cfg = bm.models[bm.current] || {};
+  const cfg = activeCfg();
   const overrides = {};
-  bm.order.forEach(f => {
+  bmActiveOrder().forEach(f => {
     const rp = bm.renderParams[f]; const feat = bm.catalog[f]; const sel = cfg[f];
     if (!rp || !feat) return;
     let id = null, color = null;
@@ -1670,12 +1813,17 @@ function buildAvatarUrl() {
     } else if (sel && sel.mode === "random") {
       const pool = (sel.pool || []).map(String).filter(optionId => nyxmoji.findOption(feat, optionId));
       if (pool.length) id = (bm.previewPick[f] && pool.includes(String(bm.previewPick[f]))) ? bm.previewPick[f] : pool[0];
-      const colors = bmColorsForPickedOption(f, id, sel.colors);
+      const colors = bmIsOutfitMode()
+        ? nyxmoji.filterConfiguredColors(
+          (sel.colors_by_option && sel.colors_by_option[id]) || [],
+          nyxmoji.verifiedColorsForOption(feat, id),
+        )
+        : bmColorsForPickedOption(f, id, sel.colors);
       if (colors.length) color = (bm.previewPick[f + ":color"] && nyxmoji.filterConfiguredColors([bm.previewPick[f + ":color"]], colors).length)
         ? bm.previewPick[f + ":color"] : colors[0];
     } else if (bm.previewPick[f]) {
-      // Preset/unconfigured feature the Shuffle button rolled — render that pick so
-      // Shuffle visibly changes every feature. Cleared on model change / re-render.
+      // Preset/unconfigured feature rolled for preview — render that pick so the
+      // preview reflects it. Cleared on model change / re-render.
       id = bm.previewPick[f];
       color = bmColorsForPickedOption(f, id, [bm.previewPick[f + ":color"]])[0] || null;
     }
@@ -1692,6 +1840,9 @@ function buildAvatarUrl() {
       }
     }
   });
+  // Show the tuck state on the preview too: the renderer tucks the top in when
+  // is_tucked=1, matching what the flow will do for a tuck_in preset.
+  if (bmIsOutfitMode() && ensureOutfitPreset().tuck_in !== false) overrides.is_tucked = "1";
   return nyxmoji.applyAvatarParams(url.toString(), overrides) || url.toString();
 }
 
@@ -1717,6 +1868,78 @@ function renderAvatar() {
 }
 
 el("bm-model").addEventListener("change", e => { bm.current = e.target.value; bm.previewPick = {}; renderBitmojiAll(); });
+el("bm-outfit-preset").addEventListener("change", e => {
+  ensureOutfitPreset();
+  const id = e.target.value;
+  if (bm.outfitConfig.custom_presets[id]) bm.outfitConfig.active_custom_preset_id = id;
+  bm.previewPick = {};
+  renderBitmojiAll();
+});
+
+document.querySelectorAll(".bm-editor-mode").forEach(btn => {
+  btn.addEventListener("click", () => {
+    bm.editorMode = btn.dataset.bmEditor === "outfit" ? "outfit" : "model";
+    bm.optFilter = "";
+    bm.previewPick = {};
+    bm.openGroups.clear();
+    if (bmIsOutfitMode()) ensureOutfitPreset();
+    renderBitmojiAll();
+  });
+});
+
+function uniqueOutfitPresetId(name) {
+  const base = String(name || "custom").trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "_").replace(/^_+|_+$/g, "") || "custom";
+  const presets = (bm.outfitConfig && bm.outfitConfig.custom_presets) || {};
+  let id = base;
+  let i = 2;
+  while (presets[id]) {
+    id = `${base}_${i}`;
+    i += 1;
+  }
+  return id;
+}
+
+el("bm-outfit-add").addEventListener("click", () => {
+  ensureOutfitPreset();
+  const name = (prompt("Name this custom outfit preset:", "Custom Outfit") || "").trim();
+  if (!name) return;
+  const id = uniqueOutfitPresetId(name);
+  bm.outfitConfig.custom_presets[id] = { id, name, tuck_in: true, features: {} };
+  bm.outfitConfig.active_custom_preset_id = id;
+  bm.previewPick = {};
+  renderBitmojiAll();
+});
+
+el("bm-outfit-rename").addEventListener("click", () => {
+  const preset = ensureOutfitPreset();
+  const name = (prompt("Rename this custom outfit preset:", preset.name || preset.id) || "").trim();
+  if (!name) return;
+  preset.name = name;
+  renderBitmojiAll();
+});
+
+el("bm-outfit-delete").addEventListener("click", () => {
+  ensureOutfitPreset();
+  const presets = bm.outfitConfig.custom_presets || {};
+  const activeId = bm.outfitConfig.active_custom_preset_id;
+  if (Object.keys(presets).length <= 1) {
+    toast("Keep at least one custom outfit preset.", false);
+    return;
+  }
+  if (!confirm("Delete this custom outfit preset?")) return;
+  delete presets[activeId];
+  bm.outfitConfig.active_custom_preset_id = Object.keys(presets)[0] || "";
+  bm.previewPick = {};
+  renderBitmojiAll();
+});
+
+el("bm-outfit-tuck").addEventListener("change", () => {
+  const preset = ensureOutfitPreset();
+  preset.tuck_in = el("bm-outfit-tuck").checked;
+  renderOutfitTuckButton();
+  renderAvatar();
+  toast(preset.tuck_in ? "This outfit will tuck the top in." : "This outfit will not tuck the top in.", true);
+});
 
 el("bm-catbar").addEventListener("click", e => {
   const groupBtn = e.target.closest(".bm-cat-group-btn");
@@ -1728,31 +1951,66 @@ el("bm-catbar").addEventListener("click", e => {
     return;
   }
   const cat = e.target.closest(".bm-cat"); if (!cat) return;
-  bm.active = cat.dataset.feature;
+  if (bmIsOutfitMode()) bm.activeOutfit = cat.dataset.feature;
+  else bm.active = cat.dataset.feature;
   bm.optFilter = "";   // a filter for one feature shouldn't leak into the next
-  const g = bm.featGroup[bm.active];
+  const g = bm.featGroup[bmActiveFeature()];
   if (g) { bm.openGroups.clear(); bm.openGroups.add(g); }
   renderCatBar(); renderSide();
 });
 
 document.getElementById("bm-mode-group").addEventListener("click", e => {
   const btn = e.target.closest(".bm-mode-btn"); if (!btn) return;
-  const mode = btn.dataset.mode; const cfg = modelCfg(); const f = bm.active;
+  if (bmIsOutfitMode()) return;
+  const mode = btn.dataset.mode; const cfg = activeCfg(); const f = bmActiveFeature();
   if (mode === "preset") delete cfg[f];
-  else if (mode === "fixed") cfg[f] = { mode: "fixed", id: (cfg[f] && cfg[f].id) || "" };
+  else if (mode === "fixed") cfg[f] = { mode: "random", pool: (cfg[f] && cfg[f].id) ? [String(cfg[f].id)] : [] };
   else cfg[f] = { mode: "random", pool: (cfg[f] && cfg[f].pool) || [] };
   bmPruneFeatureColors(f, cfg[f]);
   renderCatBar(); renderSide(); renderAvatar();
 });
 
 el("bm-options").addEventListener("click", e => {
+  const poolRemove = e.target.closest(".bm-pool-remove");
+  if (poolRemove) {
+    const f = bmActiveFeature(); const sel = activeCfg()[f];
+    if (!sel || !bmIsOutfitMode()) return;
+    const itemId = poolRemove.dataset.removeId;
+    sel.pool = (sel.pool || []).filter(optionId => String(optionId) !== String(itemId));
+    if (sel.colors_by_option) delete sel.colors_by_option[itemId];
+    if (String(bm.outfitColorTarget[f] || "") === String(itemId)) delete bm.outfitColorTarget[f];
+    if (bm.previewPick[f] === itemId) { delete bm.previewPick[f]; delete bm.previewPick[f + ":color"]; }
+    bmPruneFeatureColors(f, sel);
+    renderSide(); renderAvatar();
+    return;
+  }
+  const poolThumbClick = e.target.closest(".bm-pool-thumb");
+  if (poolThumbClick && bmIsOutfitMode()) {
+    const f = bmActiveFeature(); const sel = activeCfg()[f];
+    if (!sel) return;
+    const itemId = poolThumbClick.getAttribute("title");
+    const inPool = (sel.pool || []).some(optionId => String(optionId) === String(itemId));
+    if (!inPool) return;
+    bm.outfitColorTarget[f] = itemId;
+    renderSide();
+    return;
+  }
   const colorBulk = e.target.closest(".bm-color-all, .bm-color-none");
   if (colorBulk) {
-    const f = bm.active; const sel = modelCfg()[f];
+    const f = bmActiveFeature(); const sel = activeCfg()[f];
     if (!sel || sel.mode !== "random") return;
-    const colors = bmFeatureColors(f, sel);
+    const targetId = bmIsOutfitMode() ? bmColorTarget(f, sel) : "";
+    const colors = bmIsOutfitMode()
+      ? (targetId ? nyxmoji.verifiedColorsForOption(bm.catalog[f], targetId) : [])
+      : bmFeatureColors(f, sel);
     if (!colors.length) return;
-    sel.colors = colorBulk.classList.contains("bm-color-all") ? colors.slice() : [];
+    if (bmIsOutfitMode()) {
+      sel.colors_by_option = sel.colors_by_option || {};
+      sel.colors_by_option[targetId] = colorBulk.classList.contains("bm-color-all") ? colors.slice() : [];
+      if (!sel.colors_by_option[targetId].length) delete sel.colors_by_option[targetId];
+    } else {
+      sel.colors = colorBulk.classList.contains("bm-color-all") ? colors.slice() : [];
+    }
     bmPruneFeatureColors(f, sel);
     renderSide(); renderAvatar();
     return;
@@ -1760,13 +2018,21 @@ el("bm-options").addEventListener("click", e => {
   const swatchBtn = e.target.closest(".bm-opt-swatch");
   if (swatchBtn) {
     if (swatchBtn.disabled) return;   // preset shows the palette read-only
-    const f = bm.active; const color = swatchBtn.dataset.color; const sel = modelCfg()[f];
+    const f = bmActiveFeature(); const color = swatchBtn.dataset.color; const sel = activeCfg()[f];
     if (!sel) return;
-    const available = bmFeatureColors(f, sel);
+    const targetId = bmIsOutfitMode() ? bmColorTarget(f, sel) : "";
+    const available = bmIsOutfitMode()
+      ? (targetId ? nyxmoji.verifiedColorsForOption(bm.catalog[f], targetId) : [])
+      : bmFeatureColors(f, sel);
     const selected = nyxmoji.filterConfiguredColors([color], available)[0];
     if (!selected) return;
-    if (sel.mode === "fixed") {
-      sel.color = selected;
+    if (bmIsOutfitMode()) {
+      sel.colors_by_option = sel.colors_by_option || {};
+      const list = sel.colors_by_option[targetId] || [];
+      const ci = list.findIndex(c => String(c).toLowerCase() === selected.toLowerCase());
+      if (ci >= 0) list.splice(ci, 1); else list.push(selected);
+      if (list.length) sel.colors_by_option[targetId] = list;
+      else delete sel.colors_by_option[targetId];
     } else if (sel.mode === "random") {
       sel.colors = sel.colors || [];
       const ci = sel.colors.findIndex(c => String(c).toLowerCase() === selected.toLowerCase());
@@ -1777,20 +2043,28 @@ el("bm-options").addEventListener("click", e => {
     return;
   }
   const optBtn = e.target.closest(".bm-opt"); if (!optBtn || optBtn.classList.contains("bm-opt-swatch")) return;
-  const f = bm.active; const id = optBtn.dataset.id; const cfg = modelCfg(); let sel = cfg[f];
+  const f = bmActiveFeature(); const id = optBtn.dataset.id; const cfg = activeCfg(); let sel = cfg[f];
+  if (bmIsOutfitMode()) {
+    if (!sel) sel = cfg[f] = { mode: "random", pool: [] };
+    sel.pool = sel.pool || [];
+    const i = sel.pool.findIndex(optionId => String(optionId) === String(id));
+    if (i >= 0) sel.pool.splice(i, 1); else sel.pool.push(id);
+    bm.outfitColorTarget[f] = id;
+    if (sel.colors_by_option && !sel.pool.includes(id)) delete sel.colors_by_option[id];
+    bm.previewPick[f] = id;
+    bmPruneFeatureColors(f, sel);
+    renderCatBar(); renderSide(); renderAvatar();
+    return;
+  }
   if (!sel) {
-    // Preset gallery: clicking any option pins it as Fixed — a fast path from
-    // "just browsing" to "use this exact one", without hunting for the mode tab.
-    cfg[f] = { mode: "fixed", id };
+    // Preset gallery: clicking any option sets a one-item Random pool — the
+    // fast path from "just browsing" to "use this exact one".
+    cfg[f] = { mode: "random", pool: [String(id)] };
     bmPruneFeatureColors(f, cfg[f]);
     renderCatBar(); renderSide(); renderAvatar();
     return;
   }
-  if (sel.mode === "fixed") {
-    sel.id = id;
-    bmPruneFeatureColors(f, sel);
-    renderSide();
-  } else if (sel.mode === "random") {
+  if (sel.mode === "random") {
     sel.pool = sel.pool || [];
     const i = sel.pool.findIndex(optionId => String(optionId) === String(id));
     if (i >= 0) sel.pool.splice(i, 1); else sel.pool.push(id);
@@ -1805,7 +2079,7 @@ el("bm-options").addEventListener("click", e => {
 el("bm-opt-tools").addEventListener("input", e => {
   if (e.target.id !== "bm-opt-search") return;
   bm.optFilter = e.target.value;
-  const f = bm.active; const feat = bm.catalog[f]; const sel = modelCfg()[f] || { mode: "preset" };
+  const f = bmActiveFeature(); const feat = bm.catalog[f]; const sel = activeCfg()[f] || { mode: "preset" };
   const host = el("bm-options");
   const info = host.querySelector(".bm-selection-info");
   host.innerHTML = renderOptions(f, feat, sel, sel.mode || "preset");
@@ -1813,7 +2087,7 @@ el("bm-opt-tools").addEventListener("input", e => {
 });
 el("bm-opt-tools").addEventListener("click", e => {
   const btn = e.target.closest("[data-bulk]"); if (!btn) return;
-  const f = bm.active; const feat = bm.catalog[f]; const sel = modelCfg()[f];
+  const f = bmActiveFeature(); const feat = bm.catalog[f]; const sel = activeCfg()[f];
   if (!feat || !sel || sel.mode !== "random") return;
   const filter = String(bm.optFilter || "").trim().toLowerCase();
   const shownIds = feat.options.filter(o => !filter || String(o.id).toLowerCase().includes(filter)).map(o => String(o.id));
@@ -1823,73 +2097,73 @@ el("bm-opt-tools").addEventListener("click", e => {
   else if (kind === "clear") shownIds.forEach(id => cur.delete(id));
   else if (kind === "invert") shownIds.forEach(id => cur.has(id) ? cur.delete(id) : cur.add(id));
   sel.pool = Array.from(cur);
+  if (bmIsOutfitMode() && sel.colors_by_option) {
+    Object.keys(sel.colors_by_option).forEach(optionId => {
+      if (!cur.has(String(optionId))) delete sel.colors_by_option[optionId];
+    });
+  }
   bmPruneFeatureColors(f, sel);
   renderCatBar(); renderSide(); renderAvatar();
 });
 
-el("bm-shuffle").addEventListener("click", () => {
-  shuffleAllPicks();
-  renderAvatar();
-});
-
 el("bm-clear-feature").addEventListener("click", () => {
-  const f = bm.active;
-  delete modelCfg()[f];
+  const f = bmActiveFeature();
+  delete activeCfg()[f];
+  if (bmIsOutfitMode()) activeCfg()[f] = { mode: "random", pool: [] };
   delete bm.previewPick[f]; delete bm.previewPick[f + ":color"];
   renderCatBar(); renderSide(); renderAvatar();
 });
 
-el("bm-recommend").addEventListener("click", () => {
-  if (!bm.loaded) return;
-  const cfg = modelCfg();
-  const sample = (arr, n) => {
-    const a = arr.slice();
-    for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; }
-    return a.slice(0, Math.min(n, a.length));
-  };
-  const setRandom = (feature, n, withColors) => {
-    const feat = bm.catalog[feature];
-    if (!feat || !feat.options || !feat.options.length) return;
-    const entry = { mode: "random", pool: sample(feat.options.map(o => String(o.id)), n) };
-    if (withColors && bmIsOutfit(feature)) {
-      const colors = nyxmoji.verifiedColorUnion(feat, entry.pool);
-      if (colors.length) entry.colors = sample(colors, 16);
-    }
-    cfg[feature] = entry;
-  };
-  // A coherent "vary the look" starting point: random outfit pieces + colours plus
-  // a little hair variety. Operators tweak from here, then Save.
-  setRandom("tops", 12, true);
-  setRandom("bottoms", 8, true);
-  setRandom("footwear", 6, true);
-  setRandom("hair_style", 10, false);
-  renderBitmojiAll();
-  el("bm-status").textContent = "Recommended a starting look — review, then Save.";
-  toast("Filled random pools with a recommended look. Review & Save.", true);
-});
 
 el("bm-save").addEventListener("click", async () => {
   el("bm-status").textContent = "Saving…";
   try {
-    const r = await fetch(NYX_BASE + "/bitmoji/models", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", ...tokenHeaders() },
-      body: JSON.stringify({ models: bm.models, token: TOKEN }),
-    });
-    const d = await r.json().catch(() => ({}));
-    if (d.ok) { bm.models = d.models || bm.models; el("bm-status").textContent = "Saved."; toast("Nyxmoji config saved.", true); renderBitmojiAll(); }
-    else { el("bm-status").textContent = d.error || "Save failed."; toast(d.error || "Save failed.", false); }
+    ensureOutfitPreset();
+    normalizeFixedModes();
+    const [modelsRes, outfitsRes] = await Promise.all([
+      fetch(NYX_BASE + "/bitmoji/models", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...tokenHeaders() },
+        body: JSON.stringify({ models: stripModelOutfitConfig(bm.models), token: TOKEN }),
+      }),
+      fetch(NYX_BASE + "/bitmoji/outfits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...tokenHeaders() },
+        body: JSON.stringify({ outfits: bm.outfitConfig, token: TOKEN }),
+      }),
+    ]);
+    const d = await modelsRes.json().catch(() => ({}));
+    const outfitD = await outfitsRes.json().catch(() => ({}));
+    if (d.ok && outfitD.ok) {
+      bm.models = d.models || bm.models;
+      bm.outfitConfig = outfitD.outfits || bm.outfitConfig;
+      ensureOutfitPreset();
+      el("bm-status").textContent = "Saved.";
+      toast("Nyxmoji config saved.", true);
+      renderBitmojiAll();
+    }
+    else {
+      const error = d.error || outfitD.error || "Save failed.";
+      el("bm-status").textContent = error;
+      toast(error, false);
+    }
   } catch (e) { el("bm-status").textContent = "Save failed: " + e; toast("Save failed.", false); }
 });
 
 el("bm-export").addEventListener("click", () => {
-  const blob = new Blob([JSON.stringify(bm.models, null, 2)], { type: "application/json" });
+  ensureOutfitPreset();
+  const payload = {
+    version: 2,
+    models: bm.models,
+    outfits: bm.outfitConfig,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "bitmoji_models.json";
+  a.download = "nyxmoji_config.json";
   a.click();
   URL.revokeObjectURL(a.href);
-  toast("Exported bitmoji_models.json", true);
+  toast("Exported nyxmoji_config.json", true);
 });
 
 el("bm-import").addEventListener("click", () => el("bm-import-file").click());
@@ -1900,7 +2174,15 @@ el("bm-import-file").addEventListener("change", e => {
     try {
       const parsed = JSON.parse(reader.result);
       if (!parsed || typeof parsed !== "object") throw new Error("not an object");
-      bm.models = parsed; bm.previewPick = {};
+      if (parsed.models || parsed.outfits) {
+        if (parsed.models && typeof parsed.models === "object") { bm.models = parsed.models; normalizeFixedModes(); }
+        if (parsed.outfits && typeof parsed.outfits === "object") bm.outfitConfig = parsed.outfits;
+      } else {
+        bm.models = parsed;
+        normalizeFixedModes();
+      }
+      ensureOutfitPreset();
+      bm.previewPick = {};
       renderBitmojiModels(); renderBitmojiAll();
       el("bm-status").textContent = "Imported — review and click Save to apply.";
       toast("Config imported. Click Save to apply.", true);

@@ -113,6 +113,14 @@ class NyxLocalApiServer:
                     })
                     return
 
+                if self.path == "/bitmoji/outfits":
+                    from core.bitmoji_outfit_config import load_outfit_config
+                    self._write_json(200, {
+                        "ok": True,
+                        "outfits": load_outfit_config(),
+                    })
+                    return
+
                 self._write_json(404, {"ok": False, "error": "Not found"})
 
             def do_POST(self):
@@ -389,6 +397,7 @@ class NyxLocalApiServer:
                         "max_parallel_profiles": payload.get("max_parallel_profiles"),
                         "ignore_done_profiles": payload.get("ignore_done_profiles"),
                         "outfit_style": payload.get("outfit_style"),
+                        "outfit_custom_preset_id": payload.get("outfit_custom_preset_id"),
                         "automation_speed": payload.get("automation_speed"),
                         "hair_randomizer_enabled": payload.get("hair_randomizer_enabled"),
                         "launch_on_windows_startup": payload.get("launch_on_windows_startup"),
@@ -424,6 +433,20 @@ class NyxLocalApiServer:
                         self._write_json(400, {"ok": False, "error": str(exc) or "Invalid models payload."})
                         return
                     self._write_json(200, {"ok": True, "models": saved, "message": "Bitmoji models saved."})
+                    return
+
+                if self.path == "/bitmoji/outfits":
+                    from core.bitmoji_outfit_config import load_outfit_config, save_outfit_config
+                    outfits = payload.get("outfits") if isinstance(payload, dict) else None
+                    if not isinstance(outfits, dict):
+                        self._write_json(400, {"ok": False, "error": "outfits must be a mapping."})
+                        return
+                    try:
+                        save_outfit_config(outfits)
+                    except ValueError as exc:
+                        self._write_json(400, {"ok": False, "error": str(exc) or "Invalid outfits payload."})
+                        return
+                    self._write_json(200, {"ok": True, "outfits": load_outfit_config(), "message": "Bitmoji outfits saved."})
                     return
 
                 if self.path.startswith("/bot/"):

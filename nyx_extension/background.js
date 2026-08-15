@@ -104,6 +104,9 @@ function buildAdsPowerProfileName(username) {
 function createExportConfig(extensionConfig, runnerConfig) {
   const safeExtensionConfig = normalizeConfig(extensionConfig || {});
   const safeRunnerConfig = runnerConfig || {};
+  const outfitStyle = String(safeRunnerConfig.outfit_style || "").trim().toLowerCase() === "mixed"
+    ? "mix"
+    : String(safeRunnerConfig.outfit_style || "default").trim().toLowerCase();
   return {
     version: 1,
     exportedAt: new Date().toISOString(),
@@ -120,7 +123,7 @@ function createExportConfig(extensionConfig, runnerConfig) {
       pendingThreshold: Number(safeRunnerConfig.pending_threshold || 10),
       maxParallelProfiles: Number(safeRunnerConfig.max_parallel_profiles || 5),
       ignoreDoneProfiles: safeRunnerConfig.ignore_done_profiles !== false,
-      outfitStyle: safeRunnerConfig.outfit_style || "mixed",
+      outfitStyle: ["default", "mix", "casual", "sexy", "custom"].includes(outfitStyle) ? outfitStyle : "default",
       automationSpeed: Number(safeRunnerConfig.automation_speed || 1),
       hairRandomizerEnabled: safeRunnerConfig.hair_randomizer_enabled === true,
 

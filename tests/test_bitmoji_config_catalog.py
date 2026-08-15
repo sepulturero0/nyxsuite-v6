@@ -15,6 +15,7 @@ from core.bitmoji_config import (
     load_catalog_raw,
     render_param_map,
     resolve_option_color,
+    sanitize_models,
 )
 
 
@@ -70,6 +71,24 @@ class RenderParamTests(unittest.TestCase):
 
 
 class ResolveOptionColorTests(unittest.TestCase):
+    def test_sanitize_models_drops_legacy_per_model_outfit_features(self):
+        models = {
+            "M": {
+                "hair_style": {"mode": "fixed", "id": "12"},
+                "tops": {"mode": "random", "pool": ["801"], "colors": ["#111111"]},
+                "outfits": {"mode": "fixed", "id": "999"},
+                "outerwear": {"mode": "fixed", "id": "10000466"},
+                "sock": {"mode": "fixed", "id": "5"},
+                "footwear": {"mode": "random", "pool": ["292"]},
+            },
+        }
+
+        sanitized = sanitize_models(models, {"features": {}})
+
+        self.assertEqual(
+            sanitized, {"M": {"hair_style": {"mode": "fixed", "id": "12"}}}
+        )
+
     def test_fixed_returns_configured_color(self):
         models = {"M": {"tops": {"mode": "fixed", "id": "5", "color": "#ec2020"}}}
         self.assertEqual(resolve_option_color("M", "tops", models), "#ec2020")

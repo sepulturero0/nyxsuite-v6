@@ -77,15 +77,21 @@
       </div>
       <div class="inline-settings">
         <div class="settings-grid">
-          <div class="setting-field">
+<div class="setting-field">
             <label class="label" for="popupOutfitStyle">Outfit style</label>
-            <select id="popupOutfitStyle" class="input">
-              <option value="default">Default</option>
-              <option value="mixed">Mixed</option>
-              <option value="casual">Casual</option>
-              <option value="sexy">Sexy</option>
-              <option value="no_dresses">No Dresses</option>
-            </select>
+              <select id="popupOutfitStyle" class="input">
+                <option value="default">Default</option>
+                <option value="mix">Mix</option>
+                <option value="casual">Casual</option>
+                <option value="sexy">Sexy</option>
+                <option value="custom">Custom</option>
+              </select>
+          </div>
+          <div class="setting-field" id="popupCustomPresetField" style="display:none">
+            <label class="label" for="popupCustomPreset">Custom outfit preset</label>
+              <select id="popupCustomPreset" class="input">
+                <option value="">Edit in dashboard</option>
+              </select>
           </div>
           <div class="setting-field">
             <label class="label" for="popupRowLimit">Top rows to detect</label>
