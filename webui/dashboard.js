@@ -334,6 +334,9 @@ const panelRenderSig = {};
 const statusRenderSig = {};
 // Guards against duplicate Start/Stop clicks while a request is in flight.
 const runnerInFlight = {};
+let updateCheckInFlight = false;
+let updateApplyInFlight = false;
+let updateApplyPollTimer = null;
 
 function suiteRows() {
   const rows = [];
@@ -755,7 +758,7 @@ function runnerToggle(products, action) {
     runnerInFlight[p] = true;
     setRunnerTransition(p, action);      // show the request immediately
     renderPanelForRunner(p);
-    callAction(p, action, {}).then(ack => {
+    callAction(p, "/bot/" + action, {}).then(ack => {
       // A failed/unreachable request must not leave the control stuck disabled.
       if (!ack || ack.ok === false) {
         runnerInFlight[p] = false;
@@ -981,6 +984,25 @@ async function saveAdsPowerControlMode(mode) {
 
 // Reflect state.update into the Updates card: Apply only shows when an update
 // is available; Roll Back only shows when a restore point exists.
+function renderUpdateActionButtons() {
+  const checkBtn = el("update-check-btn");
+  const applyBtn = el("update-apply-btn");
+  const checkBusy = updateCheckInFlight || updateApplyInFlight;
+
+  if (checkBtn) {
+    checkBtn.disabled = checkBusy;
+    checkBtn.classList.toggle("is-loading", checkBusy);
+    checkBtn.setAttribute("aria-busy", checkBusy ? "true" : "false");
+    checkBtn.textContent = updateCheckInFlight ? "Checking…" : updateApplyInFlight ? "Waiting…" : "Check for Update";
+  }
+  if (applyBtn) {
+    applyBtn.disabled = updateApplyInFlight || updateCheckInFlight;
+    applyBtn.classList.toggle("is-loading", updateApplyInFlight);
+    applyBtn.setAttribute("aria-busy", updateApplyInFlight ? "true" : "false");
+    applyBtn.textContent = updateApplyInFlight ? "Applying…" : "Apply Update";
+  }
+}
+
 function renderUpdatesCard() {
   const u = state.update;
   el("update-current").textContent = u.current || state.nyx.config.version || state.version || "—";
@@ -1005,6 +1027,7 @@ function renderUpdatesCard() {
     notesEl.style.display = "none";
   }
   renderRollbackOptions();
+  renderUpdateActionButtons();
 }
 
 // Populate the Roll Back picker with every version we can restore: any published
@@ -1049,28 +1072,39 @@ function renderRollbackOptions() {
 
 // ---------- Update check + indicator ----------
 async function runUpdateCheck(showFeedback) {
-  const r = await callBridge("check_update");
-  const u = state.update;
-  u.checked = true;
-  if (!r.ok) {
-    u.available = false;
-    if (r.current) u.current = r.current;
-    if (showFeedback) el("update-feedback").textContent = r.message || "Check failed.";
-  } else {
-    u.current = r.current || u.current;
-    u.available = !!r.update_available;
-    u.latest = r.latest || "";
-    u.latest_name = r.latest_name || "";
-    u.notes = r.release_notes || "";
-    if (showFeedback) {
-      el("update-feedback").textContent = r.update_available
-        ? (r.message || `Update ${r.latest} available.`)
-        : (r.message || `Up to date (${r.current || "—"}).`);
-    }
+  if (updateCheckInFlight || updateApplyInFlight) {
+    return { ok: false, skipped: true };
   }
-  refreshUpdateIndicator();
-  if (active === "settings") renderUpdatesCard();
-  return r;
+
+  updateCheckInFlight = true;
+  renderUpdateActionButtons();
+  try {
+    const r = await callBridge("check_update");
+    const u = state.update;
+    u.checked = true;
+    if (!r.ok) {
+      u.available = false;
+      if (r.current) u.current = r.current;
+      if (showFeedback) el("update-feedback").textContent = r.message || "Check failed.";
+    } else {
+      u.current = r.current || u.current;
+      u.available = !!r.update_available;
+      u.latest = r.latest || "";
+      u.latest_name = r.latest_name || "";
+      u.notes = r.release_notes || "";
+      if (showFeedback) {
+        el("update-feedback").textContent = r.update_available
+          ? (r.message || `Update ${r.latest} available.`)
+          : (r.message || `Up to date (${r.current || "—"}).`);
+      }
+    }
+    refreshUpdateIndicator();
+    if (active === "settings") renderUpdatesCard();
+    return r;
+  } finally {
+    updateCheckInFlight = false;
+    renderUpdateActionButtons();
+  }
 }
 
 function refreshUpdateIndicator() {
@@ -1186,6 +1220,7 @@ el("tray-transparent-toggle").addEventListener("change", async () => {
 });
 
 el("update-check-btn").addEventListener("click", async () => {
+  if (updateCheckInFlight || updateApplyInFlight) return;
   el("update-feedback").textContent = "Checking…";
   await runUpdateCheck(true);
 });
@@ -1193,50 +1228,70 @@ el("update-check-btn").addEventListener("click", async () => {
 el("update-indicator").addEventListener("click", () => setActive("settings"));
 
 el("update-apply-btn").addEventListener("click", async () => {
+  if (updateApplyInFlight || updateCheckInFlight) return;
   const target = state.update.latest_name || state.update.latest || "the latest version";
   const preUpdateVersion = state.version;
   if (!confirm("Apply update to " + target + "?\n\nThe app will download, install, and restart. The browser extension is updated too — you'll need to reload it at chrome://extensions afterward.")) return;
+  updateApplyInFlight = true;
+  renderUpdateActionButtons();
   const fb = el("update-feedback");
-  fb.innerHTML = "Updating… the dashboard will refresh automatically.";
-  const r = await callBridge("apply_update");
-  if (!r.ok) { fb.textContent = r.message || "Update failed."; return; }
-  // Poll for bridge restart
-  let elapsed = 0;
-  const pollInterval = 1500;
-  const maxWait = 60000;
-  const pollTimer = setInterval(async () => {
-    elapsed += pollInterval;
-    try {
-      const statusR = await fetch("/bridge/status");
-      const status = await statusR.json();
-      const newVersion = (status.bridge || {}).version || "";
-      if (newVersion && newVersion !== preUpdateVersion) {
-        clearInterval(pollTimer);
-        fb.innerHTML = "Update applied! Refreshing…";
-        // Show extension reload banner
-        showExtensionReloadBanner(newVersion);
-        setTimeout(() => location.reload(), 800);
-        return;
-      }
-      if (newVersion && newVersion === preUpdateVersion) {
-        // Bridge back but same version — also refresh
-        clearInterval(pollTimer);
-        fb.innerHTML = "Bridge restarted. Refreshing…";
-        showExtensionReloadBanner(newVersion);
-        setTimeout(() => location.reload(), 800);
-        return;
-      }
-    } catch (e) {
-      // Bridge still down — keep waiting
+  fb.textContent = "Updating… the dashboard will refresh automatically.";
+  try {
+    const r = await callBridge("apply_update");
+    if (!r || !r.ok) {
+      fb.textContent = (r && r.message) || "Update failed.";
+      updateApplyInFlight = false;
+      renderUpdateActionButtons();
+      return;
     }
-    if (elapsed >= maxWait) {
-      clearInterval(pollTimer);
-      fb.innerHTML = "The bridge is taking longer than expected to restart."
-        + ' <button id="manual-reload-btn" class="btn" type="button">Reload now</button>';
-      el("manual-reload-btn").addEventListener("click", () => location.reload());
-      showExtensionReloadBanner(preUpdateVersion);
-    }
-  }, pollInterval);
+
+    // Keep Apply disabled until the bridge has restarted or the poll gives up.
+    let elapsed = 0;
+    const pollInterval = 1500;
+    const maxWait = 60000;
+    updateApplyPollTimer = setInterval(async () => {
+      elapsed += pollInterval;
+      try {
+        const statusR = await fetch("/bridge/status");
+        const status = await statusR.json();
+        const newVersion = (status.bridge || {}).version || "";
+        if (newVersion && newVersion !== preUpdateVersion) {
+          clearInterval(updateApplyPollTimer);
+          updateApplyPollTimer = null;
+          fb.textContent = "Update applied! Refreshing…";
+          // Show extension reload banner
+          showExtensionReloadBanner(newVersion);
+          setTimeout(() => location.reload(), 800);
+          return;
+        }
+        if (newVersion && newVersion === preUpdateVersion) {
+          // Bridge back but same version — also refresh
+          clearInterval(updateApplyPollTimer);
+          updateApplyPollTimer = null;
+          fb.textContent = "Bridge restarted. Refreshing…";
+          showExtensionReloadBanner(newVersion);
+          setTimeout(() => location.reload(), 800);
+          return;
+        }
+      } catch (e) {
+        // Bridge still down — keep waiting
+      }
+      if (elapsed >= maxWait) {
+        clearInterval(updateApplyPollTimer);
+        updateApplyPollTimer = null;
+        updateApplyInFlight = false;
+        renderUpdateActionButtons();
+        fb.innerHTML = "The bridge is taking longer than expected to restart."
+          + ' <button id="manual-reload-btn" class="btn" type="button">Reload now</button>';
+        el("manual-reload-btn").addEventListener("click", () => location.reload());
+        showExtensionReloadBanner(preUpdateVersion);
+      }
+    }, pollInterval);
+  } catch (e) {
+    updateApplyInFlight = false;
+    renderUpdateActionButtons();
+    fb.textContent = "Update failed: " + (e && e.message || e);
+  }
 });
 
 function showExtensionReloadBanner(version) {

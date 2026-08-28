@@ -9,6 +9,15 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.1
+
+- Fixed malformed Nyx and Nyxify Start/Stop dashboard requests.
+- Added single-flight Check for Update and Apply Update controls with animated
+  loading/waiting states and timeout recovery.
+- Fixed Nyx extension popup scrolling flicker by removing the live-status cache
+  feedback loop and storing only the rendered status fields.
+- Username and signup-name data lists are unchanged.
+
 ### NyxSuite v6.5.8
 
 - Redesigned the web dashboard with a topbar and tabbed navigation (Nyx /

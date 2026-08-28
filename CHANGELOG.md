@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.6.1 - Runner and update control fixes
+
+### Dashboard controls
+- Fixed Nyx and Nyxify Start/Stop actions using malformed local API URLs.
+- Check for Update and Apply Update now prevent repeated clicks with visible
+  loading/waiting states and recover cleanly after failures or restart timeouts.
+
+### Nyx extension popup
+- Fixed scrolling flicker caused by a live-status persistence feedback loop.
+- The first-paint runner cache now stores only the small rendered status payload.
+
 ## 6.6.0 - Performance, SMS verification, Nyxmoji accuracy, and update safety
 
 ### Runner controls & timing (Phases 1-2)

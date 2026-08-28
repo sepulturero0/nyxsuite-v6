@@ -22,6 +22,13 @@ class PopupFirstPaintSourceTests(unittest.TestCase):
         self.assertIn("renderStoredRunnerStatus();", popup)  # called from init
         self.assertIn("persistLastRunnerStatus(runnerStatus);", popup)
 
+    def test_popup_status_cache_does_not_write_on_every_live_update(self):
+        popup = (ROOT / "nyx_extension" / "popup.js").read_text(encoding="utf-8")
+
+        self.assertIn("let lastPersistedRunnerStatusSignature = \"\";", popup)
+        self.assertIn("function compactRunnerStatus", popup)
+        self.assertIn("if (signature === lastPersistedRunnerStatusSignature) return;", popup)
+
 
 if __name__ == "__main__":
     unittest.main()

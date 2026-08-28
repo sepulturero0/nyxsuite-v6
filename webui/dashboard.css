@@ -199,6 +199,9 @@ button.btn.ghost,button.btn.btn-ghost{background:var(--panel);border-color:var(-
 button.btn.warn{color:var(--warn-strong)}
 button.btn.bad{color:var(--bad)}
 button.btn:disabled{opacity:.45;cursor:not-allowed;filter:grayscale(.4)}
+button.btn.is-loading{display:inline-flex;align-items:center;justify-content:center;gap:7px;cursor:wait}
+button.btn.is-loading::after{content:"";width:12px;height:12px;border:2px solid currentColor;border-right-color:transparent;border-radius:50%;animation:dashboardButtonSpin .75s linear infinite}
+@keyframes dashboardButtonSpin{to{transform:rotate(360deg)}}
 
 /* ---------------- Search / inputs ---------------- */
 .searchbar{margin:0 0 6px}

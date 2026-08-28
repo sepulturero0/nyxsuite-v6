@@ -15,6 +15,7 @@ let lastDailyRowsDataSignature = "";
 let popupSettingsSaveTimer = null;
 let popupSettingsDirty = false;
 let bitmojiIndicatorsVisible = false;
+let lastPersistedRunnerStatusSignature = "";
 const DAILY_ROWS_AUTO_REFRESH_MS = 15000;
 // Last-known runner status, persisted by the popup on each successful refresh so
 // the next open can paint an immediate "connected/running" card before the live
@@ -903,13 +904,44 @@ const runnerStatus = safeStatus.runnerStatus || {};
   }
 }
 
-// Persist the last-known runner status so a future popup open can paint it
-// immediately instead of waiting for the first live refresh. Fire-and-forget.
+function compactRunnerStatus(runnerStatus) {
+  if (!runnerStatus || (!runnerStatus.bot && !runnerStatus.unavailable)) {
+    return null;
+  }
+
+  const bot = runnerStatus.bot || {};
+  const counts = runnerStatus.counts || {};
+  const config = runnerStatus.config || {};
+  return {
+    unavailable: runnerStatus.unavailable === true,
+    error: String(runnerStatus.error || ""),
+    bot: { state: String(bot.state || ""), detail: String(bot.detail || "") },
+    counts: {
+      pending: Number(counts.pending || 0),
+      running: Number(counts.running || 0),
+      failed: Number(counts.failed || 0),
+      done: Number(counts.done || 0),
+    },
+    config: {
+      pending_threshold: config.pending_threshold || "",
+      max_parallel_profiles: config.max_parallel_profiles || "",
+      automation_speed: config.automation_speed || "",
+    },
+  };
+}
+
+// Persist only when the rendered runner state changes. Writing on every live
+// update feeds chrome.storage.onChanged in the background and causes a status
+// update loop that visibly flickers while the popup is scrolled.
 function persistLastRunnerStatus(runnerStatus) {
-  if (!runnerStatus || (!runnerStatus.bot && !runnerStatus.unavailable)) return;
+  const compactStatus = compactRunnerStatus(runnerStatus);
+  if (!compactStatus) return;
+  const signature = JSON.stringify(compactStatus);
+  if (signature === lastPersistedRunnerStatusSignature) return;
+  lastPersistedRunnerStatusSignature = signature;
   try {
     chrome.storage.local.set({
-      [LAST_RUNNER_STATUS_KEY]: { runnerStatus, at: Date.now() },
+      [LAST_RUNNER_STATUS_KEY]: { runnerStatus: compactStatus, at: Date.now() },
     });
   } catch (error) {
     /* storage is best-effort */
@@ -922,6 +954,10 @@ function renderStoredRunnerStatus() {
   chrome.storage.local.get(LAST_RUNNER_STATUS_KEY, (data) => {
     const entry = data && data[LAST_RUNNER_STATUS_KEY];
     if (entry && entry.runnerStatus) {
+      const compactStatus = compactRunnerStatus(entry.runnerStatus);
+      if (compactStatus) {
+        lastPersistedRunnerStatusSignature = JSON.stringify(compactStatus);
+      }
       renderRunnerStatus(entry.runnerStatus);
     }
   });

@@ -1161,8 +1161,18 @@ chrome.runtime.onConnect.addListener((port) => {
   pushPopupStatus(true);
 });
 
-chrome.storage.onChanged.addListener((_changes, areaName) => {
+chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local" && areaName !== "sync") {
+    return;
+  }
+  // This is only the popup's first-paint cache, not application state. Do not
+  // turn its write back into another forced status request.
+  if (
+    areaName === "local"
+    && changes
+    && changes.nyxLastRunnerStatus
+    && Object.keys(changes).length === 1
+  ) {
     return;
   }
   invalidatePopupStatusCache();
