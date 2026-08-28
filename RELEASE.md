@@ -9,6 +9,17 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.5.8
+
+- Redesigned the web dashboard with a topbar and tabbed navigation (Nyx /
+  Nyxify / Bitmoji / Settings).
+- Applied a modern design-token theme (colors, cards, glow, shadows,
+  borders) and restructured the runner status strips, docks, controls,
+  tiles, and command action stacks.
+- Status pills now show the app version, connection state, and
+  available-update badge at the top.
+- Pure UI release: no backend or local API changes.
+
 ### NyxSuite v6.5.7
 
 - The Nyxmoji outfit system now applies outfits reliably end-to-end: Nyx

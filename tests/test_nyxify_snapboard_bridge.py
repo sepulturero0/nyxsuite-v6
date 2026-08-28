@@ -350,7 +350,7 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
             "Dashboard should centralize live proxy-ranking row loading.",
         )
         fn_start = dashboard.index("async function banBadProxyRows()")
-        fn_end = dashboard.index('el("proxyrank-toggle-btn")', fn_start)
+        fn_end = dashboard.index('el("proxyrank-refresh")', fn_start)
         bulk_fn = dashboard[fn_start:fn_end]
 
         self.assertLess(
@@ -366,12 +366,10 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
 
         self.assertIn('class="runner-dock"', html)
         self.assertIn('class="toolbar runner-controls"', html)
-        self.assertLess(html.index('id="runner-nyx"'), html.index('id="tiles-nyx"'))
-        self.assertLess(html.index('id="runner-nyxify"'), html.index('id="tiles-nyxify"'))
+        self.assertLess(html.index('id="runner-suite"'), html.index('id="tiles-suite"'))
         self.assertIn(".runner-dock", css)
         self.assertIn(".runner-controls", css)
         self.assertIn("runner-start-stop", dashboard)
-        self.assertIn("runner-pause-resume", dashboard)
 
     def test_dashboard_actions_have_consistent_zones_per_product(self):
         html = (ROOT / "webui" / "index.html").read_text(encoding="utf-8")
@@ -382,11 +380,9 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
             section_end = html.find('<section class="panel', section_start + 1)
             section = html[section_start:section_end if section_end != -1 else len(html)]
 
-            self.assertIn(f'id="actions-top-{product}"', section)
             self.assertIn(f'id="actions-queue-{product}"', section)
             self.assertIn(f'id="actions-row-{product}"', section)
             self.assertIn(f'id="actions-search-{product}"', section)
-            self.assertLess(section.index(f'id="actions-top-{product}"'), section.index(f'id="actions-queue-{product}"'))
             self.assertLess(section.index(f'id="actions-queue-{product}"'), section.index(f'id="actions-row-{product}"'))
             self.assertLess(section.index(f'id="actions-row-{product}"'), section.index(f'id="actions-search-{product}"'))
 

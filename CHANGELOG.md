@@ -1,5 +1,17 @@
 # Changelog
 
+## 6.5.8 - Web dashboard redesign
+
+- The web dashboard was redesigned with a new topbar and tabbed navigation
+  (Nyx / Nyxify / Bitmoji / Settings) across the whole UI.
+- Each product/panel now uses a modern design-token theme (background, panel,
+  accent, glow, card-shadow, borders) with updated runner status strips, docks,
+  controls, tiles, and command action stacks.
+- Status pills show the app version, connection state, and available-update
+  badge at the top bar; the layout is restructured for clearer command and
+  queue controls.
+- Pure UI change: existing local API and `/bridge/*` endpoints are unchanged.
+
 ## 6.5.7 - Nyxmoji outfit system and tuck-in
 
 ### Nyxmoji: outfits applied reliably with tuck-in

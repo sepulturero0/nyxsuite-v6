@@ -8,294 +8,365 @@
   <link rel="icon" type="image/png" href="settings-icon.png">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">Nyx<span>Suite</span></div>
-    <div class="tabs" id="tabs">
-      <button class="tab active" data-tab="nyx">Nyx</button>
-      <button class="tab" data-tab="nyxify">Nyxify</button>
-      <button class="tab" data-tab="bitmoji">Nyxmoji</button>
-      <button class="tab" data-tab="settings"><img src="settings-icon.png" class="tab-icon" alt=""> Settings</button>
-    </div>
-    <div class="meta">
-      <button id="update-indicator" class="pill pill-update" type="button" style="display:none" title="An update is available — open Settings">update ready</button>
-      <span id="version" class="pill pill-muted">v…</span>
-      <span id="conn" class="pill pill-bad">connecting…</span>
-    </div>
-  </header>
+  <div class="wrapper">
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-brand">Nyx<span>Suite</span></div>
+      <nav class="sidebar-nav tabs" id="tabs">
+        <div class="nav-section">Runner</div>
+        <div class="runner-dock">
+          <div class="toolbar runner-controls" id="runner-suite" aria-label="Suite runner controls"></div>
+        </div>
+        <div class="nav-section">Suite</div>
+        <button class="tab active" data-tab="suite" title="Queue, runners and tools">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
+          Dashboard
+        </button>
+        <button class="tab" data-tab="nyx" title="Nyx — Bitmoji queue">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+          Nyx
+        </button>
+        <button class="tab" data-tab="nyxify" title="Nyxify — Snapchat signup queue">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Nyxify
+        </button>
+        <button class="tab" data-tab="banned" title="Scan and manage banned AdsPower rows">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
+          Banned Rows
+        </button>
+        <button class="tab" data-tab="bitmoji" title="Nyxmoji avatar studio">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14a4.5 4.5 0 0 0 7 0"/><line x1="9" y1="9.5" x2="9.01" y2="9.5"/><line x1="15" y1="9.5" x2="15.01" y2="9.5"/></svg>
+          Nyxmoji Studio
+        </button>
+        <div class="nav-section">Tools</div>
+        <div class="action-tools" id="actions-top-suite">
+          <button id="proxyrank-toggle-btn" class="tab" data-tab="proxyrank" type="button" title="Proxy subnet scores and bans">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="6" y1="20" x2="6" y2="14"/><line x1="12" y1="20" x2="12" y2="8"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="3" y1="20" x2="21" y2="20"/></svg>
+            Proxy Ranking
+          </button>
+          <button id="fullauto-toggle-btn" class="tab" data-tab="fullauto" type="button" title="Per-model usernames and signup names">
+            <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Full Auto Editor
+          </button>
+          <button id="nyx-advanced-toggle" class="tab" data-tab="nyxconfig" type="button" title="Nyx runner settings">
+            <img src="settings-icon.png" class="btn-icon" alt=""> Nyx Config
+          </button>
+          <button id="nyxify-advanced-toggle" class="tab" data-tab="nyxifyconfig" type="button" title="Nyxify runner settings">
+            <img src="settings-icon.png" class="btn-icon" alt=""> Nyxify Config
+          </button>
+        </div>
+        <div class="nav-section">System</div>
+        <button id="theme-toggle" class="tab" type="button" title="Switch between light and dark theme">
+          <svg class="tab-icon theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+          <svg class="tab-icon theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><line x1="12" y1="2" x2="12" y2="5"/><line x1="12" y1="19" x2="12" y2="22"/><line x1="4.2" y1="4.2" x2="6.3" y2="6.3"/><line x1="17.7" y1="17.7" x2="19.8" y2="19.8"/><line x1="2" y1="12" x2="5" y2="12"/><line x1="19" y1="12" x2="22" y2="12"/><line x1="4.2" y1="19.8" x2="6.3" y2="17.7"/><line x1="17.7" y1="6.3" x2="19.8" y2="4.2"/></svg>
+          <span id="theme-label">Dark Mode</span>
+        </button>
+        <button class="tab" data-tab="settings" title="Updates, startup, AdsPower and setup">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+          Settings
+        </button>
+      </nav>
+      <div class="sidebar-footer">
+        <button id="update-indicator" class="pill pill-update" type="button" style="display:none" title="An update is available — open Settings">update ready</button>
+        <span id="conn" class="pill pill-bad">connecting…</span>
+        <span id="version" class="pill pill-muted">v…</span>
+      </div>
+    </aside>
+    <div class="sidebar-backdrop" id="sidebar-backdrop"></div>
+    <button id="sidebar-toggle" class="sidebar-toggle" type="button" aria-label="Toggle navigation">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+    </button>
 
-  <main>
-    <section class="panel" id="panel-nyx" data-product="nyx">
-      <div class="command-grid">
-        <div class="command-status">
-          <div class="runner-status-strip">
-            <div class="runner-dock">
-              <div class="toolbar runner-controls" id="runner-nyx" aria-label="Nyx runner controls"></div>
-            </div>
-            <div class="statusrow">
-              <span class="state" id="state-nyx">…</span>
-              <span class="detail" id="detail-nyx"></span>
-            </div>
-          </div>
-          <div class="tiles" id="tiles-nyx"></div>
-        </div>
-        <div class="command-actions action-stack">
-          <div class="action-row action-top" id="actions-top-nyx">
-            <div class="action-tools">
-              <button id="nyx-advanced-toggle" class="btn btn-ghost adv-toggle" type="button">
-                <img src="settings-icon.png" class="btn-icon" alt=""> Advanced Config
-              </button>
-            </div>
-          </div>
-          <div class="action-row action-queue" id="actions-queue-nyx">
-            <div class="toolbar sub" id="queue-nyx"></div>
-          </div>
-          <div class="action-row action-row-controls" id="actions-row-nyx">
-            <div class="toolbar sub" id="row-nyx"></div>
-            <div class="toolbar group" id="group-nyx"></div>
-          </div>
-          <div class="action-row action-search" id="actions-search-nyx">
-            <div class="searchbar"><input class="input search-input" id="search-nyx" type="text" placeholder="Search AdsPower ID or username…"></div>
-          </div>
-        </div>
-      </div>
-      <div id="nyx-advanced" class="advanced-panel" hidden>
-        <div id="nyx-advanced-body"></div>
-        <span id="config-feedback" class="feedback"></span>
-      </div>
-      <div class="tablewrap">
-        <table class="queue"><thead id="thead-nyx"></thead><tbody id="tbody-nyx"></tbody></table>
-      </div>
-    </section>
-
-    <section class="panel hidden" id="panel-nyxify" data-product="nyxify">
-      <div class="command-grid">
-        <div class="command-status">
-          <div class="runner-status-strip">
-            <div class="runner-dock">
-              <div class="toolbar runner-controls" id="runner-nyxify" aria-label="Nyxify runner controls"></div>
-            </div>
-            <div class="statusrow">
-              <span class="state" id="state-nyxify">…</span>
-              <span class="detail" id="detail-nyxify"></span>
-              <span class="detail" id="usage-nyxify"></span>
-            </div>
-          </div>
-          <div class="tiles" id="tiles-nyxify"></div>
-        </div>
-        <div class="command-actions action-stack">
-          <div class="action-row action-top" id="actions-top-nyxify">
-            <div class="action-tools">
-              <button id="proxyrank-toggle-btn" class="btn btn-ghost adv-toggle" type="button">Proxy Ranking</button>
-              <button id="fullauto-toggle-btn" class="btn btn-ghost adv-toggle" type="button">Full Auto Editor</button>
-              <button id="nyxify-advanced-toggle" class="btn btn-ghost adv-toggle" type="button">
-                <img src="settings-icon.png" class="btn-icon" alt=""> Advanced Config
-              </button>
-            </div>
-          </div>
-          <div class="action-row action-queue" id="actions-queue-nyxify">
-            <div class="toolbar sub" id="queue-nyxify"></div>
-          </div>
-          <div class="action-row action-row-controls" id="actions-row-nyxify">
-            <div class="toolbar sub" id="row-nyxify"></div>
-            <div class="toolbar group" id="group-nyxify"></div>
-          </div>
-          <div class="action-row action-search" id="actions-search-nyxify">
-            <div class="searchbar"><input class="input search-input" id="search-nyxify" type="text" placeholder="Search AdsPower ID or username…"></div>
-          </div>
-          <div class="action-row action-utility" id="actions-utility-nyxify">
-          <div class="replace-banned-dashboard">
-            <span id="replace-banned-summary-nyxify" class="detail" aria-live="polite"></span>
-            <textarea id="banned-adspower-ids-nyxify" class="input banned-adspower-ids" rows="3" readonly></textarea>
-            <div class="toolbar compact-toolbar">
-              <button id="scan-banned-nyxify" class="btn" type="button">Scan banned</button>
-              <button id="remove-banned-nyxify" class="btn bad" type="button" disabled>Remove banned</button>
-              <button id="warmup-banned-nyxify" class="btn" type="button" disabled>Warm Up banned</button>
-            </div>
-          </div>
-          </div>
-        </div>
-      </div>
-      <div id="nyxify-advanced" class="advanced-panel" hidden>
-        <div id="nyxify-advanced-body"></div>
-        <span id="nyxify-config-feedback" class="feedback"></span>
-      </div>
-      <div id="fullauto-section" class="fullauto-section" style="display:none">
-        <div class="toolbar sub" style="margin-top:8px">
-          <label class="label-inline">Model: <select id="fullauto-model-select" class="input-inline"></select></label>
-        </div>
-        <div class="fullauto-grid" style="margin-top:0">
-          <div class="fullauto-col">
-            <h3>Usernames</h3>
-            <p class="hint">One per line. Lines starting with <code>#</code> or <code>;</code> are ignored.</p>
-            <textarea id="fullauto-usernames" class="input textarea-full" placeholder="username1&#10;username2"></textarea>
-            <button id="fullauto-save-usernames" class="btn primary" type="button">Save Usernames</button>
-          </div>
-          <div class="fullauto-col">
-            <h3>Signup Names</h3>
-            <p class="hint">One per line. Used during account creation.</p>
-            <textarea id="fullauto-signup-names" class="input textarea-full" placeholder="Jane Doe&#10;Alice Smith"></textarea>
-            <button id="fullauto-save-signup" class="btn primary" type="button">Save Signup Names</button>
-          </div>
-        </div>
-      </div>
-      <div id="proxyrank-section" class="fullauto-section" style="display:none">
-        <div class="proxyrank-head">
-          <h3>Proxy Ranking <span class="hint">by subnet · good → bad</span></h3>
-          <div class="proxyrank-head-actions">
-            <button id="proxyrank-ban-red" class="btn bad" type="button" disabled>Ban all red proxies</button>
-            <button id="proxyrank-refresh" class="btn" type="button">Refresh</button>
-          </div>
-        </div>
-        <p class="hint">Ranked from how often each subnet needed a retry, failed a creation, or hit a ban. Updates every time a proxy is used.</p>
-        <div id="proxyrank-summary" class="proxyrank-summary"></div>
-        <div id="proxyrank-chart" class="proxyrank-chart"></div>
-        <div class="tablewrap">
-          <table class="queue proxyrank-table">
-            <thead><tr><th>Subnet</th><th>Uses</th><th>Retries</th><th>Fails</th><th>Bans</th><th>Score</th><th></th></tr></thead>
-            <tbody id="proxyrank-tbody"></tbody>
-          </table>
-        </div>
-      </div>
-      <div class="tablewrap">
-        <table class="queue"><thead id="thead-nyxify"></thead><tbody id="tbody-nyxify"></tbody></table>
-      </div>
-    </section>
-
-    <section class="panel hidden" id="panel-bitmoji">
-      <div class="bm-toolbar">
-<div class="bm-head">
-          <div class="bm-editor-switch" role="tablist" aria-label="Nyxmoji editor mode">
-            <button class="bm-editor-mode active" data-bm-editor="model" type="button">Model</button>
-            <button class="bm-editor-mode" data-bm-editor="outfit" type="button">Outfit</button>
-          </div>
-          <label class="label" for="bm-model">Model</label>
-          <select id="bm-model" class="input input-inline"></select>
-<select id="bm-outfit-preset" class="input input-inline" style="display:none"></select>
-          <button id="bm-outfit-add" class="btn" type="button" style="display:none">Add Outfit</button>
-          <button id="bm-outfit-rename" class="btn" type="button" style="display:none">Rename</button>
-          <button id="bm-outfit-delete" class="btn btn-ghost" type="button" style="display:none">Delete</button>
-          <span id="bm-status" class="detail"></span>
-        </div>
-        <div class="bm-toolbar-actions">
-          <button id="bm-import" class="btn" type="button" title="Load a saved Nyxmoji config file">Import</button>
-          <button id="bm-export" class="btn" type="button" title="Download this Nyxmoji config">Export</button>
-          <button id="bm-save" class="btn primary" type="button">Save</button>
-          <input id="bm-import-file" type="file" accept="application/json" hidden>
-        </div>
-      </div>
-      <div class="bm-catbar" id="bm-catbar"></div>
-      <div class="bm-editor">
-        <div class="bm-stage">
-          <div class="bm-stage-inner">
-            <img id="bm-avatar" class="bm-avatar" alt="Bitmoji preview">
-            <div id="bm-avatar-err" class="bm-avatar-err" style="display:none"></div>
-          </div>
-          <div class="bm-stage-foot">
-            <span id="bm-model-tag" class="bm-model-tag"></span>
-            <label id="bm-outfit-tuck-wrap" class="bm-tuck-toggle" style="display:none" title="Tuck the top into the bottom when the outfit supports it">
-              <span id="bm-outfit-tuck-label" class="bm-tuck-toggle-label"></span>
-              <input id="bm-outfit-tuck" class="bm-tuck-toggle-input" type="checkbox" role="switch">
-              <span class="bm-tuck-toggle-switch" aria-hidden="true"></span>
-            </label>
-          </div>
-        </div>
-        <div class="bm-side">
-          <div class="bm-side-head">
-            <div>
-              <span id="bm-feature-title" class="bm-feature-title">Hair Style</span>
-              <span id="bm-feature-count" class="bm-count"></span>
-            </div>
-            <div class="bm-side-actions">
-              <div class="bm-mode-group" id="bm-mode-group" role="tablist">
-                <button class="bm-mode-btn" data-mode="preset" type="button">Preset</button>
-                <button class="bm-mode-btn" data-mode="random" type="button">Random</button>
+    <div class="main">
+      <main class="content">
+        <section class="panel" id="panel-suite" data-product="suite">
+          <div class="suite-top">
+            <div class="tiles" id="tiles-suite"></div>
+            <div class="suite-actions">
+              <div class="action-row action-queue" id="actions-queue-suite">
+                <div class="toolbar sub" id="queue-suite"></div>
               </div>
-              <button id="bm-clear-feature" class="btn btn-sm btn-ghost" type="button" title="Reset this feature to Preset" style="display:none">Reset</button>
+              <div class="action-row action-row-controls" id="actions-row-suite">
+                <div class="toolbar group" id="group-suite"></div>
+                <div class="toolbar sub" id="row-suite"></div>
+              </div>
             </div>
           </div>
-          <p id="bm-mode-hint" class="hint bm-mode-hint"></p>
-          <div id="bm-opt-tools" class="bm-opt-tools" style="display:none"></div>
-          <div id="bm-options" class="bm-options"></div>
-        </div>
-      </div>
-    </section>
+          <div class="card table-card">
+            <div class="action-row action-search" id="actions-search-suite">
+              <div class="searchbar"><input class="input search-input" id="search-suite" type="text" placeholder="Search AdsPower ID or username…"></div>
+            </div>
+            <div class="tablewrap">
+              <table class="queue"><thead id="thead-suite"></thead><tbody id="tbody-suite"></tbody></table>
+            </div>
+          </div>
 
-    <section class="panel hidden" id="panel-settings">
-      <div class="settings-grid-2col">
-        <div class="settings-card">
-          <h2>Updates</h2>
-          <div class="setting-row">
-            <span class="setting-label">Installed</span>
-            <span id="update-current" class="setting-value">—</span>
-          </div>
-          <div class="setting-row" id="update-latest-row" style="display:none">
-            <span class="setting-label">Latest</span>
-            <span id="update-latest" class="setting-value"></span>
-          </div>
-          <div class="btn-row">
-            <button id="update-check-btn" class="btn" type="button">Check for Update</button>
-            <button id="update-apply-btn" class="btn primary" type="button" style="display:none">Apply Update</button>
-          </div>
-          <div class="setting-row" id="update-rollback-row" style="display:none">
-            <span class="setting-label">Roll back to</span>
-            <span class="setting-value">
-              <select id="update-rollback-select" class="input" title="Pick any previously released version"></select>
-              <button id="update-rollback-btn" class="btn bad" type="button">Roll Back</button>
-            </span>
-          </div>
-          <div id="update-backups" class="setting-row"></div>
-          <div id="update-release-notes" class="release-notes" style="display:none"></div>
-          <span id="update-feedback" class="feedback"></span>
-        </div>
 
-        <div class="settings-card">
-          <h2>Start on Login</h2>
-          <div class="toggle-row">
-            <span class="toggle-text">Launch bridge agent on system startup</span>
-            <label class="toggle-switch" for="autostart-toggle">
-              <input id="autostart-toggle" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
-          </div>
-          <span id="autostart-feedback" class="feedback"></span>
-        </div>
+                  </section>
 
-        <div class="settings-card">
-          <h2>Menu Bar Icon</h2>
-          <div class="toggle-row">
-            <span class="toggle-text">Transparent macOS tray icon</span>
-            <label class="toggle-switch" for="tray-transparent-toggle">
-              <input id="tray-transparent-toggle" type="checkbox">
-              <span class="toggle-slider"></span>
-            </label>
+        <section class="panel hidden" id="panel-nyx" data-product="nyx">
+          <div class="suite-top">
+            <div class="tiles tiles-product" id="tiles-nyx"></div>
+            <div class="suite-actions">
+              <div class="action-row action-queue" id="actions-queue-nyx">
+                <div class="toolbar sub" id="queue-nyx"></div>
+              </div>
+              <div class="action-row action-row-controls" id="actions-row-nyx">
+                <div class="toolbar group" id="group-nyx"></div>
+                <div class="toolbar sub" id="row-nyx"></div>
+              </div>
+            </div>
           </div>
-          <span id="tray-transparent-feedback" class="feedback"></span>
-        </div>
+          <div class="card table-card">
+            <div class="action-row action-search" id="actions-search-nyx">
+              <div class="searchbar"><input class="input search-input" id="search-nyx" type="text" placeholder="Search AdsPower ID or username…"></div>
+            </div>
+            <div class="tablewrap">
+              <table class="queue"><thead id="thead-nyx"></thead><tbody id="tbody-nyx"></tbody></table>
+            </div>
+          </div>
+        </section>
 
-        <div class="settings-card">
-          <h2>AdsPower Control</h2>
-          <p class="hint">Choose how NyxSuite controls AdsPower on this device. Auto keeps the normal smart fallback; GUI skips Local API create/open calls for no-API accounts.</p>
-          <div class="mode-button-row" role="group" aria-label="AdsPower control mode">
-            <button id="adspower-mode-auto" class="btn mode-btn" type="button" data-adspower-mode="auto">Auto</button>
-            <button id="adspower-mode-api" class="btn mode-btn" type="button" data-adspower-mode="api">API</button>
-            <button id="adspower-mode-gui" class="btn mode-btn" type="button" data-adspower-mode="gui">GUI</button>
+        <section class="panel hidden" id="panel-nyxify" data-product="nyxify">
+          <div class="suite-top">
+            <div class="tiles tiles-product" id="tiles-nyxify"></div>
+            <div class="suite-actions">
+              <div class="action-row action-queue" id="actions-queue-nyxify">
+                <div class="toolbar sub" id="queue-nyxify"></div>
+              </div>
+              <div class="action-row action-row-controls" id="actions-row-nyxify">
+                <div class="toolbar group" id="group-nyxify"></div>
+                <div class="toolbar sub" id="row-nyxify"></div>
+              </div>
+            </div>
           </div>
-          <span id="adspower-mode-feedback" class="feedback"></span>
-        </div>
+          <div class="card table-card">
+            <div class="action-row action-search" id="actions-search-nyxify">
+              <div class="searchbar"><input class="input search-input" id="search-nyxify" type="text" placeholder="Search AdsPower ID or username…"></div>
+            </div>
+            <div class="tablewrap">
+              <table class="queue"><thead id="thead-nyxify"></thead><tbody id="tbody-nyxify"></tbody></table>
+            </div>
+          </div>
+        </section>
 
-        <div class="settings-card" id="card-setup">
-          <h2>Setup &amp; Install</h2>
-          <p class="hint">First-time setup: installs the Python packages and the Playwright browser engine. Run this once on a fresh machine before starting the bot. The live log appears below — it can take a few minutes.</p>
-          <div class="setting-row">
-            <button id="install-deps-btn" class="btn primary" type="button">Install Dependencies</button>
-            <span id="install-deps-state" class="setting-value" style="margin-left:10px"></span>
+        <section class="panel hidden" id="panel-proxyrank">
+          <div class="card">
+            <div class="proxyrank-head">
+              <h3>Proxy Ranking <span class="hint">by subnet · good → bad</span></h3>
+              <div class="proxyrank-head-actions">
+                <button id="proxyrank-ban-red" class="btn bad" type="button" disabled>Ban all red proxies</button>
+                <button id="proxyrank-refresh" class="btn" type="button">Refresh</button>
+              </div>
+            </div>
+            <p class="hint">Ranked from how often each subnet needed a retry, failed a creation, or hit a ban. Updates every time a proxy is used.</p>
+            <div id="proxyrank-summary" class="proxyrank-summary"></div>
+            <div id="proxyrank-chart" class="proxyrank-chart"></div>
+            <div class="tablewrap">
+              <table class="queue proxyrank-table">
+                <thead><tr><th>Subnet</th><th>Uses</th><th>Retries</th><th>Fails</th><th>Bans</th><th>Score</th><th></th></tr></thead>
+                <tbody id="proxyrank-tbody"></tbody>
+              </table>
+            </div>
           </div>
-          <pre id="install-deps-output" class="install-output" style="display:none"></pre>
-          <span id="install-deps-feedback" class="feedback"></span>
-        </div>
-      </div>
-    </section>
-  </main>
+        </section>
+
+        <section class="panel hidden" id="panel-fullauto">
+          <div class="card">
+            <div class="toolbar sub" style="margin-top:0">
+              <label class="label-inline">Model: <select id="fullauto-model-select" class="input-inline"></select></label>
+            </div>
+            <div class="fullauto-grid">
+              <div class="fullauto-col">
+                <h3>Usernames</h3>
+                <p class="hint">One per line. Lines starting with <code>#</code> or <code>;</code> are ignored.</p>
+                <textarea id="fullauto-usernames" class="input textarea-full" placeholder="username1&#10;username2"></textarea>
+                <button id="fullauto-save-usernames" class="btn primary" type="button">Save Usernames</button>
+              </div>
+              <div class="fullauto-col">
+                <h3>Signup Names</h3>
+                <p class="hint">One per line. Used during account creation.</p>
+                <textarea id="fullauto-signup-names" class="input textarea-full" placeholder="Jane Doe&#10;Alice Smith"></textarea>
+                <button id="fullauto-save-signup" class="btn primary" type="button">Save Signup Names</button>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-nyxconfig">
+          <div id="nyx-advanced" class="advanced-panel">
+            <div id="nyx-advanced-body"></div>
+            <span id="config-feedback" class="feedback"></span>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-nyxifyconfig">
+          <div id="nyxify-advanced" class="advanced-panel">
+            <div id="nyxify-advanced-body"></div>
+            <span id="nyxify-config-feedback" class="feedback"></span>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-banned">
+          <div class="card">
+            <div class="banned-head">
+              <h2>Banned Rows</h2>
+              <span id="replace-banned-summary-nyxify" class="detail" aria-live="polite"></span>
+            </div>
+            <p class="hint">Scan the latest SnapBoard snapshot for banned rows. Removing them clears every AdsPower ID before rotating proxies; Warm Up marks them for cookie warm-up instead.</p>
+            <div class="replace-banned-dashboard">
+              <textarea id="banned-adspower-ids-nyxify" class="input banned-adspower-ids" rows="3" readonly placeholder="Scanned banned AdsPower IDs appear here"></textarea>
+              <div class="toolbar compact-toolbar">
+                <button id="scan-banned-nyxify" class="btn primary" type="button">Scan banned</button>
+                <button id="remove-banned-nyxify" class="btn bad" type="button" disabled>Remove banned</button>
+                <button id="warmup-banned-nyxify" class="btn" type="button" disabled>Warm Up banned</button>
+              </div>
+            </div>
+            <div class="tablewrap">
+              <table class="queue">
+                <thead><tr><th>AdsPower ID</th><th>Username</th><th>Model</th><th>Status</th></tr></thead>
+                <tbody id="tbody-banned"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-bitmoji">
+          <div class="bm-toolbar">
+            <div class="bm-head">
+              <div class="bm-editor-switch" role="tablist" aria-label="Nyxmoji editor mode">
+                <button class="bm-editor-mode active" data-bm-editor="model" type="button">Model</button>
+                <button class="bm-editor-mode" data-bm-editor="outfit" type="button">Outfit</button>
+              </div>
+              <label class="label" for="bm-model">Model</label>
+              <select id="bm-model" class="input input-inline"></select>
+              <select id="bm-outfit-preset" class="input input-inline" style="display:none"></select>
+              <button id="bm-outfit-add" class="btn" type="button" style="display:none">Add Outfit</button>
+              <button id="bm-outfit-rename" class="btn" type="button" style="display:none">Rename</button>
+              <button id="bm-outfit-delete" class="btn btn-ghost" type="button" style="display:none">Delete</button>
+              <span id="bm-status" class="detail"></span>
+            </div>
+            <div class="bm-toolbar-actions">
+              <button id="bm-import" class="btn" type="button" title="Load a saved Nyxmoji config file">Import</button>
+              <button id="bm-export" class="btn" type="button" title="Download this Nyxmoji config">Export</button>
+              <button id="bm-save" class="btn primary" type="button">Save</button>
+              <input id="bm-import-file" type="file" accept="application/json" hidden>
+            </div>
+          </div>
+          <div class="bm-catbar" id="bm-catbar"></div>
+          <div class="bm-editor card">
+            <div class="bm-stage">
+              <div class="bm-stage-inner">
+                <img id="bm-avatar" class="bm-avatar" alt="Bitmoji preview">
+                <div id="bm-avatar-err" class="bm-avatar-err" style="display:none"></div>
+              </div>
+              <div class="bm-stage-foot">
+                <span id="bm-model-tag" class="bm-model-tag"></span>
+                <label id="bm-outfit-tuck-wrap" class="bm-tuck-toggle" style="display:none" title="Tuck the top into the bottom when the outfit supports it">
+                  <span id="bm-outfit-tuck-label" class="bm-tuck-toggle-label"></span>
+                  <input id="bm-outfit-tuck" class="bm-tuck-toggle-input" type="checkbox" role="switch">
+                  <span class="bm-tuck-toggle-switch" aria-hidden="true"></span>
+                </label>
+              </div>
+            </div>
+            <div class="bm-side">
+              <div class="bm-side-head">
+                <div>
+                  <span id="bm-feature-title" class="bm-feature-title">Hair Style</span>
+                  <span id="bm-feature-count" class="bm-count"></span>
+                </div>
+                <div class="bm-side-actions">
+                  <div class="bm-mode-group" id="bm-mode-group" role="tablist">
+                    <button class="bm-mode-btn" data-mode="preset" type="button">Preset</button>
+                    <button class="bm-mode-btn" data-mode="random" type="button">Random</button>
+                  </div>
+                  <button id="bm-clear-feature" class="btn btn-sm btn-ghost" type="button" title="Reset this feature to Preset" style="display:none">Reset</button>
+                </div>
+              </div>
+              <p id="bm-mode-hint" class="hint bm-mode-hint"></p>
+              <div id="bm-opt-tools" class="bm-opt-tools" style="display:none"></div>
+              <div id="bm-options" class="bm-options"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-settings">
+          <div class="settings-grid-2col">
+            <div class="card settings-card">
+              <h2>Updates</h2>
+              <div class="setting-row">
+                <span class="setting-label">Installed</span>
+                <span id="update-current" class="setting-value">—</span>
+              </div>
+              <div class="setting-row" id="update-latest-row" style="display:none">
+                <span class="setting-label">Latest</span>
+                <span id="update-latest" class="setting-value"></span>
+              </div>
+              <div class="btn-row">
+                <button id="update-check-btn" class="btn" type="button">Check for Update</button>
+                <button id="update-apply-btn" class="btn primary" type="button" style="display:none">Apply Update</button>
+              </div>
+              <div class="setting-row" id="update-rollback-row" style="display:none">
+                <span class="setting-label">Roll back to</span>
+                <span class="setting-value">
+                  <select id="update-rollback-select" class="input" title="Pick any previously released version"></select>
+                  <button id="update-rollback-btn" class="btn bad" type="button">Roll Back</button>
+                </span>
+              </div>
+              <div id="update-backups" class="setting-row"></div>
+              <div id="update-release-notes" class="release-notes" style="display:none"></div>
+              <span id="update-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card">
+              <h2>Start on Login</h2>
+              <div class="toggle-row">
+                <span class="toggle-text">Launch bridge agent on system startup</span>
+                <label class="toggle-switch" for="autostart-toggle">
+                  <input id="autostart-toggle" type="checkbox">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <span id="autostart-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card">
+              <h2>Menu Bar Icon</h2>
+              <div class="toggle-row">
+                <span class="toggle-text">Transparent macOS tray icon</span>
+                <label class="toggle-switch" for="tray-transparent-toggle">
+                  <input id="tray-transparent-toggle" type="checkbox">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <span id="tray-transparent-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card">
+              <h2>AdsPower Control</h2>
+              <p class="hint">Choose how NyxSuite controls AdsPower on this device. Auto keeps the normal smart fallback; GUI skips Local API create/open calls for no-API accounts.</p>
+              <div class="mode-button-row" role="group" aria-label="AdsPower control mode">
+                <button id="adspower-mode-auto" class="btn mode-btn" type="button" data-adspower-mode="auto">Auto</button>
+                <button id="adspower-mode-api" class="btn mode-btn" type="button" data-adspower-mode="api">API</button>
+                <button id="adspower-mode-gui" class="btn mode-btn" type="button" data-adspower-mode="gui">GUI</button>
+              </div>
+              <span id="adspower-mode-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card" id="card-setup">
+              <h2>Setup &amp; Install</h2>
+              <p class="hint">First-time setup: installs the Python packages and the Playwright browser engine. Run this once on a fresh machine before starting the bot. The live log appears below — it can take a few minutes.</p>
+              <div class="setting-row">
+                <button id="install-deps-btn" class="btn primary" type="button">Install Dependencies</button>
+                <span id="install-deps-state" class="setting-value" style="margin-left:10px"></span>
+              </div>
+              <pre id="install-deps-output" class="install-output" style="display:none"></pre>
+              <span id="install-deps-feedback" class="feedback"></span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
 
   <div id="toast" class="toast"></div>
 

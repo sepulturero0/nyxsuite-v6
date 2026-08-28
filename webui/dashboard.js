@@ -14,7 +14,6 @@ const PRODUCTS = {
   nyx: {
     base: `http://${HOST}:8865`, key: "profile_id",
     tiles: ["pending", "running", "done", "failed"],
-    sortFields: ["model", "created_at", "status"],
     columns: [
       { h: "AdsPower ID", f: r => r.profile_id || "", s: "" },
       { h: "AdsPower", f: adspowerStateText, s: "" },
@@ -24,7 +23,6 @@ const PRODUCTS = {
       { h: "Status", badge: true, f: r => r.status || "", s: "status" },
       { h: "Last Step", f: r => r.last_step || "", s: "" },
     ],
-    runner: [],
     queue: [["Rerun Failed", "/queue/rerun_failed", ""], ["Reset Stuck", "/queue/reset_stuck", ""],
             ["Flush", "/bot/finish_remaining", ""], ["Clear Completed", "/queue/prune_completed", ""],
             ["Remove Missing", "/queue/remove_missing_profile", ""]],
@@ -34,7 +32,6 @@ const PRODUCTS = {
   nyxify: {
     base: `http://${HOST}:8866`, key: "row_key",
     tiles: ["pending", "ready", "running", "done", "failed"],
-    sortFields: ["model", "created_at", "status"],
     columns: [
       { h: "AdsPower ID", f: r => r.adspower_id || r.adspower_profile_id || "", s: "" },
       { h: "AdsPower", f: adspowerStateText, s: "" },
@@ -46,22 +43,62 @@ const PRODUCTS = {
       { h: "Last Step", f: r => r.last_step || "", s: "" },
       { h: "Error", f: r => r.error || "", s: "" },
     ],
-    runner: [],
     queue: [["Reset Failed", "/queue/reset_failed", ""], ["Clear Queue", "/queue/clear", "bad"]],
     row: [["Remove", "/queue/remove", "bad"]],
     group: [["Remove", "/queue/remove", "bad"]],
   },
 };
 
+// One merged queue table: Nyx (Bitmoji) + Nyxify (Signup) rows side by side.
+// Every row is tagged with _product so actions dispatch to the right local API.
+const SUITE = {
+  tiles: ["pending", "ready", "running", "done", "failed"],
+  columns: [
+    { h: "Type", f: r => (r._product === "nyx" ? "Bitmoji" : "Signup"), s: "type" },
+    { h: "AdsPower ID", f: r => r.profile_id || r.adspower_id || r.adspower_profile_id || "", s: "" },
+    { h: "AdsPower", f: adspowerStateText, s: "" },
+    { h: "Username", f: r => (r.username || "").replace(/^\s*snapchat\s*:\s*/i, ""), s: "" },
+    { h: "Model", f: r => r.model || "", s: "model" },
+    { h: "Date Added", f: r => (r.created_at || "").slice(0, 19).replace("T", " "), s: "created_at" },
+    { h: "Proxy", f: r => r.proxy_address || "", s: "" },
+    { h: "Status", badge: true, f: r => r.status || "", s: "status" },
+    { h: "Last Step", f: r => r.last_step || "", s: "" },
+    { h: "Error", f: r => r.error || "", s: "" },
+  ],
+};
+const SUITE_QUEUE = [
+  ["Rerun Failed", "nyx", "/queue/rerun_failed", ""],
+  ["Reset Stuck", "nyx", "/queue/reset_stuck", ""],
+  ["Flush", "nyx", "/bot/finish_remaining", ""],
+  ["Clear Completed", "nyx", "/queue/prune_completed", ""],
+  ["Remove Missing", "nyx", "/queue/remove_missing_profile", ""],
+  null,
+  ["Reset Failed", "nyxify", "/queue/reset_failed", ""],
+  ["Clear Queue", "nyxify", "/queue/clear", "bad"],
+];
+const SUITE_ROW = [
+  ["Mark Done", "nyx", "/queue/mark_done", ""],
+  ["Relaunch", "nyx", "/queue/relaunch", ""],
+  ["Remove", null, "/queue/remove", "bad"],
+  ["Reset Failed", "nyxify", "/queue/reset_failed", ""],
+];
+const SUITE_GROUP = [
+  ["Mark Done", "nyx", "/queue/mark_done", ""],
+  ["Relaunch", "nyx", "/queue/relaunch", ""],
+  ["Remove", null, "/queue/remove", "bad"],
+  ["Reset Failed", "nyxify", "/queue/reset_failed", ""],
+];
+
 const state = {
-  nyx: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, search: "", sort: "", dir: 1, statusFilter: "", checked: new Set(), advancedVisible: false },
-  nyxify: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, search: "", sort: "", dir: 1, statusFilter: "", checked: new Set(), fullautoVisible: false, proxyrankVisible: false, advancedVisible: false, bannedRows: [], proxyRankingRows: [] },
+  nyx: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, advancedVisible: false, search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
+  nyxify: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, fullautoVisible: false, proxyrankVisible: false, advancedVisible: false, bannedRows: [], proxyRankingRows: [], search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
+  suite: { search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
   bridge: { settings: { transparent_tray_icon: false } },
   version: "",
   update: { checked: false, available: false, current: "", latest: "", latest_name: "", notes: "", backups: [], availableVersions: [] },
 };
-let active = "nyx";
-const selected = { nyx: null, nyxify: null };
+let active = "suite";
+const selected = { suite: null, nyx: null, nyxify: null };
 
 const el = id => document.getElementById(id);
 const keyOf = (p, row) => String(row[PRODUCTS[p].key] || row.profile_id || row.row_key || "");
@@ -152,6 +189,7 @@ function updateReplaceBannedDashboardSummary(message, rows) {
   if (ids) ids.value = formatBannedAdspowerIds(state.nyxify.bannedRows);
   if (removeBtn) removeBtn.disabled = !state.nyxify.bannedRows.length;
   if (warmupBtn) warmupBtn.disabled = !state.nyxify.bannedRows.length;
+  if (active === "banned") renderBannedPanel();
 }
 
 function formatBannedAdspowerIds(rows) {
@@ -247,29 +285,106 @@ async function callBridge(action, payload) {
 
 function render() {
   el("version").textContent = state.version ? ("v" + state.version) : "v…";
-  if (active === "nyx" || active === "nyxify") renderPanel(active);
+  if (active === "suite" || active === "nyx" || active === "nyxify") renderPanel(active);
+  if (active === "banned") renderBannedPanel();
   // Settings is rendered once on tab open (see setActive); re-rendering on every
   // SSE tick would clobber in-progress edits in the config form.
 }
 
 function sortRows(rows, field, dir) {
   if (!field) return rows;
+  const key = field === "type" ? "_product" : field;
   return [...rows].sort((a, b) => {
-    let va = String(a[field] || "").toLowerCase();
-    let vb = String(b[field] || "").toLowerCase();
-    if (field === "created_at") { va = a[field] || ""; vb = b[field] || ""; }
+    let va = String(a[key] || "").toLowerCase();
+    let vb = String(b[key] || "").toLowerCase();
+    if (key === "created_at") { va = a[key] || ""; vb = b[key] || ""; }
     if (va < vb) return -1 * dir;
     if (va > vb) return 1 * dir;
     return 0;
   });
 }
 
-// Signature of the last rendered output per panel. The dashboard re-runs
-// renderPanel on every SSE message and on every 1.5s poll tick; rebuilding the
-// whole table via innerHTML each time is the main source of lag (and it wiped
-// text selections). When nothing that affects the table has changed we skip the
-// rebuild entirely, so steady-state ticks become free.
+// Signature of the last rendered output. The dashboard re-runs renderPanel on
+// every SSE message and on every 1.5s poll tick; rebuilding the whole table via
+// innerHTML each time is the main source of lag (and it wiped text selections).
+// When nothing that affects the table has changed we skip the rebuild entirely,
+// so steady-state ticks become free.
 const panelRenderSig = {};
+
+function suiteRows() {
+  const rows = [];
+  ["nyx", "nyxify"].forEach(p => {
+    state[p].rows.forEach(r => {
+      const tagged = Object.assign({}, r);
+      tagged._product = p;
+      rows.push(tagged);
+    });
+  });
+  return rows;
+}
+
+function suiteKey(r) { return r._product + ":" + keyOf(r._product, r); }
+
+function suiteCounts() {
+  const out = {};
+  ["nyx", "nyxify"].forEach(p => {
+    Object.entries(state[p].counts || {}).forEach(([k, v]) => {
+      out[k] = (out[k] || 0) + (Number(v) || 0);
+    });
+  });
+  return out;
+}
+
+function suiteBot() {
+  const isActiveState = s => ["running", "paused", "waiting", "blocked"].includes(String(s || "").toLowerCase());
+  const a = state.nyx.bot || {}, b = state.nyxify.bot || {};
+  const primary = isActiveState(a.state) ? a : (isActiveState(b.state) ? b : (a.state ? a : b));
+  return {
+    state: primary.state || "stopped",
+    detail: [a.detail, b.detail].filter(Boolean).join(" · "),
+  };
+}
+
+function selectedSuiteProduct() {
+  const k = selected.suite || "";
+  const i = k.indexOf(":");
+  return i === -1 ? "" : k.slice(0, i);
+}
+
+function dispatchSuiteAction(def, keys) {
+  const product = def[1], path = def[2];
+  keys.forEach(k => {
+    const i = k.indexOf(":");
+    if (i === -1) return;
+    const prod = k.slice(0, i);
+    if (product && product !== prod) return;
+    const payload = { [PRODUCTS[prod].key]: k.slice(i + 1) };
+    callAction(prod, path, payload);
+  });
+}
+
+function suiteSignature() {
+  const s = state.suite;
+  const rows = suiteRows();
+  return [
+    JSON.stringify(suiteBot()),
+    JSON.stringify(suiteCounts()),
+    JSON.stringify(state.nyxify.usage || {}),
+    JSON.stringify(state.nyxify.live || {}),
+    s.statusFilter || "",
+    (s.search || "").toLowerCase().trim(),
+    s.sort || "",
+    String(s.dir),
+    selected.suite || "",
+    [...s.checked].sort().join(","),
+    rows.map(r => suiteKey(r) + ":" + SUITE.columns.map(c => String(c.f(r))).join("|")).join("\n"),
+  ].join("##");
+}
+
+function renderPanel(p) {
+  if (!p || p === "suite") { renderSuiteBody(); return; }
+  renderProductBody(p);
+}
 
 function panelSignature(p, cfg, s) {
   const rawRows = [...s.rows.values()];
@@ -289,7 +404,7 @@ function panelSignature(p, cfg, s) {
   ].join("##");
 }
 
-function renderPanel(p) {
+function renderProductBody(p) {
   const cfg = PRODUCTS[p], s = state[p];
 
   const sig = panelSignature(p, cfg, s);
@@ -300,14 +415,16 @@ function renderPanel(p) {
   panelRenderSig[p] = sig;
 
   const bs = (s.bot && s.bot.state) || "…";
-  const stEl = el("state-" + p); stEl.textContent = bs; stEl.className = "state " + bs;
-  el("detail-" + p).textContent = (s.bot && s.bot.detail) || "";
+  const stEl = el("state-" + p);
+  if (stEl) { stEl.textContent = bs; stEl.className = "state " + bs; }
+  const dEl = el("detail-" + p);
+  if (dEl) dEl.textContent = (s.bot && s.bot.detail) || "";
   if (p === "nyxify") {
     const live = s.live || {};
-    el("usage-nyxify").textContent = live.ready ? ("Open AdsPower profiles: " + (live.open || 0)) : "";
+    const uEl = el("usage-nyxify");
+    if (uEl) uEl.textContent = live.ready ? ("Open AdsPower profiles: " + (live.open || 0)) : "";
   }
 
-  // Tiles — click to filter by status
   const tiles = el("tiles-" + p); tiles.innerHTML = "";
   cfg.tiles.forEach(k => {
     const d = document.createElement("button"); d.className = "tile"; d.type = "button";
@@ -325,10 +442,8 @@ function renderPanel(p) {
     };
     tiles.appendChild(d);
   });
-  renderRunnerButtons(p);
   buildToolbar("queue-" + p, cfg.queue, p, false);
   buildToolbar("row-" + p, cfg.row, p, true);
-  if (p === "nyxify") { renderFullAutoSection(); renderProxyRankingSection(); if (state.nyxify.proxyrankVisible) renderProxyRanking(); }
 
   const searchEl = el("search-" + p);
   if (searchEl) { searchEl.value = s.search || ""; }
@@ -341,16 +456,12 @@ function renderPanel(p) {
       return id.includes(q) || uname.includes(q);
     });
   }
-  // Status filter
   if (s.statusFilter) {
     const sf = s.statusFilter.toUpperCase();
     rows = rows.filter(r => (r.status || "").toUpperCase() === sf);
   }
-
-  // Sort
   rows = sortRows(rows, s.sort, s.dir);
 
-  // Render header with checkbox + sortable columns
   const colCount = cfg.columns.length + 1;
   const allChecked = rows.length > 0 && rows.every(r => s.checked.has(keyOf(p, r)));
   const arrow = f => s.sort === f ? (s.dir === 1 ? " &#9650;" : " &#9660;") : "";
@@ -394,7 +505,6 @@ function renderPanel(p) {
     };
     tr.onclick = e => {
       if (e.target.closest(".td-cb, .cb-row")) return;
-      // Let the user highlight/copy cell text without the row re-render wiping it.
       if (window.getSelection && String(window.getSelection()).length > 0) return;
       selected[p] = (selected[p] === k ? null : k);
       renderPanel(p);
@@ -402,47 +512,6 @@ function renderPanel(p) {
     tbody.appendChild(tr);
   });
   buildGroupToolbar(p);
-}
-
-function appendRow(tbody, p, r, cfg) {
-  const k = keyOf(p, r);
-  const tr = document.createElement("tr"); tr.dataset.key = k;
-  if (selected[p] === k) tr.classList.add("sel");
-  tr.innerHTML = cfg.columns.map(c => {
-    const v = c.f(r);
-    return c.badge ? `<td><span class="badge ${escapeAttr(v)}">${escapeHtml(v)}</span></td>`
-                   : `<td title="${escapeAttr(v)}">${escapeHtml(v)}</td>`;
-  }).join("");
-  tr.onclick = () => { selected[p] = (selected[p] === k ? null : k); renderPanel(p); };
-  tbody.appendChild(tr);
-}
-
-function renderRunnerButtons(p) {
-  const bar = el("runner-" + p);
-  if (!bar) return;
-  const botState = ((state[p].bot || {}).state || "").toLowerCase();
-  const isActive = ["running", "paused", "waiting", "blocked"].includes(botState);
-  const isPaused = botState === "paused";
-  bar.innerHTML = "";
-  const g = document.createElement("div"); g.className = "btn-group"; bar.appendChild(g);
-  const ss = document.createElement("button");
-  ss.className = "btn" + (isActive ? " bad" : " primary");
-  ss.classList.add("runner-start-stop");
-  ss.type = "button";
-  ss.textContent = isActive ? "Stop" : "Start";
-  ss.title = isActive ? "Stop runner" : "Start runner";
-  ss.onclick = () => callAction(p, isActive ? "/bot/stop" : "/bot/start", {});
-  g.appendChild(ss);
-  const pr = document.createElement("button");
-  pr.className = "btn" + (isPaused ? "" : " warn");
-  pr.classList.add("runner-pause-resume");
-  pr.type = "button";
-  pr.textContent = isPaused ? "Resume" : "Pause";
-  pr.title = isPaused ? "Resume runner" : "Pause runner";
-  pr.onclick = () => callAction(p, isPaused ? "/bot/resume" : "/bot/pause", {});
-  pr.disabled = !isActive;
-  g.appendChild(pr);
-  bar.style.display = "flex";
 }
 
 function buildToolbar(id, defs, p, isRow) {
@@ -496,6 +565,199 @@ function buildGroupToolbar(p) {
   });
 }
 
+function renderSuiteBody() {
+  const s = state.suite;
+
+  const sig = suiteSignature();
+  const tbodyEl = el("tbody-suite");
+  if (panelRenderSig.suite === sig && tbodyEl && tbodyEl.children.length) {
+    return;
+  }
+  panelRenderSig.suite = sig;
+
+  const bot = suiteBot();
+  const stEl = el("state-suite");
+  if (stEl) { stEl.textContent = bot.state; stEl.className = "state " + bot.state; }
+  const dEl = el("detail-suite");
+  if (dEl) dEl.textContent = bot.detail;
+  const uEl = el("usage-suite");
+  const live = state.nyxify.live || {};
+  if (uEl) uEl.textContent = live.ready ? ("Open AdsPower profiles: " + (live.open || 0)) : "";
+
+  // Tiles — click to filter by status (counts merged across both products)
+  const counts = suiteCounts();
+  const tiles = el("tiles-suite"); tiles.innerHTML = "";
+  SUITE.tiles.forEach(k => {
+    const d = document.createElement("button"); d.className = "tile"; d.type = "button";
+    const on = s.statusFilter === k;
+    if (on) d.classList.add("tile-active");
+    d.dataset.status = k;
+    d.setAttribute("aria-pressed", on ? "true" : "false");
+    d.setAttribute("aria-label", `Filter by ${k}: ${counts[k] || 0}`);
+    d.innerHTML = `<div class="n">${counts[k] || 0}</div><div class="l">${k}</div>`;
+    d.onclick = () => {
+      if (s.statusFilter === k) s.statusFilter = "";
+      else s.statusFilter = k;
+      s.checked.clear();
+      renderPanel();
+    };
+    tiles.appendChild(d);
+  });
+  renderSuiteRunnerButtons();
+  buildSuiteToolbar("queue-suite", SUITE_QUEUE, "queue");
+  buildSuiteToolbar("row-suite", SUITE_ROW, "row");
+
+  const searchEl = el("search-suite");
+  if (searchEl) { searchEl.value = s.search || ""; }
+  let rows = suiteRows();
+  const q = (s.search || "").toLowerCase().trim();
+  if (q) {
+    rows = rows.filter(r => {
+      const id = String(r.profile_id || r.adspower_id || r.adspower_profile_id || r.row_key || "").toLowerCase();
+      const uname = String(r.username || r.snapchat_username || "").toLowerCase();
+      return id.includes(q) || uname.includes(q);
+    });
+  }
+  // Status filter
+  if (s.statusFilter) {
+    const sf = s.statusFilter.toUpperCase();
+    rows = rows.filter(r => String(r.status || "").toUpperCase() === sf);
+  }
+
+  // Sort
+  rows = sortRows(rows, s.sort, s.dir);
+
+  // Render header with checkbox + sortable columns
+  const colCount = SUITE.columns.length + 1;
+  const allChecked = rows.length > 0 && rows.every(r => s.checked.has(suiteKey(r)));
+  const arrow = f => s.sort === f ? (s.dir === 1 ? " &#9650;" : " &#9660;") : "";
+  const ths = `<th class="th-cb"><input type="checkbox" id="cb-all-suite" ${allChecked ? "checked" : ""}></th>`
+    + SUITE.columns.map(c => {
+        if (c.s) return `<th class="th-sortable" data-sort="${c.s}">${c.h}${arrow(c.s)}</th>`;
+        return `<th>${c.h}</th>`;
+      }).join("");
+  el("thead-suite").innerHTML = "<tr>" + ths + "</tr>";
+  const cbAll = el("cb-all-suite");
+  if (cbAll) {
+    cbAll.onclick = e => {
+      if (e.target.checked) rows.forEach(r => s.checked.add(suiteKey(r)));
+      else s.checked.clear();
+      renderPanel();
+    };
+  }
+
+  const tbody = el("tbody-suite"); tbody.innerHTML = "";
+  if (!rows.length) {
+    tbody.innerHTML = `<tr><td class="empty" colspan="${colCount}">No rows.</td></tr>`;
+    buildSuiteGroupToolbar();
+    return;
+  }
+  rows.forEach(r => {
+    const k = suiteKey(r);
+    const tr = document.createElement("tr"); tr.dataset.key = k;
+    if (selected.suite === k) tr.classList.add("sel");
+    if (s.checked.has(k)) tr.classList.add("checked");
+    tr.innerHTML = `<td class="td-cb"><input type="checkbox" class="cb-row" ${s.checked.has(k) ? "checked" : ""}></td>`
+      + SUITE.columns.map(c => {
+          const v = c.f(r);
+          return c.badge ? `<td><span class="badge ${escapeAttr(v)}">${escapeHtml(v)}</span></td>`
+                         : `<td title="${escapeAttr(v)}">${escapeHtml(v)}</td>`;
+        }).join("");
+    const cb = tr.querySelector(".cb-row");
+    cb.onclick = e => {
+      e.stopPropagation();
+      if (e.target.checked) s.checked.add(k); else s.checked.delete(k);
+      renderPanel();
+    };
+    tr.onclick = e => {
+      if (e.target.closest(".td-cb, .cb-row")) return;
+      // Let the user highlight/copy cell text without the row re-render wiping it.
+      if (window.getSelection && String(window.getSelection()).length > 0) return;
+      selected.suite = (selected.suite === k ? null : k);
+      renderPanel();
+    };
+    tbody.appendChild(tr);
+  });
+  buildSuiteGroupToolbar();
+}
+
+function renderSuiteRunnerButtons() {
+  const bar = el("runner-suite");
+  if (!bar) return;
+  const stateOf = p => String(((state[p].bot || {}).state || "")).toLowerCase();
+  const isActive = s => ["running", "paused", "waiting", "blocked"].includes(s);
+  bar.innerHTML = "";
+  const g = document.createElement("div"); g.className = "btn-group"; bar.appendChild(g);
+  [
+    { label: "Nyx", products: ["nyx"] },
+    { label: "Nyxify", products: ["nyxify"] },
+  ].forEach(def => {
+    const anyActive = def.products.some(p => isActive(stateOf(p)));
+    const b = document.createElement("button");
+    b.className = "btn" + (anyActive ? " bad" : " primary");
+    b.classList.add("runner-start-stop");
+    b.type = "button";
+    b.textContent = anyActive ? `Stop ${def.label}` : `Start ${def.label}`;
+    b.title = (anyActive ? "Stop " : "Start ") + def.label + " runner";
+    b.onclick = () => {
+      const path = anyActive ? "/bot/stop" : "/bot/start";
+      def.products.forEach(p => callAction(p, path, {}));
+    };
+    g.appendChild(b);
+  });
+  bar.style.display = "flex";
+}
+
+function buildSuiteToolbar(id, defs, mode) {
+  const bar = el(id); if (!bar) return;
+  bar.innerHTML = "";
+  if (!defs || !defs.length) { bar.style.display = "none"; return; }
+  // Row actions are contextual — only take space when a row is selected.
+  if (mode === "row" && !selected.suite) { bar.style.display = "none"; return; }
+  bar.style.display = "flex";
+  let group = null;
+  defs.forEach(d => {
+    if (d === null) { group = null; return; }
+    const [label, product, path, cls] = d;
+    if (mode === "row") {
+      const prod = selectedSuiteProduct();
+      if (product && prod && product !== prod) return;
+    }
+    if (!group) { group = document.createElement("div"); group.className = "btn-group"; bar.appendChild(group); }
+    const b = document.createElement("button");
+    b.className = "btn" + (cls ? (" " + cls) : "");
+    b.textContent = label;
+    if (mode === "queue") {
+      b.onclick = () => callAction(product, path, {});
+    } else if (mode === "row") {
+      const k = selected.suite || "";
+      b.disabled = !k;
+      b.onclick = () => { if (k) dispatchSuiteAction(d, [k]); };
+    }
+    group.appendChild(b);
+  });
+}
+
+function buildSuiteGroupToolbar() {
+  const bar = el("group-suite");
+  if (!bar) return;
+  const checked = state.suite.checked;
+  if (!SUITE_GROUP.length || !checked.size) { bar.classList.remove("visible"); return; }
+  bar.classList.add("visible");
+  bar.innerHTML = `<span class="badge-cb">${checked.size} selected</span>`;
+  let group = null;
+  SUITE_GROUP.forEach(d => {
+    if (d === null) { group = null; return; }
+    const [label, , , cls] = d;
+    if (!group) { group = document.createElement("div"); group.className = "btn-group"; bar.appendChild(group); }
+    const b = document.createElement("button");
+    b.className = "btn" + (cls ? (" " + cls) : "");
+    b.textContent = label;
+    b.onclick = () => dispatchSuiteAction(d, [...checked]);
+    group.appendChild(b);
+  });
+}
+
 const escapeHtml = s => String(s).replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 const escapeAttr = s => String(s).replace(/"/g, "&quot;");
 
@@ -512,12 +774,39 @@ function setActive(p) {
   active = p;
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === p));
   document.querySelectorAll(".panel").forEach(s => s.classList.toggle("hidden", s.dataset.product !== p && s.id !== ("panel-" + p)));
+  document.body.classList.remove("sidebar-open");
   if (p === "settings") renderSettings();
   if (p === "bitmoji") loadBitmoji();
-  if (p === "nyx" || p === "nyxify") {
+  if (p === "banned") renderBannedPanel();
+  if (p === "nyx" || p === "nyxify") renderPanel(p);
+  if (p === "proxyrank") renderProxyRanking();
+  if (p === "fullauto") renderFullAuto();
+  if (p === "nyxconfig") refreshConfig("nyx").then(renderNyxAdvanced);
+  if (p === "nyxifyconfig") refreshConfig("nyxify").then(renderNyxifyAdvanced);
+  if (p === "suite") {
     render();
   }
 }
+
+function renderBannedPanel() {
+  const tbody = el("tbody-banned");
+  if (!tbody) return;
+  const rows = state.nyxify.bannedRows || [];
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td class="empty" colspan="4">No banned rows yet — press "Scan banned" to check the latest SnapBoard snapshot.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(r => {
+    const id = escapeHtml(String(r.adspower_id || r.adspower_profile_id || r.profile_id || ""));
+    const uname = escapeHtml(String(r.username || "").replace(/^\s*snapchat\s*:\s*/i, ""));
+    const model = escapeHtml(String(r.model || ""));
+    const status = escapeHtml(String(r.status || r.last_step || "banned"));
+    return `<tr><td>${id}</td><td>${uname}</td><td>${model}</td><td><span class="badge FAILED">${status}</span></td></tr>`;
+  }).join("");
+}
+
+el("sidebar-toggle").addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
+el("sidebar-backdrop").addEventListener("click", () => document.body.classList.remove("sidebar-open"));
 
 // ---------- Settings panel ----------
 async function renderSettings() {
@@ -861,7 +1150,7 @@ function showExtensionReloadBanner(version) {
   banner.innerHTML = `Extension updated to v${escapeHtml(version)} — `
     + `<button id="ext-reload-copy" class="btn btn-ghost" type="button">Copy chrome://extensions</button>`
     + ` and paste it into your address bar, then click the reload ↻ on the Nyx / Nyxify extension.`;
-  document.querySelector(".topbar")?.after(banner);
+  document.querySelector(".content")?.prepend(banner);
   el("ext-reload-copy")?.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText("chrome://extensions");
@@ -884,27 +1173,6 @@ el("update-rollback-btn").addEventListener("click", async () => {
   el("update-feedback").textContent = "Rolling back to v" + version + "…";
   const r = await callBridge("rollback", { version });
   el("update-feedback").textContent = r.message || (r.ok ? "Rolling back..." : "Rollback failed.");
-});
-
-el("nyx-advanced-toggle").addEventListener("click", () => {
-  const panel = el("nyx-advanced");
-  const willShow = panel.hidden;
-  state.nyx.advancedVisible = willShow;
-  if (willShow) renderNyxAdvanced();
-  panel.hidden = !willShow;
-  el("nyx-advanced-toggle").classList.toggle("active", willShow);
-});
-
-el("nyxify-advanced-toggle").addEventListener("click", async () => {
-  const panel = el("nyxify-advanced");
-  const willShow = panel.hidden;
-  state.nyxify.advancedVisible = willShow;
-  if (willShow) {
-    await refreshConfig("nyxify");   // always edit the live config, never a stale one
-    renderNyxifyAdvanced();
-  }
-  panel.hidden = !willShow;
-  el("nyxify-advanced-toggle").classList.toggle("active", willShow);
 });
 
 document.addEventListener("click", async (e) => {
@@ -998,15 +1266,6 @@ document.addEventListener("click", async (e) => {
 let currentModels = [];
 let selectedModel = "";
 
-function renderFullAutoSection() {
-  const section = el("fullauto-section");
-  const btn = el("fullauto-toggle-btn");
-  if (!section || !btn) return;
-  const visible = state.nyxify.fullautoVisible;
-  section.style.display = visible ? "block" : "none";
-  btn.textContent = visible ? "Hide Full Auto Editor" : "Show Full Auto Editor";
-}
-
 async function renderFullAuto() {
   const r = await fetch(`http://${HOST}:8866/models`, { headers: tokenHeaders() }).then(r => r.json()).catch(() => ({ models: [] }));
   currentModels = r.models || [];
@@ -1053,7 +1312,21 @@ el("fullauto-save-signup").addEventListener("click", async () => {
   toast(r.ok ? "Signup names saved." : (r.error || "Failed."), r.ok);
 });
 
-el("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b) setActive(b.dataset.tab); });
+el("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b && b.dataset.tab) setActive(b.dataset.tab); });
+
+function applyTheme(dark) {
+  document.body.classList.toggle("dark", dark);
+  const label = el("theme-label");
+  if (label) label.textContent = dark ? "Light Mode" : "Dark Mode";
+}
+let themeDark = false;
+try { themeDark = localStorage.getItem("nyxsuite-theme") === "dark"; } catch (_) {}
+applyTheme(themeDark);
+el("theme-toggle").addEventListener("click", () => {
+  const dark = !document.body.classList.contains("dark");
+  applyTheme(dark);
+  try { localStorage.setItem("nyxsuite-theme", dark ? "dark" : "light"); } catch (_) {}
+});
 el("scan-banned-nyxify").addEventListener("click", scanBannedFromDashboard);
 el("remove-banned-nyxify").addEventListener("click", removeBannedFromDashboard);
 el("warmup-banned-nyxify").addEventListener("click", warmupBannedFromDashboard);
@@ -1073,7 +1346,7 @@ document.addEventListener("click", e => {
 });
 
 // ---------- Search ----------
-["nyx", "nyxify"].forEach(p => {
+["suite", "nyx", "nyxify"].forEach(p => {
   const inp = el("search-" + p);
   if (inp) {
     inp.addEventListener("input", () => {
@@ -1131,27 +1404,7 @@ el("install-deps-btn").addEventListener("click", async () => {
   }, 1000);
 });
 
-el("fullauto-toggle-btn").addEventListener("click", () => {
-  const willShow = !state.nyxify.fullautoVisible;
-  state.nyxify.fullautoVisible = willShow;
-  // Toggle the section directly (mirrors the Advanced Config toggle) instead of
-  // going through renderPanel — the panelSignature() short-circuit added for the
-  // lag fix doesn't track fullautoVisible, so renderPanel would early-return and
-  // the editor would never expand.
-  renderFullAutoSection();
-  if (willShow) renderFullAuto();
-});
-
 // ---------- Proxy Ranking ----------
-function renderProxyRankingSection() {
-  const section = el("proxyrank-section");
-  const btn = el("proxyrank-toggle-btn");
-  if (!section || !btn) return;
-  const visible = state.nyxify.proxyrankVisible;
-  section.style.display = visible ? "block" : "none";
-  btn.textContent = visible ? "Hide Proxy Ranking" : "Proxy Ranking";
-}
-
 function proxyScoreClass(score) {
   if (score <= 0.34) return "score-good";
   if (score <= 1.0) return "score-mid";
@@ -1303,13 +1556,6 @@ async function banBadProxyRows() {
   }
   renderProxyRanking();
 }
-
-el("proxyrank-toggle-btn").addEventListener("click", () => {
-  const willShow = !state.nyxify.proxyrankVisible;
-  state.nyxify.proxyrankVisible = willShow;
-  renderProxyRankingSection();
-  if (willShow) renderProxyRanking();
-});
 
 el("proxyrank-refresh").addEventListener("click", () => renderProxyRanking());
 el("proxyrank-ban-red").addEventListener("click", banBadProxyRows);
@@ -2201,8 +2447,8 @@ setTimeout(() => { runUpdateCheck(false).catch(() => {}); }, 1200);
 // Deep link: the extension's "Setup & Install" button opens the dashboard at
 // #setup — jump to Settings and highlight the Setup & Install card.
 function handleHashRoute() {
-  if (location.hash === "#nyx") { setActive("nyx"); return; }
-  if (location.hash === "#nyxify") { setActive("nyxify"); return; }
+  // Legacy #nyx / #nyxify deep links land on the merged suite table.
+  if (location.hash === "#nyx" || location.hash === "#nyxify" || location.hash === "#suite") { setActive("suite"); return; }
   if (location.hash === "#setup") {
     setActive("settings");
     setTimeout(() => {
