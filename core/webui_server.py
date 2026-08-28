@@ -29,6 +29,14 @@ from urllib.parse import parse_qs, urlparse
 
 from core.process_utils import ROOT_DIR
 from core.local_http import apply_cors, extract_token
+from core.timing_diag import elapsed, log_timing, now
+
+# How long a computed aggregate /bridge/status is reused. Several clients /
+# tabs may poll the same status at once; short-circuiting them avoids building
+# the full snapshot (both products, up to 500 rows) repeatedly within a window.
+# The SSE watcher still diffs at watch_interval, so real-time updates are
+# unaffected — this only dedupes identical, closely-spaced status reads.
+STATUS_CACHE_TTL_SECONDS = 0.4
 
 _CONTENT_TYPES = {
     ".html": "text/html; charset=utf-8",
@@ -105,22 +113,31 @@ class WebDashboardServer:
         self._last_rows = {}               # product -> {key: signature}
         self._last_meta = {}               # product -> (bot_state, counts_json)
         self._webui_root = _webui_root()
+        self._status_cache = {"at": 0.0, "value": None}
 
     # ------------------------------------------------------------- status
     def status(self) -> dict:
+        cache = self._status_cache
+        t = time.monotonic()
+        if cache["value"] and (t - float(cache.get("at") or 0.0)) < STATUS_CACHE_TTL_SECONDS:
+            return cache["value"]
+        start = now()
         products = {}
         for name, controller in self.controllers.items():
             try:
                 products[name] = controller.status_snapshot()
             except Exception as exc:
                 products[name] = {"error": str(exc)}
+        log_timing("dashboard.status", start, "bridge")
         settings = {}
         if callable(self.bridge_settings_provider):
             try:
                 settings = self.bridge_settings_provider() or {}
             except Exception:
                 settings = {}
-        return {"ok": True, "products": products, "bridge": {"version": self.version, "settings": settings}}
+        value = {"ok": True, "products": products, "bridge": {"version": self.version, "settings": settings}}
+        self._status_cache.update({"at": time.monotonic(), "value": value})
+        return value
 
     def _inject_token(self, body: bytes) -> bytes:
         """Inject window.__NYX_TOKEN__ into index.html so the same-origin SPA has it."""
@@ -162,7 +179,8 @@ class WebDashboardServer:
         while not self._stop_watch.is_set():
             try:
                 for name, controller in self.controllers.items():
-                    snap = controller.status_snapshot()
+                    with elapsed("watch.snapshot", name):
+                        snap = controller.status_snapshot()
                     rows = snap.get("rows", []) or []
                     current = {}
                     for row in rows:
@@ -358,11 +376,14 @@ class WebDashboardServer:
                 self._json(404, {"ok": False, "error": "Not found"})
 
             def _dispatch(self, handler, payload):
+                dispatch_start = now()
                 try:
                     result = handler(payload or {})
                 except Exception as exc:
+                    log_timing("action.dispatch", dispatch_start)
                     self._json(500, {"ok": False, "error": str(exc) or "Action failed."})
                     return
+                log_timing("action.dispatch", dispatch_start)
                 if not isinstance(result, dict):
                     result = {"ok": True, "message": "Action completed."}
                 result.setdefault("ok", True)

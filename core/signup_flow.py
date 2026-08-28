@@ -33,6 +33,14 @@ EMAIL_ORDER_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_ORDER_MAX_ATTEMPTS", "4")
 # SnapBoard can issue a replacement number via its redo/force-new path.
 PHONE_VERIFICATION_MAX_ATTEMPTS = int(os.getenv("NYXIFY_PHONE_VERIFICATION_MAX_ATTEMPTS", "2"))
 WRONG_CODE_MAX_RECOVERY_ATTEMPTS = int(os.getenv("NYXIFY_WRONG_CODE_MAX_RECOVERY_ATTEMPTS", "2"))
+# How many times to try "Use email instead" when a phone step appears during the
+# email/OTP path. If the switch is present but never clickable, fall back to the
+# phone verification path (get a number -> SMS OTP) instead of looping forever.
+EMAIL_SWITCH_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_SWITCH_MAX_ATTEMPTS", "3"))
+# How many times email verification may fail (wrong code / already-verified)
+# before we click "Use Phone Number Instead" and switch to the phone -> SMS OTP
+# verification path.
+EMAIL_VERIFY_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_VERIFY_MAX_ATTEMPTS", "3"))
 SIGNUP_FAST_SUBMIT_PRE_CLEAR_MS = int(os.getenv("NYXIFY_SIGNUP_FAST_SUBMIT_PRE_CLEAR_MS", "250"))
 SIGNUP_FAST_SUBMIT_POST_CLEAR_MS = int(os.getenv("NYXIFY_SIGNUP_FAST_SUBMIT_POST_CLEAR_MS", "150"))
 SIGNUP_FAST_SUBMIT_PAUSE_MIN_MS = int(os.getenv("NYXIFY_SIGNUP_FAST_SUBMIT_PAUSE_MIN_MS", "90"))
@@ -1482,6 +1490,101 @@ async def _click_use_email_instead(page, logger=None, profile_id: str = "") -> b
     return False
 
 
+async def _click_use_phone_instead(page, logger=None, profile_id: str = "") -> bool:
+    """Click the "Use Phone Number Instead" switch on the email verification step.
+
+    Used as the fallback when email verification keeps failing — Snapchat lets the
+    account switch to a phone number instead, which then runs the phone -> SMS OTP
+    path. Mirrors :func:`_click_use_email_instead` (selectors -> locator click ->
+    JS scan).
+    """
+    selectors = [
+        "a:has-text('Use Phone Number Instead')",
+        "[role='button']:has-text('Use Phone Number Instead')",
+        "button:has-text('Use Phone Number Instead')",
+        "div[class*='EmailVerification'] a[role='button']",
+    ]
+    selector = await _visible_any(page, selectors)
+    if selector:
+        try:
+            locator = page.locator(selector).first
+            text = ""
+            try:
+                text = str(await locator.inner_text() or "").strip().lower()
+            except Exception:
+                text = ""
+            if text and "phone" in text:
+                await _safe_scroll_into_view(locator)
+                await locator.click(force=True)
+                await page.wait_for_timeout(900)
+                logger and logger.info(f"[{profile_id}] Clicked phone-instead switch with selector {selector!r}.")
+                return True
+        except Exception as exc:
+            logger and logger.warning(f"[{profile_id}] Phone-instead switch click failed via locator: {exc}")
+
+    try:
+        clicked = await page.evaluate(
+            """
+            () => {
+                const normalize = (value) => String(value || "")
+                    .replace(/\\s+/g, " ")
+                    .trim()
+                    .toLowerCase();
+                const isVisible = (node) => {
+                    if (!node) return false;
+                    const style = window.getComputedStyle(node);
+                    if (!style) return false;
+                    if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                        return false;
+                    }
+                    const rect = node.getBoundingClientRect();
+                    return rect.width > 0 && rect.height > 0;
+                };
+                const isSwitchText = (text) => text && (
+                    text === "use phone number instead"
+                    || text.includes("use phone number instead")
+                    || text.includes("phone number instead")
+                    || text.includes("verif. with phone")
+                    || text.includes("use phone")
+                );
+                const fireClick = (node) => {
+                    if (!node) return false;
+                    const events = ["pointerdown", "mousedown", "mouseup", "click"];
+                    for (const type of events) {
+                        try {
+                            node.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, view: window }));
+                        } catch (_) {}
+                    }
+                    try { node.click(); } catch (_) {}
+                    return true;
+                };
+                const nodes = Array.from(document.querySelectorAll("button, a, div, span, p, label, [role='button'], [tabindex]"));
+                for (const node of nodes) {
+                    if (!isVisible(node)) continue;
+                    const text = normalize(node.innerText || node.textContent);
+                    if (!isSwitchText(text)) continue;
+                    const role = (node.getAttribute("role") || "").trim().toLowerCase();
+                    const tagName = String(node.tagName || "").toLowerCase();
+                    const target = (tagName === "a" || tagName === "button" || role === "button")
+                        ? node
+                        : (node.closest("a, button, [role='button'], [tabindex]") || node);
+                    if (target && isVisible(target)) {
+                        return fireClick(target);
+                    }
+                }
+                return false;
+            }
+            """
+        )
+        if clicked:
+            await page.wait_for_timeout(900)
+            logger and logger.info(f"[{profile_id}] Clicked phone-instead switch via JS scan.")
+            return True
+    except Exception as exc:
+        logger and logger.warning(f"[{profile_id}] Phone-instead switch click failed via JS: {exc}")
+    return False
+
+
 async def _is_email_verification_step(page) -> bool:
     try:
         direct_selector = await _visible_any(
@@ -1811,6 +1914,7 @@ async def _wait_for_signup_progress(
     username_taken_warning_logged = False
     manual_submit_username = ""
     email_switch_clicked = False
+    email_switch_failures = 0
     last_progress_step = ""
 
     async def set_progress(step: str) -> None:
@@ -1818,6 +1922,35 @@ async def _wait_for_signup_progress(
         if step and step != last_progress_step:
             last_progress_step = step
             await _emit_signup_progress(progress_callback, step, logger, profile_id)
+
+    async def try_email_switch_step() -> str:
+        """Handle a detected "use email instead" switch on the phone step.
+
+        Returns ``"switched"`` (clicked + re-wait), ``"retry"`` (keep waiting),
+        or ``"phone"`` (the switch is present but not clickable — fall back to
+        the phone -> SMS OTP path instead of looping forever).
+        """
+        nonlocal email_switch_clicked, email_switch_failures, remaining_ms
+        if not email_switch_clicked:
+            clicked_email = await _click_use_email_instead(page, logger, profile_id)
+            if clicked_email:
+                email_switch_clicked = True
+                await page.wait_for_timeout(900)
+                if remaining_ms is not None:
+                    remaining_ms -= 900
+                return "switched"
+            email_switch_failures += 1
+            if email_switch_failures >= EMAIL_SWITCH_MAX_ATTEMPTS:
+                logger and logger.warning(
+                    f"[{profile_id}] 'Use email instead' was not clickable after "
+                    f"{EMAIL_SWITCH_MAX_ATTEMPTS} attempt(s); falling back to phone verification."
+                )
+                await set_progress("awaiting_phone_verification")
+                return "phone"
+        await page.wait_for_timeout(300)
+        if remaining_ms is not None:
+            remaining_ms -= 300
+        return "retry"
 
     async def trigger_form_refresh(reason: str, progress_step: str) -> bool:
         """Reload + re-enter the signup form. Raises once the refresh budget is
@@ -1893,18 +2026,10 @@ async def _wait_for_signup_progress(
             return "email"
 
         if handoff_stage == "email_switch":
-            if not email_switch_clicked:
-                await set_progress("clicking_use_email_instead")
-                clicked_email = await _click_use_email_instead(page, logger, profile_id)
-                if clicked_email:
-                    email_switch_clicked = True
-                    await page.wait_for_timeout(900)
-                    if remaining_ms is not None:
-                        remaining_ms -= 900
-                    continue
-            await page.wait_for_timeout(300)
-            if remaining_ms is not None:
-                remaining_ms -= 300
+            await set_progress("clicking_use_email_instead")
+            switch_result = await try_email_switch_step()
+            if switch_result == "phone":
+                return "phone"
             continue
 
         username_taken_visible = await _is_username_taken_error_visible(page)
@@ -1924,18 +2049,10 @@ async def _wait_for_signup_progress(
                 f"otp_input={otp_input_visible}."
             )
             if email_switch_visible:
-                if not email_switch_clicked:
-                    await set_progress("clicking_use_email_instead")
-                    clicked_email = await _click_use_email_instead(page, logger, profile_id)
-                    if clicked_email:
-                        email_switch_clicked = True
-                        await page.wait_for_timeout(900)
-                        if remaining_ms is not None:
-                            remaining_ms -= 900
-                        continue
-                await page.wait_for_timeout(300)
-                if remaining_ms is not None:
-                    remaining_ms -= 300
+                await set_progress("clicking_use_email_instead")
+                switch_result = await try_email_switch_step()
+                if switch_result == "phone":
+                    return "phone"
                 continue
             if email_input_visible:
                 await set_progress("awaiting_email_verification")
@@ -1999,18 +2116,10 @@ async def _wait_for_signup_progress(
                 await set_progress("awaiting_email_verification")
                 return "email"
             if handoff_stage == "email_switch":
-                if not email_switch_clicked:
-                    await set_progress("clicking_use_email_instead")
-                    clicked_email = await _click_use_email_instead(page, logger, profile_id)
-                    if clicked_email:
-                        email_switch_clicked = True
-                        await page.wait_for_timeout(900)
-                        if remaining_ms is not None:
-                            remaining_ms -= 900
-                        continue
-                await page.wait_for_timeout(300)
-                if remaining_ms is not None:
-                    remaining_ms -= 300
+                await set_progress("clicking_use_email_instead")
+                switch_result = await try_email_switch_step()
+                if switch_result == "phone":
+                    return "phone"
                 continue
             logger and logger.warning(
                 f"[{profile_id}] Snapchat unable-to-process error detected; "
@@ -2461,12 +2570,15 @@ async def _handle_optional_phone_sms_verification(
     except Exception:
         pass
 
-    await _type_otp_code(signup_page, _OTP_INPUT_SELECTORS, sms_code, logger, profile_id)
+    otp_typed = await _type_otp_code(signup_page, _OTP_INPUT_SELECTORS, sms_code, logger, profile_id)
     await signup_page.wait_for_timeout(500)
-    if await _click_visible_verification_submit(signup_page, logger, profile_id):
+    if otp_typed and await _click_visible_verification_submit(signup_page, logger, profile_id):
         result["sms_otp_entered"] = True
         logger and logger.info(f"[{profile_id}] SMS OTP submitted.")
         await signup_page.wait_for_timeout(1200)
+    else:
+        logger and logger.warning(f"[{profile_id}] Could not verify the SMS OTP was typed; not submitting.")
+        result["sms_otp_entered"] = False
 
     wrong_sms_attempts = 0
     while result.get("sms_otp_entered") and await _is_wrong_verification_code_error_visible(signup_page):
@@ -2499,9 +2611,9 @@ async def _handle_optional_phone_sms_verification(
             break
 
         signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
-        await _type_otp_code(signup_page, _OTP_INPUT_SELECTORS, sms_code, logger, profile_id)
+        otp_typed = await _type_otp_code(signup_page, _OTP_INPUT_SELECTORS, sms_code, logger, profile_id)
         await signup_page.wait_for_timeout(500)
-        if await _click_visible_verification_submit(signup_page, logger, profile_id):
+        if otp_typed and await _click_visible_verification_submit(signup_page, logger, profile_id):
             result["sms_otp_entered"] = True
             await signup_page.wait_for_timeout(1200)
         else:
@@ -2720,6 +2832,33 @@ async def _handle_verification(
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
     await signup_page.wait_for_timeout(2000)
 
+    async def switch_to_phone(reason: str) -> dict:
+        """Email verification failed too many times — click "Use Phone Number
+        Instead" and run the phone -> SMS OTP path instead of failing the account."""
+        page = await _resolve_active_signup_page(signup_page, logger, profile_id)
+        await _emit_signup_progress(progress_callback, "switching_to_phone", logger, profile_id)
+        logger and logger.warning(f"[{profile_id}] {reason}; switching to phone verification.")
+        clicked = await _click_use_phone_instead(page, logger, profile_id)
+        if clicked:
+            await page.wait_for_timeout(900)
+        result["reached_verification"] = True
+        return await _handle_optional_phone_sms_verification(
+            page,
+            phone_fetcher,
+            sms_fetcher,
+            result,
+            logger,
+            profile_id,
+            username_detected_callback=username_detected_callback,
+            username_retry_provider=username_retry_provider,
+            username_state=username_state,
+            progress_callback=progress_callback,
+            resubmit_callback=resubmit_callback,
+            stall_state=stall_state,
+        )
+
+    email_verify_failures = 0
+
     stage = await _wait_for_signup_progress(
         signup_page,
         logger,
@@ -2797,10 +2936,15 @@ async def _handle_verification(
         await _emit_signup_progress(progress_callback, "filling_email_verification", logger, profile_id)
         await _fill_and_submit_verification_email(signup_page, email, logger, profile_id)
 
-        for replacement_attempt in range(1, 4):
+        for replacement_attempt in range(1, EMAIL_VERIFY_MAX_ATTEMPTS + 1):
             signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
             if not await _is_email_already_verified_error_visible(signup_page):
                 break
+            email_verify_failures += 1
+            if email_verify_failures >= EMAIL_VERIFY_MAX_ATTEMPTS:
+                return await switch_to_phone(
+                    f"email already verified after {EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)"
+                )
             if email_fetcher is None:
                 logger and logger.warning(
                     f"[{profile_id}] Snapchat rejected the verification email as already verified, "
@@ -2810,7 +2954,7 @@ async def _handle_verification(
 
             logger and logger.warning(
                 f"[{profile_id}] Snapchat rejected verification email {email!r} as already verified; "
-                f"requesting replacement email ({replacement_attempt}/3)."
+                f"requesting replacement email ({replacement_attempt}/{EMAIL_VERIFY_MAX_ATTEMPTS})."
             )
             await _emit_signup_progress(progress_callback, "fetching_replacement_email", logger, profile_id)
             replacement_email = await _fetch_email_from_provider(
@@ -2856,6 +3000,25 @@ async def _handle_verification(
         result["final_username"] = await _read_success_username(signup_page)
         await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
         return result
+    # The email path sometimes surfaces the phone step ("Use email instead" was
+    # present but not clickable, or Snapchat defaults to phone). Route to the
+    # phone -> SMS OTP handler rather than giving up.
+    if stage == "phone":
+        result["reached_verification"] = True
+        return await _handle_optional_phone_sms_verification(
+            signup_page,
+            phone_fetcher,
+            sms_fetcher,
+            result,
+            logger,
+            profile_id,
+            username_detected_callback=username_detected_callback,
+            username_retry_provider=username_retry_provider,
+            username_state=username_state,
+            progress_callback=progress_callback,
+            resubmit_callback=resubmit_callback,
+            stall_state=stall_state,
+        )
     if stage != "otp":
         logger and logger.warning(f"[{profile_id}] OTP input did not appear. Manual verification needed.")
         return result
@@ -2886,28 +3049,34 @@ async def _handle_verification(
     except Exception:
         pass
 
-    await _type_otp_code(signup_page, otp_selectors, otp, logger, profile_id)
+    otp_typed = await _type_otp_code(signup_page, otp_selectors, otp, logger, profile_id)
     await signup_page.wait_for_timeout(500)
 
-    if await _click_visible_verification_submit(signup_page, logger, profile_id):
+    if otp_typed and await _click_visible_verification_submit(signup_page, logger, profile_id):
         result["otp_entered"] = True
         logger and logger.info(f"[{profile_id}] OTP submitted.")
         await signup_page.wait_for_timeout(1200)
+    else:
+        logger and logger.warning(f"[{profile_id}] Could not verify the OTP was typed; not submitting.")
+        result["otp_entered"] = False
 
     wrong_otp_attempts = 0
     while result.get("otp_entered") and await _is_wrong_verification_code_error_visible(signup_page):
         wrong_otp_attempts += 1
-        if wrong_otp_attempts > WRONG_CODE_MAX_RECOVERY_ATTEMPTS:
+        email_verify_failures += 1
+        if email_verify_failures >= EMAIL_VERIFY_MAX_ATTEMPTS:
             logger and logger.warning(
-                f"[{profile_id}] Snapchat rejected replacement email OTP codes after "
-                f"{WRONG_CODE_MAX_RECOVERY_ATTEMPTS} recovery attempt(s)."
+                f"[{profile_id}] Snapchat rejected email OTP codes after "
+                f"{EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)."
             )
             result["otp_entered"] = False
-            break
+            return await switch_to_phone(
+                f"email OTP rejected after {EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)"
+            )
 
         logger and logger.warning(
             f"[{profile_id}] Snapchat rejected the email OTP; ordering a fresh email "
-            f"({wrong_otp_attempts}/{WRONG_CODE_MAX_RECOVERY_ATTEMPTS})."
+            f"({wrong_otp_attempts}/{EMAIL_VERIFY_MAX_ATTEMPTS})."
         )
         await _emit_signup_progress(progress_callback, "retrying_otp", logger, profile_id)
         otp, signup_page = await _recover_otp_via_back_and_new_email(
@@ -2925,9 +3094,9 @@ async def _handle_verification(
             break
 
         signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
-        await _type_otp_code(signup_page, otp_selectors, otp, logger, profile_id)
+        otp_typed = await _type_otp_code(signup_page, otp_selectors, otp, logger, profile_id)
         await signup_page.wait_for_timeout(500)
-        if await _click_visible_verification_submit(signup_page, logger, profile_id):
+        if otp_typed and await _click_visible_verification_submit(signup_page, logger, profile_id):
             result["otp_entered"] = True
             await signup_page.wait_for_timeout(1200)
         else:

@@ -9,6 +9,13 @@ from pathlib import Path
 # to rebrand the data folder.
 APP_DATA_DIR_NAME = "NyxSuite"
 
+# Cap every PowerShell / tasklist / ps subprocess. A hung Windows process
+# manager (or a slow machine) must never block the bridge watcher or a
+# Start/Stop action indefinitely — without a bound a single CIM query can hang
+# the whole dashboard. A timed-out lookup fails closed (returns "not running" /
+# empty), which is the safe outcome for the PID-identity guard.
+SUBPROCESS_TIMEOUT_SECONDS = 8.0
+
 
 def get_root_dir():
     if getattr(sys, "frozen", False):
@@ -105,6 +112,7 @@ def find_python_process_ids(script_name):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 creationflags=windows_creation_flags(),
             )
             raw = (result.stdout or "").strip()
@@ -128,6 +136,7 @@ def find_python_process_ids(script_name):
             capture_output=True,
             text=True,
             check=False,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
     except Exception:
         return []
@@ -210,6 +219,7 @@ def find_process_ids_by_names(process_names):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 creationflags=windows_creation_flags(),
             )
             return _parse_process_id_json(result.stdout)
@@ -222,6 +232,7 @@ def find_process_ids_by_names(process_names):
             capture_output=True,
             text=True,
             check=False,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
     except Exception:
         return []
@@ -264,6 +275,7 @@ def is_pid_running(pid):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 creationflags=windows_creation_flags()
             )
             return str(pid) in result.stdout
@@ -300,6 +312,7 @@ def _process_identity(pid):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 creationflags=windows_creation_flags(),
             )
             raw = (result.stdout or "").strip()
@@ -324,6 +337,7 @@ def _process_identity(pid):
             capture_output=True,
             text=True,
             check=False,
+            timeout=SUBPROCESS_TIMEOUT_SECONDS,
         )
     except Exception:
         return "", ""
@@ -402,6 +416,7 @@ def stop_process_tree(pid):
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=SUBPROCESS_TIMEOUT_SECONDS,
                 creationflags=windows_creation_flags()
             )
             return True

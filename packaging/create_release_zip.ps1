@@ -175,6 +175,7 @@ $updateConfig = @"
     "data/nyx_config.json",
     "data/nyxify_config.json",
     "data/bitmoji_models.json",
+    "data/bitmoji_outfits.json",
     "data/full_auto_usernames/*",
     "data/signup_names/*",
     "data/logs/*"

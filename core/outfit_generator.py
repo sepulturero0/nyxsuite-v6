@@ -425,7 +425,16 @@ def generate_outfit(profile_id, model="", outfit_seed=""):
         return _generate_cute_preset_outfit(rng)
 
     if outfit_style == "custom":
-        return _generate_custom_outfit(rng, runtime_config.get("outfit_custom_preset_id", ""))
+        # Prefer the operator's selected preset in the outfit config (the editor
+        # marks the active one there) so the runner uses the preset the dashboard
+        # currently shows. Fall back to the runtime config only if none is active.
+        try:
+            outfit_cfg = load_outfit_config()
+            active_id = str(outfit_cfg.get("active_custom_preset_id") or "").strip()
+        except Exception:
+            active_id = ""
+        preset_id = active_id or str(runtime_config.get("outfit_custom_preset_id", "") or "").strip()
+        return _generate_custom_outfit(rng, preset_id)
 
     if outfit_style == "default":
         available_tops = _exact_entries(_filter_blocked_outfits(outfits["tops"], BLOCKED_TOP_IDS, "top"))

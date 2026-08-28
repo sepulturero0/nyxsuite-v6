@@ -27,6 +27,36 @@ const POPUP_PORT_NAME = "nyxify-popup-live";
 const POPUP_LIVE_POLL_MS = 1500;
 const STATUS_CACHE_TTL_MS = 1000;
 const RUNNER_STATUS_CACHE_TTL_MS = 2500;
+// Cap a local-API fetch so a slow/hung bridge never keeps the popup waiting.
+const LOCAL_API_TIMEOUT_MS = 4000;
+// Short-lived config cache so per-tick calls don't hit chrome.storage.sync each
+// request.
+const LOCAL_CONFIG_CACHE_TTL_MS = 3500;
+let localConfigCache = null;
+let localConfigCacheAt = 0;
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  // AbortController may not be available in every sandbox (e.g. tests); degrade
+  // to a plain fetch rather than throwing on a slow call.
+  if (typeof AbortController === "undefined") {
+    return fetch(url, options || {});
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || LOCAL_API_TIMEOUT_MS);
+  return fetch(url, Object.assign({}, options || {}, { signal: controller.signal }))
+    .finally(() => clearTimeout(timer));
+}
+
+async function getLocalConfig() {
+  const now = Date.now();
+  if (localConfigCache && (now - localConfigCacheAt) < LOCAL_CONFIG_CACHE_TTL_MS) {
+    return localConfigCache;
+  }
+  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+  localConfigCache = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  localConfigCacheAt = now;
+  return localConfigCache;
+}
 const MAX_EMAIL_BRIDGE_BATCH = 50;
 const DEFAULT_TEMPORARY_PROFILE_NAME = "Snapchat:";
 const DEFAULT_ADSPOWER_GROUP = "Snapchat";
@@ -1051,7 +1081,19 @@ function postStatusToPopupPorts(payload) {
 
 function buildPopupStatusSignature(status) {
   try {
-    return JSON.stringify(status || {});
+    // Compact signature over only the fields the popup renders, avoiding
+    // JSON.stringify-ing the full (huge) runner status on every poll.
+    const s = status || {};
+    const bot = s.bot || {};
+    const counts = s.counts || {};
+    const cfg = s.config || {};
+    return [
+      bot.state || "", bot.detail || "",
+      counts.pending || 0, counts.running || 0,
+      counts.failed || 0, counts.done || 0,
+      counts.waiting || 0, counts.ready || 0,
+      cfg.pending_threshold || "", cfg.max_parallel_profiles || "",
+    ].join("||");
   } catch (error) {
     return `status-error:${String(error && error.message || error)}`;
   }
@@ -1940,6 +1982,56 @@ async function processBridgeActionsOnce() {
     return;
   }
 
+  // SMS / OTP first: a pending signup verification code must NOT wait behind a
+  // long email/metadata batch. Each stage is wrapped in its own try/catch so one
+  // failed request is logged and the bridge loop keeps going.
+  try {
+    const otpPayload = await callLocalNyxify("GET", "/otp/pending");
+    const otpRequest = otpPayload && otpPayload.request ? otpPayload.request : null;
+    if (otpRequest && otpRequest.row_key) {
+      const otpResponse = await snapboardFetchWithRelogin({
+        type: "NYXIFY_SNAPBOARD_ACTION",
+        action: "otp",
+        row_key: otpRequest.row_key,
+        email: otpRequest.email || "",
+      });
+      if (otpResponse.ok && otpResponse.code) {
+        await callLocalNyxify("POST", "/otp/result", {
+          row_key: otpRequest.row_key,
+          code: otpResponse.code,
+        });
+      } else if (otpResponse && !otpResponse.ok) {
+        await callLocalNyxify("POST", "/otp/result", {
+          row_key: otpRequest.row_key,
+          code: "",
+          error: otpResponse.error || "SnapBoard OTP fetch failed.",
+        });
+      }
+    }
+  } catch (error) {
+    await appendEventLog(`Nyxify OTP bridge error: ${error.message}`);
+  }
+
+  try {
+    const smsPayload = await callLocalNyxify("GET", "/sms/pending");
+    const smsRequest = smsPayload && smsPayload.request ? smsPayload.request : null;
+    if (smsRequest && smsRequest.row_key) {
+      const smsResponse = await snapboardFetchWithRelogin({
+        type: "NYXIFY_SNAPBOARD_ACTION",
+        action: "sms",
+        row_key: smsRequest.row_key,
+        phone: smsRequest.phone || "",
+      });
+      await callLocalNyxify("POST", "/sms/result", {
+        row_key: smsRequest.row_key,
+        code: smsResponse.ok ? (smsResponse.code || "") : "",
+        error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
+      });
+    }
+  } catch (error) {
+    await appendEventLog(`Nyxify SMS bridge error: ${error.message}`);
+  }
+
   try {
     const emailRequests = await collectPendingBridgeRequests("/email/pending", MAX_EMAIL_BRIDGE_BATCH);
     if (emailRequests.length) {
@@ -1988,53 +2080,6 @@ async function processBridgeActionsOnce() {
     }
   } catch (error) {
     await appendEventLog(`Nyxify phone bridge error: ${error.message}`);
-  }
-
-  try {
-    const otpPayload = await callLocalNyxify("GET", "/otp/pending");
-    const otpRequest = otpPayload && otpPayload.request ? otpPayload.request : null;
-    if (otpRequest && otpRequest.row_key) {
-      const otpResponse = await snapboardFetchWithRelogin({
-        type: "NYXIFY_SNAPBOARD_ACTION",
-        action: "otp",
-        row_key: otpRequest.row_key,
-        email: otpRequest.email || "",
-      });
-      if (otpResponse.ok && otpResponse.code) {
-        await callLocalNyxify("POST", "/otp/result", {
-          row_key: otpRequest.row_key,
-          code: otpResponse.code,
-        });
-      } else if (otpResponse && !otpResponse.ok) {
-        await callLocalNyxify("POST", "/otp/result", {
-          row_key: otpRequest.row_key,
-          code: "",
-          error: otpResponse.error || "SnapBoard OTP fetch failed.",
-        });
-      }
-    }
-  } catch (error) {
-    await appendEventLog(`Nyxify OTP bridge error: ${error.message}`);
-  }
-
-  try {
-    const smsPayload = await callLocalNyxify("GET", "/sms/pending");
-    const smsRequest = smsPayload && smsPayload.request ? smsPayload.request : null;
-    if (smsRequest && smsRequest.row_key) {
-      const smsResponse = await snapboardFetchWithRelogin({
-        type: "NYXIFY_SNAPBOARD_ACTION",
-        action: "sms",
-        row_key: smsRequest.row_key,
-        phone: smsRequest.phone || "",
-      });
-      await callLocalNyxify("POST", "/sms/result", {
-        row_key: smsRequest.row_key,
-        code: smsResponse.ok ? (smsResponse.code || "") : "",
-        error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
-      });
-    }
-  } catch (error) {
-    await appendEventLog(`Nyxify SMS bridge error: ${error.message}`);
   }
 
   try {
@@ -2491,8 +2536,7 @@ async function syncConfigToRunner(nextConfig, replaceBlocked = false) {
 }
 
 async function callLocalNyxify(method, path, payload) {
-  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
-  const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  const config = await getLocalConfig();
 
   if (!config.localApiUrl) {
     throw new Error("Nyxify local API missing.");
@@ -2509,7 +2553,7 @@ async function callLocalNyxify(method, path, payload) {
     bodyPayload.token = config.localToken;
   }
 
-  const response = await fetch(`${config.localApiUrl}${path}`, {
+  const response = await fetchWithTimeout(`${config.localApiUrl}${path}`, {
     method,
     headers,
     body: method === "GET" ? undefined : JSON.stringify(bodyPayload),

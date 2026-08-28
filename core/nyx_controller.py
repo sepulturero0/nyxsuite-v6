@@ -70,6 +70,12 @@ class NyxController:
         self.supervisor = supervisor
         self.runner = supervisor.register(self._spec())
         self._name_cache = {"at": 0.0, "value": {}, "refreshing": False}
+        # Per-product action lock: serialises start/stop/pause/resume/finish so a
+        # double click or a concurrent hotkey never races a spawn against a kill.
+        self._action_lock = threading.RLock()
+        # Config read cache keyed by file mtime — the watcher calls status every
+        # ~0.5s, so we avoid re-reading/parsing nyx_config.json each tick.
+        self._config_cache = {"mtime": None, "value": {}}
 
     def _spec(self) -> RunnerSpec:
         return RunnerSpec(
@@ -83,6 +89,25 @@ class NyxController:
             process_names=BOT_EXECUTABLE_PROCESS_NAMES,
             env_builder=self._base_env,
         )
+
+    def _cached_config(self) -> dict:
+        """Config with an mtime cache so the hot status path never re-reads
+        nyx_config.json. Falls back to a fresh read when the stat/or reload fails."""
+        try:
+            from core.nyx_runtime_config import CONFIG_PATH
+
+            try:
+                mtime = CONFIG_PATH.stat().st_mtime_ns
+            except OSError:
+                return _load_config()
+            cache = self._config_cache
+            if cache["mtime"] == mtime:
+                return cache["value"]
+            value = _load_config()
+            self._config_cache.update({"mtime": mtime, "value": value})
+            return value
+        except Exception:
+            return {}
 
     def _base_env(self) -> dict:
         env = {"TASK_DB_PATH": str(NYX_DB_PATH)}
@@ -123,6 +148,54 @@ class NyxController:
         self._name_cache.update({"at": time.monotonic(), "value": value, "refreshing": False})
 
     # ------------------------------------------------------------------ status
+    @staticmethod
+    def _counts_from(tasks) -> dict:
+        pending = sum(1 for t in tasks if t["status"] == "PENDING")
+        running = sum(1 for t in tasks if t["status"] == "RUNNING")
+        failed = sum(1 for t in tasks if t["status"] == "FAILED")
+        done = sum(1 for t in tasks if t["status"] == "DONE")
+        return {
+            "recent": len(tasks),
+            "pending": pending,
+            "running": running,
+            "failed": failed,
+            "done": done,
+        }
+
+    def _compute_bot(self, pid, paused, health, counts, config) -> dict:
+        """Derive the ``bot`` block. STARTING/STOPPING from the latched transition
+        overlay win over the (possibly stale) pid check so a Start/Stop request
+        is reflected immediately, then the SSE watcher confirms the final state."""
+        transition = self.runner.transition()
+        if transition == "starting":
+            return {"state": "starting", "detail": "Nyx is starting...", "pid": pid}
+        if transition == "stopping":
+            return {"state": "stopping", "detail": "Nyx is stopping...", "pid": pid}
+        threshold = int(config.get("pending_threshold", 10) or 10)
+        pending = counts.get("pending", 0)
+        running = counts.get("running", 0)
+        if pid:
+            if paused:
+                return {"state": "paused", "detail": f"Bot paused (PID {pid})", "pid": pid}
+            if health:
+                # AdsPower env problem is blocking the queue — say so instead of
+                # the generic "waiting", so the user knows it's not idle.
+                return {
+                    "state": "blocked",
+                    "detail": str(health.get("message") or "AdsPower is blocking the queue."),
+                    "pid": pid,
+                }
+            if running == 0 and pending < threshold:
+                return {
+                    "state": "waiting",
+                    "detail": f"Waiting for threshold ({pending}/{threshold}) (PID {pid})",
+                    "pid": pid,
+                }
+            return {"state": "running", "detail": f"Bot running in background (PID {pid})", "pid": pid}
+        if paused:
+            return {"state": "paused", "detail": "Bot paused", "pid": None}
+        return {"state": "stopped", "detail": "Bot not running", "pid": None}
+
     def status_snapshot(self) -> dict:
         tasks = self.store.list_tasks(limit=500)
         live = annotate_rows_with_open_state(tasks, ("profile_id",))
@@ -131,116 +204,131 @@ class NyxController:
             for row in tasks:
                 if not str(row.get("username") or "").strip():
                     row["username"] = name_map.get(str(row.get("profile_id") or "").strip(), "")
-        pending = sum(1 for t in tasks if t["status"] == "PENDING")
-        running = sum(1 for t in tasks if t["status"] == "RUNNING")
-        failed = sum(1 for t in tasks if t["status"] == "FAILED")
-        done = sum(1 for t in tasks if t["status"] == "DONE")
-        config = _load_config()
-        threshold = int(config.get("pending_threshold", 10) or 10)
-        pid = self.runner.resolve_pid()
-        paused = runner_flags.nyx_is_paused()
-        health = runner_flags.nyx_get_health()
-
-        if pid:
-            if paused:
-                state, detail = "paused", f"Bot paused (PID {pid})"
-            elif health:
-                # AdsPower env problem is blocking the queue — say so instead of
-                # the generic "waiting", so the user knows it's not idle.
-                state, detail = "blocked", str(health.get("message") or "AdsPower is blocking the queue.")
-            elif running == 0 and pending < threshold:
-                state, detail = "waiting", f"Waiting for threshold ({pending}/{threshold}) (PID {pid})"
-            else:
-                state, detail = "running", f"Bot running in background (PID {pid})"
-        elif paused:
-            state, detail = "paused", "Bot paused"
-        else:
-            state, detail = "stopped", "Bot not running"
-
+        counts = self._counts_from(tasks)
+        config = self._cached_config()
+        bot = self._compute_bot(
+            self.runner.resolve_pid(),
+            runner_flags.nyx_is_paused(),
+            runner_flags.nyx_get_health(),
+            counts,
+            config,
+        )
         return {
             "rows": tasks,
-            "counts": {
-                "recent": len(tasks),
-                "pending": pending,
-                "running": running,
-                "failed": failed,
-                "done": done,
-            },
-            "bot": {"state": state, "detail": detail, "pid": pid},
-            "adspower_health": health,
+            "counts": counts,
+            "bot": bot,
+            "adspower_health": runner_flags.nyx_get_health(),
             "adspower_live": live,
             "config": config,
         }
 
+    def light_status(self) -> dict:
+        """Cheap status for an action ack: bot + counts, no rows and no AdsPower
+        annotations. The SSE watcher pushes the full snapshot, so an ack never
+        builds the expensive table just to confirm the button press."""
+        tasks = self.store.list_tasks(limit=500)
+        counts = self._counts_from(tasks)
+        config = self._cached_config()
+        bot = self._compute_bot(
+            self.runner.resolve_pid(),
+            runner_flags.nyx_is_paused(),
+            runner_flags.nyx_get_health(),
+            counts,
+            config,
+        )
+        return {"bot": bot, "counts": counts, "config": config}
+
     # ---------------------------------------------------------- action handlers
     def start(self, payload=None) -> dict:
+        """Start Nyx and return a fast ack. The latched "starting" state is
+        reported immediately; the SSE watcher confirms the final state. Under the
+        per-product action lock so a double click cannot double-spawn."""
         payload = payload or {}
-        runner_flags.nyx_set_paused(False)
+        with self._action_lock:
+            runner_flags.nyx_set_paused(False)
 
-        reset_failed = payload.get("reset_failed", False) is True
-        reset_count = 0
-        if reset_failed:
+            reset_failed = payload.get("reset_failed", False) is True
+            reset_count = 0
+            if reset_failed:
+                try:
+                    reset_count = self.store.reset_failed_tasks()
+                except Exception:
+                    reset_count = 0
+
+            min_override = payload.get("min_pending_override")
+            if min_override is None and reset_count > 0:
+                min_override = 1
+
+            self.runner.mark_starting()
+            pid = None
             try:
-                reset_count = self.store.reset_failed_tasks()
-            except Exception:
-                reset_count = 0
+                pid, started = self.supervisor.start(
+                    self.NAME,
+                    force_restart=bool(payload.get("force_restart", False)),
+                    extra_env=self._start_env(min_override),
+                )
+                ack_status = self.light_status()
+            finally:
+                self.runner.clear_transition()
 
-        min_override = payload.get("min_pending_override")
-        if min_override is None and reset_count > 0:
-            min_override = 1
+            if reset_count:
+                message = f"Reset {reset_count} failed row(s) to PENDING and started Nyx."
+            elif started:
+                message = f"Bot started in background (PID {pid})."
+            else:
+                message = f"Bot already running (PID {pid})."
 
-        pid, started = self.supervisor.start(
-            self.NAME,
-            force_restart=bool(payload.get("force_restart", False)),
-            extra_env=self._start_env(min_override),
-        )
-
-        if reset_count:
-            message = f"Reset {reset_count} failed row(s) to PENDING and started Nyx."
-        elif started:
-            message = f"Bot started in background (PID {pid})."
-        else:
-            message = f"Bot already running (PID {pid})."
-
-        return {
-            "ok": True,
-            "message": message,
-            "pid": pid,
-            "started": started,
-            "reset_failed_count": reset_count,
-            "status": self.status_snapshot(),
-        }
+            return {
+                "ok": True,
+                "message": message,
+                "pid": pid,
+                "started": started,
+                "reset_failed_count": reset_count,
+                "status": ack_status,
+            }
 
     def pause(self, payload=None) -> dict:
-        runner_flags.nyx_set_paused(True)
-        return {
-            "ok": True,
-            "message": "Nyx paused. Running work may finish, but no new pending rows will start.",
-            "status": self.status_snapshot(),
-        }
+        with self._action_lock:
+            runner_flags.nyx_set_paused(True)
+            return {
+                "ok": True,
+                "message": "Nyx paused. Running work may finish, but no new pending rows will start.",
+                "status": self.light_status(),
+            }
 
     def resume(self, payload=None) -> dict:
-        result = self.start({"reset_failed": False})
-        result["message"] = "Nyx resumed."
-        return result
+        with self._action_lock:
+            result = self.start({"reset_failed": False})
+            result["message"] = "Nyx resumed."
+            return result
 
     def stop(self, payload=None) -> dict:
-        stopped = self.supervisor.stop(self.NAME)
-        runner_flags.nyx_set_paused(False)
-        return {
-            "ok": True,
-            "stopped": stopped,
-            "message": "Nyx stopped fully." if stopped else "No running Nyx bot process was found.",
-            "status": self.status_snapshot(),
-        }
+        """Stop Nyx and return a fast ack. The latched "stopping" state is
+        reported immediately; the supervisor still performs a complete
+        process-tree termination, and the SSE watcher confirms "stopped"."""
+        with self._action_lock:
+            self.runner.mark_stopping()
+            try:
+                stopped = self.supervisor.stop(self.NAME)
+                ack_status = self.light_status()
+            finally:
+                self.runner.clear_transition()
+            runner_flags.nyx_set_paused(False)
+            return {
+                "ok": True,
+                "stopped": stopped,
+                "message": "Nyx stopped fully." if stopped else "No running Nyx bot process was found.",
+                "status": ack_status,
+            }
 
     def finish_remaining(self, payload=None) -> dict:
-        runner_flags.nyx_request_flush()
-        result = self.start({"min_pending_override": 1})
-        result["message"] = (
-            "Nyx will finish the remaining pending rows even if they are below the normal start threshold."
-        )
-        return result
+        with self._action_lock:
+            runner_flags.nyx_request_flush()
+            result = self.start({"min_pending_override": 1})
+            result["message"] = (
+                "Nyx will finish the remaining pending rows even if they are below the normal start threshold."
+            )
+            return result
 
     def action_handlers(self) -> dict:
         """The /bot/<action> handlers consumed by NyxLocalApiServer.
@@ -286,7 +374,7 @@ class NyxController:
                 "ok": True,
                 "count": count,
                 "message": f"Reset {count} stuck Nyx row(s) to PENDING.",
-                "status": self.status_snapshot(),
+                "status": self.light_status(),
             }
 
         def handle_clear_completed(payload):
@@ -295,7 +383,7 @@ class NyxController:
                 "ok": True,
                 "count": count,
                 "message": f"Cleared {count} completed Nyx row(s).",
-                "status": self.status_snapshot(),
+                "status": self.light_status(),
             }
 
         def handle_close_profile(payload):

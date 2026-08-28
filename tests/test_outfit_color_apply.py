@@ -7,9 +7,13 @@ the swatch can't be matched, it falls back to the existing random colour pick an
 never raises (colour is cosmetic and must not fail a profile).
 """
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from core.bitmoji.outfit_flow import BitmojiOutfitMixin
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class _FakeLocator:
@@ -116,6 +120,44 @@ class PickConfiguredColorTests(unittest.IsolatedAsyncioTestCase):
             result = await stub.pick_configured_color_option("p1", "M", ("tops", "outfits"))
         self.assertTrue(result)
         self.assertEqual(ctx.evaluated, [None, "#123456"])
+
+    async def test_shared_outfit_preferred_color_routes_to_picker(self):
+        # A custom preset's explicit colour (source "shared_outfit") must be
+        # forwarded to the colour picker — not dropped for falling back to the
+        # model-config path or a random colour.
+        ctx = _FakeCtx(clicked=True)
+        stub = _StubColor(ctx)
+        with mock.patch("core.bitmoji_config.load_catalog_raw", return_value={"features": {}}), \
+             mock.patch("core.bitmoji_config.catalog_option", return_value=None), \
+             mock.patch("core.bitmoji_config.option_colors", return_value=[]):
+            result = await stub.pick_configured_color_option(
+                "p1", "M", ("tops",), "seed",
+                preferred_color={"hex": "#ec2020", "source": "shared_outfit"},
+                selected_option_id="801",
+            )
+        self.assertEqual(result, "RANDOM")
+        self.assertTrue(stub.random_called)
+        self.assertEqual(
+            stub.random_args,
+            ("p1", "seed", {"hex": "#ec2020", "source": "shared_outfit"}),
+        )
+
+
+class ColourApplySourceTests(unittest.TestCase):
+    def test_explicit_colour_is_authoritative_across_both_paths(self):
+        flow = (ROOT / "core" / "bitmoji" / "outfit_flow.py").read_text(encoding="utf-8")
+
+        # The configured colour is authoritative: both the active-panel and the
+        # document-wide picker click the closest swatch instead of gating on a
+        # distance tolerance and falling back to a random colour.
+        self.assertIn("return best ? best : null;", flow)
+        self.assertIn(
+            "if best_option is not None and best_distance is not None:", flow
+        )
+        # The panel-scoped picker waits (bounded) for the picker to render, so it
+        # doesn't miss the colour by clicking too early.
+        self.assertIn("_OUTFIT_ACTIVE_PANEL_COLOR_PICKER_READY", flow)
+        self.assertIn("deadline = asyncio.get_event_loop().time() + 6.0", flow)
 
 
 if __name__ == "__main__":

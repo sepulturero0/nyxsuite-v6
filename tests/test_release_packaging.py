@@ -64,3 +64,46 @@ def test_shell_release_zip_accepts_relative_output_dir(tmp_path):
     )
 
     assert (tmp_path / relative_output / "NyxSuite-v9.9.8-test.zip").exists()
+
+
+# Every user-edited data file must survive an update. The generated catalog
+# (bitmoji_catalog.json) is intentionally NOT preserved — releases may replace it.
+USER_EDITED_DATA_FILES = [
+    "data/bridge_config.json",
+    "data/nyx_config.json",
+    "data/nyxify_config.json",
+    "data/bitmoji_models.json",
+    "data/bitmoji_outfits.json",
+    "data/full_auto_usernames/",
+    "data/signup_names/",
+    "data/logs/",
+]
+
+
+def test_all_data_preserve_lists_include_user_edited_files():
+    locations = [
+        ROOT / "update_config.json",
+        ROOT / "core" / "release_updater.py",
+        ROOT / "packaging" / "create_release_zip.sh",
+        ROOT / "packaging" / "create_release_zip.ps1",
+        ROOT / "packaging" / "update_config.template.json",
+        ROOT / "packaging" / "updater.py",
+    ]
+    for location in locations:
+        text = location.read_text(encoding="utf-8")
+        for entry in USER_EDITED_DATA_FILES:
+            assert entry in text, f"{location.name} is missing preserve entry {entry}"
+
+
+def test_generated_catalog_is_explicitly_replaceable():
+    # The (huge, generated) Bitmoji catalog must NOT be in the preserve list —
+    # a release is allowed to replace it when the editor catalog changes.
+    for location in (
+        ROOT / "update_config.json",
+        ROOT / "core" / "release_updater.py",
+        ROOT / "packaging" / "updater.py",
+    ):
+        text = location.read_text(encoding="utf-8")
+        assert "data/bitmoji_catalog.json" not in text, (
+            f"{location.name} must not preserve the generated Bitmoji catalog"
+        )

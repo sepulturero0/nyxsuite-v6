@@ -14,7 +14,11 @@ Set-Location -LiteralPath $PSScriptRoot
 $appName = "Snap Bitmoji Bot"
 $pythonMinVersion = [Version]"3.10"
 $requirementsPath = Join-Path $PSScriptRoot "requirements.txt"
-$appDataRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "Nyx" } else { Join-Path $PSScriptRoot ".nyx_local" }
+# v6 line: keep every install-time path under the same "NyxSuite" namespace the
+# bridge uses (core/process_utils APP_DATA_DIR_NAME), so a machine-local venv and
+# app-data are discovered consistently and never collide with a stale v3 "Nyx"
+# tree. Change this one constant to rebrand the data folder.
+$appDataRoot = if ($env:LOCALAPPDATA) { Join-Path $env:LOCALAPPDATA "NyxSuite" } else { Join-Path $PSScriptRoot ".nyx_local" }
 $projectVenvDir = Join-Path $PSScriptRoot "venv"
 $machineLocalVenvDir = Join-Path $appDataRoot "venv"
 $venvDir = $projectVenvDir
@@ -717,6 +721,45 @@ function Start-EntryScript {
     return 0
 }
 
+function Get-FailureCategory {
+    param(
+        [string]$Message
+    )
+
+    $combined = $Message.ToLowerInvariant()
+
+    if ($combined -match "venv|virtualenv|site-packages|pip|resolution|requirement|import certifi|import playwright|mfc140|win32ui|pythonrevision|python") {
+        return "python"
+    }
+
+    if ($combined -match "already in use|only one usage|port|bind|address|socket|:8865|:8866|:8870|:8869") {
+        return "port"
+    }
+
+    if ($combined -match "denied|access is denied|permission|acl|robo|read-only|locked") {
+        return "permission"
+    }
+
+    if ($combined -match "native messaging|manifest|host.*regist|chrome.*host|register") {
+        return "native_messaging"
+    }
+
+    if ($combined -match "adspower|ads power|50325|proxy|local api|connection refused") {
+        return "adspower"
+    }
+
+    return "unknown"
+}
+
+$script:failureFixes = @{
+    python = @("Open the .bat launcher, not the .ps1, so the console stays visible.", "Allow the installer to create the machine-local venv (default: on first run).", "If pip install failed, check internet access and use `python -m pip install -r requirements.txt`.")
+    port = @("A previous Nyx Suite instance may still be running (Check the tray / Task Manager).", "Close the running instance, then run the launcher again.", "Re-check that another firewall/proxy isn't holding the local port.")
+    permission = @("Run the launcher from a folder your user can write to.", "Check that the .venv/venv and data folders are not read-only or locked.", "Temporarily disable antivirus that may be locking the project folder.")
+    native_messaging = @("Re-run the launcher once; it auto-registers the native host on startup.", "In Chrome, re-load the extension and re-run Setup & Install.", "Ensure the native host manifest path matches the installed location.")
+    adspower = @("Install/reopen AdsPower and confirm the Local API is running on the default port.", "Verify the AdsPower API key and host match in Nyx Config.", "Allow AdsPower through the firewall so the bridge can reach its Local API.")
+    unknown = @("Use the .bat launcher instead of double-clicking the .ps1 file.", "Make sure internet access is available for package installation.", "Install Python 3.10 or newer and run the launcher again.")
+}
+
 try {
     Ensure-ProjectFolders
     Initialize-VenvPathPreference
@@ -767,16 +810,23 @@ catch {
     Write-LogMessage -Level "ERROR" -Message $errorMessage
     Write-LogMessage -Level "ERROR" -Message $_.ScriptStackTrace
 
+    $category = Get-FailureCategory -Message $errorMessage
+    Write-LogMessage -Level "ERROR" -Message ("Failure category: " + $category)
+
     Write-Status "Portable launch failed." -Color "Red" -Force
 
     if (-not $Quiet) {
         Write-Host $errorMessage -ForegroundColor Red
         Write-Host ""
-        Write-Host "Common fixes:" -ForegroundColor Yellow
-        Write-Host "  1. Use the .bat launcher instead of double-clicking the .ps1 file directly."
-        Write-Host "  2. Make sure internet access is available for package installation."
-        Write-Host "  3. Reinstall AdsPower on the new Windows install if needed."
-        Write-Host "  4. If Python setup failed, install Python 3.10 or newer and run the launcher again."
+        Write-Host "Actionable fixes ($category):" -ForegroundColor Yellow
+        $i = 1
+        foreach ($fix in $script:failureFixes[$category]) {
+            Write-Host ("  {0}. {1}" -f $i, $fix) -ForegroundColor Yellow
+            $i += 1
+        }
+        if ($category -eq "unknown") {
+            Write-Host "  $i. If the fix is unclear, open the bootstrap log below."
+        }
         Write-Host ""
         Write-Host "Bootstrap log: $bootstrapLogPath" -ForegroundColor Yellow
     }

@@ -51,6 +51,12 @@ ORPHAN_SCAN_TTL_SECONDS = 3.0
 # process (e.g. chrome.exe) within a bounded window.
 PID_IDENTITY_TTL_SECONDS = 20.0
 
+# How long a (pid -> running) verdict is trusted before the next bounded
+# subprocess probe. The bridge watcher polls status every ~0.5s per product, so
+# without this every tick would shell out to PowerShell / tasklist on Windows.
+# A short TTL still catches a PID that exits within ~1s.
+LIVE_STATE_TTL_SECONDS = 0.75
+
 
 @dataclass
 class RunnerSpec:
@@ -76,6 +82,15 @@ class ManagedRunner:
         self._spawned_pids: set = set()
         # pid -> (is_ours: bool, checked_at: float) short-lived verification cache.
         self._identity_cache: dict = {}
+        # (pid, running) verdict cache — keeps the hot status path from shelling
+        # out on every 0.5s watcher tick (see LIVE_STATE_TTL_SECONDS).
+        self._live_cache = {"at": 0.0, "pid": None, "running": False}
+        # Latching "starting"/"stopping" overlay so a Start/Stop request is
+        # acknowledged immediately while the SSE watcher confirms the final state.
+        self._transition = "idle"
+        # Per-runner action lock: serialises start/stop/restart so a double click
+        # or a concurrent hotkey cannot double-spawn or interleave a kill.
+        self._lock = threading.RLock()
 
     def _pid_is_ours(self, pid: Optional[int]) -> bool:
         """Confirm ``pid`` is actually this runner (not a recycled PID).
@@ -96,6 +111,50 @@ class ManagedRunner:
         ok = pid_matches(pid, self.spec.process_names, self.spec.script_match)
         self._identity_cache[pid] = (ok, now)
         return ok
+
+    def _running_verdict(self, pid: Optional[int]) -> bool:
+        """Cached ``is_pid_running`` verdict so the hot status/SSE path does not
+        shell out (PowerShell/tasklist) on every 0.5s watcher tick.
+
+        Within :data:`LIVE_STATE_TTL_SECONDS` the last verdict is trusted; past
+        that a single bounded probe refreshes it. A timed-out probe fails closed
+        (treated as not running), which is safe for the PID-identity guard.
+        """
+        if not pid:
+            return False
+        now = time.monotonic()
+        cache = self._live_cache
+        if (
+            cache["pid"] == pid
+            and (now - float(cache.get("at") or 0.0)) < LIVE_STATE_TTL_SECONDS
+        ):
+            return cache["running"]
+        running = is_pid_running(pid)
+        cache.update({"at": now, "pid": pid, "running": running})
+        return running
+
+    # ------------------------------------------------------- transition overlay
+    def mark_starting(self) -> None:
+        self._transition = "starting"
+
+    def mark_stopping(self) -> None:
+        self._transition = "stopping"
+
+    def clear_transition(self) -> None:
+        self._transition = "idle"
+
+    def transition(self) -> str:
+        """The latched overlay state: ``"starting"``, ``"stopping"`` or ``"idle"``."""
+        return self._transition
+
+    def logical_state(self) -> str:
+        """Effective state for the UI, layering the latched transition over the
+        live process check: ``starting`` / ``stopping`` / ``running`` / ``stopped``."""
+        if self._transition == "starting":
+            return "starting"
+        if self._transition == "stopping":
+            return "stopping"
+        return "running" if self.is_running() else "stopped"
 
     def resolve_exe(self) -> Optional[Path]:
         for candidate in self.spec.exe_candidates:
@@ -123,7 +182,7 @@ class ManagedRunner:
         # we've confirmed the PID is still OUR runner and wasn't recycled onto an
         # unrelated process (see _pid_is_ours).
         pid = read_pid_file(self.spec.pid_file)
-        if pid and is_pid_running(pid) and self._pid_is_ours(pid):
+        if pid and self._running_verdict(pid) and self._pid_is_ours(pid):
             return pid
         if pid:
             # Dead, or alive but recycled onto another process — drop the stale
@@ -155,7 +214,13 @@ class ManagedRunner:
         self._pid_cache.update({"at": time.monotonic(), "pid": found, "scanning": False})
 
     def is_running(self) -> bool:
-        return self.resolve_pid() is not None
+        pid = self.resolve_pid()
+        if pid is None:
+            # Remember the "no live PID" verdict so consecutive calls don't
+            # re-read the (now-absent) pid file / re-trigger an orphan scan.
+            self._live_cache.update({"at": time.monotonic(), "pid": None, "running": False})
+            return False
+        return self._running_verdict(pid)
 
     def _build_command(self) -> list:
         exe = self.resolve_exe()
@@ -165,6 +230,11 @@ class ManagedRunner:
         return [str(python), str(self.spec.script_path)]
 
     def start(self, force_restart: bool = False, extra_env: Optional[dict] = None):
+        """Spawn the runner, serialised against Stop/Restart. Returns (pid, started)."""
+        with self._lock:
+            return self._start_locked(force_restart=force_restart, extra_env=extra_env)
+
+    def _start_locked(self, force_restart: bool = False, extra_env: Optional[dict] = None):
         """Spawn the runner. Returns (pid, started). Mirrors start_bot_process()."""
         live = [pid for pid in self._find_pids() if is_pid_running(pid)]
         existing = read_pid_file(self.spec.pid_file)
@@ -204,6 +274,11 @@ class ManagedRunner:
         return process.pid, True
 
     def stop(self) -> bool:
+        """Kill the runner process tree (serialised vs Start/Restart)."""
+        with self._lock:
+            return self._stop_locked()
+
+    def _stop_locked(self) -> bool:
         """Kill the runner process tree. Returns True if anything was stopped.
 
         Confirms every candidate actually died; a runner that survives SIGTERM
@@ -245,8 +320,9 @@ class ManagedRunner:
         return stopped
 
     def restart(self, extra_env: Optional[dict] = None):
-        self.stop()
-        return self.start(force_restart=True, extra_env=extra_env)
+        with self._lock:
+            self._stop_locked()
+            return self._start_locked(force_restart=True, extra_env=extra_env)
 
 
 class RunnerSupervisor:
@@ -279,8 +355,21 @@ class RunnerSupervisor:
         runner = self._runners.get(name)
         return bool(runner and runner.is_running())
 
+    def transition(self, name: str) -> str:
+        runner = self._runners.get(name)
+        return runner.transition() if runner else "idle"
+
+    def logical_state(self, name: str) -> str:
+        runner = self._runners.get(name)
+        return runner.logical_state() if runner else "stopped"
+
     def status(self) -> dict:
         return {
-            name: {"running": runner.is_running(), "pid": runner.resolve_pid()}
+            name: {
+                "running": runner.is_running(),
+                "pid": runner.resolve_pid(),
+                "transition": runner.transition(),
+                "state": runner.logical_state(),
+            }
             for name, runner in self._runners.items()
         }

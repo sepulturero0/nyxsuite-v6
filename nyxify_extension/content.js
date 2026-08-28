@@ -47,6 +47,17 @@
   var autoLoginAttempts = 0;
   var autoLoginLastAttemptAt = 0;
 
+  // Redacted timing diagnostics (baseline). Inert unless the page sets
+  // window.__NYX_TIMING__ = true (e.g. from the DevTools console). Logs only a
+  // label + elapsed ms — never phone numbers, emails, codes, or usernames.
+  function diagTiming(label, start) {
+    if (!window || !window.__NYX_TIMING__) return;
+    try {
+      var ms = performance.now() - start;
+      console.debug("[nyxify-timing] " + label + " | " + ms.toFixed(1) + " ms");
+    } catch (e) { /* timing is best-effort */ }
+  }
+
   function toArray(nodeList) {
     return Array.prototype.slice.call(nodeList || []);
   }
@@ -363,6 +374,7 @@
   }
 
   function sendRows() {
+    reattachScanObserver();
     getRowLimit(function (rowLimit) {
       var rows = extractRows(rowLimit);
       var statusRows = extractSnapboardStatusRows(100000);
@@ -383,8 +395,31 @@
   }
 
   function queueScan() {
+    if (document.hidden) {
+      return;
+    }
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(sendRows, ROW_SCAN_DEBOUNCE_MS);
+  }
+
+  function reattachScanObserver() {
+    if (typeof MutationObserver === "undefined") {
+      return;
+    }
+    var root = getRowRoot();
+    if (!root || root === scanObserverRoot) {
+      return;
+    }
+    scanObserverRoot = root;
+    if (scanObserver) {
+      scanObserver.disconnect();
+    }
+    scanObserver = new MutationObserver(function () {
+      if (!document.hidden) {
+        queueScan();
+      }
+    });
+    scanObserver.observe(root, { childList: true, subtree: true });
   }
 
   function getStoredConfig() {
@@ -896,36 +931,139 @@
     return "";
   }
 
-  function clickCheckCode(rowId) {
-    var button = document.querySelector('button.btn-check-code[data-check-code="' + rowId + '"]')
-      || document.querySelector('button[data-check-code="' + rowId + '"]');
-    if (!button) {
-      button = toArray(document.querySelectorAll("button")).find(function (node) {
-        var onclickText = String(node.getAttribute("onclick") || "");
-        return onclickText.indexOf("check2faCode") >= 0 && onclickText.indexOf(rowId) >= 0;
-      }) || null;
-    }
-    if (!button) {
+  function getRowEl(rowId) {
+    return document.querySelector('tr[data-id="' + rowId + '"]')
+      || document.querySelector('[data-row-id="' + rowId + '"]')
+      || getRowRoot();
+  }
+
+  function _isClickableControl(node) {
+    if (!node || node.nodeType !== 1) {
       return false;
     }
-    button.click();
-    return true;
+    if (node.disabled) {
+      return false;
+    }
+    var role = String(node.getAttribute && node.getAttribute("role") || "").toLowerCase();
+    return node.tagName === "BUTTON"
+      || node.tagName === "A"
+      || /button/.test(role)
+      || !!(node.getAttribute && node.getAttribute("onclick"));
+  }
+
+  // Row-scoped, tolerant detection of the SnapBoard "Check SMS" / "Check Code"
+  // control. Accepts a button, link, role=button, or any element whose own
+  // attributes or accessible text mark it as the check action — matched
+  // case-insensitively on onclick / text / aria-label / title. The candidate is
+  // searched inside the row (or the table row root) first, so it can never match
+  // the same-named button of a neighbouring account.
+  function _checkCodeCandidateMatches(node, kind, rowId) {
+    var attrName = kind === "sms" ? "data-check-sms" : "data-check-code";
+    var attr = normalizeText(node.getAttribute && node.getAttribute(attrName) || "");
+    var rowLower = String(rowId || "").toLowerCase();
+    if (attr && (attr === rowId || String(attr).toLowerCase() === rowLower)) {
+      return true;
+    }
+
+    var onclick = String(node.getAttribute && node.getAttribute("onclick") || "").toLowerCase();
+    var text = normalizeText(node.innerText || node.textContent || "").toLowerCase();
+    var title = normalizeText(node.getAttribute && node.getAttribute("title") || "").toLowerCase();
+    var aria = normalizeText(node.getAttribute && node.getAttribute("aria-label") || "").toLowerCase();
+
+    var keyword = kind === "sms" ? "checksms" : "check2facode";
+    var phrases = kind === "sms"
+      ? ["check sms", "sms code", "check sms code"]
+      : ["check code", "check 2fa", "verify code", "check 2fa code", "get code"];
+
+    var hasKeyword = onclick.indexOf(keyword) >= 0;
+    if (!hasKeyword) {
+      hasKeyword = phrases.some(function (phrase) {
+        return text.indexOf(phrase) >= 0 || title.indexOf(phrase) >= 0 || aria.indexOf(phrase) >= 0;
+      });
+    }
+    return hasKeyword;
+  }
+
+  function _authCheckCandidates(rowEl, kind, rowId) {
+    var selectors = [
+      'button[data-check-' + (kind === "sms" ? "sms" : "code") + '="' + rowId + '"]',
+      '[role="button"][data-check-' + (kind === "sms" ? "sms" : "code") + '="' + rowId + '"]',
+      'a[data-check-' + (kind === "sms" ? "sms" : "code") + '="' + rowId + '"]',
+      'button.btn-check-code[data-check-' + (kind === "sms" ? "sms" : "code") + '="' + rowId + '"]',
+      'button',
+      'a',
+      '[role="button"]',
+      '[onclick]',
+    ];
+    var found = [];
+    selectors.forEach(function (selector) {
+      var nodes;
+      try {
+        nodes = toArray(rowEl.querySelectorAll(selector));
+      } catch (_err) {
+        nodes = [];
+      }
+      nodes.forEach(function (node) {
+        if (found.indexOf(node) < 0 && _checkCodeCandidateMatches(node, kind, rowId)) {
+          found.push(node);
+        }
+      });
+    });
+    return found;
+  }
+
+  function _findAuthCheckButton(rowId, kind) {
+    var rowEl = getRowEl(rowId);
+    var candidates = _authCheckCandidates(rowEl, kind, rowId);
+    var clickable = candidates.filter(function (node) { return _isClickableControl(node); });
+    return clickable[0] || candidates[0] || null;
+  }
+
+  // Click a page control with scroll/focus + a full mousedown/mouseup/click
+  // sequence (reaching the page's handlers), falling back to the native .click().
+  function clickAuthElement(node) {
+    if (!node) {
+      return false;
+    }
+    try {
+      if (typeof node.scrollIntoView === "function") {
+        node.scrollIntoView({ block: "center", inline: "nearest" });
+      }
+    } catch (_err) {}
+    try {
+      if (typeof node.focus === "function") {
+        node.focus();
+      }
+    } catch (_err) {}
+    var dispatched = false;
+    try {
+      var opts = { bubbles: true, cancelable: true, view: window };
+      node.dispatchEvent(new MouseEvent("mousedown", opts));
+      node.dispatchEvent(new MouseEvent("mouseup", opts));
+      node.dispatchEvent(new MouseEvent("click", opts));
+      dispatched = true;
+    } catch (_err) {
+      dispatched = false;
+    }
+    if (!dispatched) {
+      try {
+        if (typeof node.click === "function") {
+          node.click();
+          dispatched = true;
+        }
+      } catch (_err) {
+        dispatched = false;
+      }
+    }
+    return dispatched;
+  }
+
+  function clickCheckCode(rowId) {
+    return clickAuthElement(_findAuthCheckButton(rowId, "code"));
   }
 
   function clickCheckSms(rowId) {
-    var button = document.querySelector('button.btn-check-code[data-check-sms="' + rowId + '"]')
-      || document.querySelector('button[data-check-sms="' + rowId + '"]');
-    if (!button) {
-      button = toArray(document.querySelectorAll("button")).find(function (node) {
-        var onclickText = String(node.getAttribute("onclick") || "");
-        return onclickText.indexOf("checkSms") >= 0 && onclickText.indexOf(rowId) >= 0;
-      }) || null;
-    }
-    if (!button) {
-      return false;
-    }
-    button.click();
-    return true;
+    return clickAuthElement(_findAuthCheckButton(rowId, "sms"));
   }
 
   function clickGetEmailButton(rowId) {
@@ -1871,16 +2009,19 @@
 
   async function clickAuthCodeUntilFound(rowId, timeoutMs, sms) {
     var startedAt = Date.now();
+    var diagStart = performance.now();
     var popupSnapshot = captureOtpPopupSnapshot();
     while ((Date.now() - startedAt) < timeoutMs) {
       var clicked = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
       if (clicked) {
+        diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
           rowId,
           Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
           popupSnapshot
         );
         if (latestCode) {
+          diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
           return { ok: true, code: latestCode };
         }
         if (hasNoPendingOrderToast(sms ? "phone" : "email")) {
@@ -1953,10 +2094,12 @@
         headers["X-Nyxify-Token"] = apiConfig.localToken;
       }
 
+      var dispatchStart = performance.now();
       var response = await fetch(apiConfig.localApiUrl + "/otp/pending", {
         method: "GET",
         headers: headers,
       });
+      diagTiming("snapboard.dispatch", dispatchStart);
       var payload = await response.json();
       if (!response.ok || !payload.ok || !payload.request) {
         return;
@@ -2495,13 +2638,52 @@
   }
   connectBridgePort();
 
-  var observer = new MutationObserver(queueScan);
-  observer.observe(document.documentElement || document.body, {
-    childList: true,
-    subtree: true,
-    characterData: true,
+  // Mutation observer scoped to the SnapBoard row-table area, without
+  // characterData so trivial text edits don't repeatedly trigger a full-table
+  // rescan. Reattached whenever the table root changes (e.g. on refresh).
+  var scanObserverRoot = null;
+  var scanObserver = null;
+
+  // Pause every interval poller + observer while the tab is hidden/inactive, so
+  // an idle background tab stops burning CPU/RAM; resume on visibility.
+  function pausePolls() {
+    if (otpPollTimer) { window.clearInterval(otpPollTimer); otpPollTimer = null; }
+    if (proxyRotatePollTimer) { window.clearInterval(proxyRotatePollTimer); proxyRotatePollTimer = null; }
+    if (usernameUpdatePollTimer) { window.clearInterval(usernameUpdatePollTimer); usernameUpdatePollTimer = null; }
+    if (adspowerUpdatePollTimer) { window.clearInterval(adspowerUpdatePollTimer); adspowerUpdatePollTimer = null; }
+    if (adspowerNameUpdatePollTimer) { window.clearInterval(adspowerNameUpdatePollTimer); adspowerNameUpdatePollTimer = null; }
+    if (statusUpdatePollTimer) { window.clearInterval(statusUpdatePollTimer); statusUpdatePollTimer = null; }
+    if (snapboardRefreshPollTimer) { window.clearInterval(snapboardRefreshPollTimer); snapboardRefreshPollTimer = null; }
+    if (autoFillPollTimer) { window.clearInterval(autoFillPollTimer); autoFillPollTimer = null; }
+    if (providerLockTimer) { window.clearInterval(providerLockTimer); providerLockTimer = null; }
+    if (autoLoginTimer) { window.clearInterval(autoLoginTimer); autoLoginTimer = null; }
+    if (scanObserver) { scanObserver.disconnect(); scanObserver = null; }
+  }
+
+  function resumePolls() {
+    if (document.hidden) {
+      return;
+    }
+    reattachScanObserver();
+    startAutoFillPoll();
+    startUsernameUpdatePoll();
+    startAdspowerUpdatePoll();
+    startAdspowerNameUpdatePoll();
+    startStatusUpdatePoll();
+    startSnapboardRefreshPoll();
+    startProviderLockPoll();
+    startAutoLoginPoll();
+  }
+
+  document.addEventListener("visibilitychange", function () {
+    if (document.hidden) {
+      pausePolls();
+    } else {
+      resumePolls();
+    }
   });
 
+  reattachScanObserver();
   startAutoFillPoll();
   startUsernameUpdatePoll();
   startAdspowerUpdatePoll();

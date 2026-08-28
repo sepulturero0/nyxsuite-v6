@@ -252,13 +252,26 @@ def main():
         _write_message({"ok": False, "error": f"Unknown message type: {msg_type}"})
 
 
+def _classify_failure(exc):
+    message = str(exc).lower()
+    if any(word in message for word in ("localappdata", "venv", "pystray", "playwright", "requests", "import")):
+        return "python"
+    if any(word in message for word in ("already in use", "address", "bind", "connect", "socket", "port")):
+        return "network/port"
+    if any(word in message for word in ("denied", "permission", "read-only", "ro", "locked")):
+        return "permissions"
+    if any(word in message for word in ("manifest", "register", "native", "chrome")):
+        return "native messaging"
+    return "unknown"
+
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
         # Reply with a real error instead of dying mid-handshake — otherwise
         # Chrome only reports the generic "Native host has exited". Also log the
-        # traceback so the failure can be diagnosed.
+        # traceback + an actionable category so the failure can be diagnosed.
         import traceback
 
         try:
@@ -268,6 +281,7 @@ if __name__ == "__main__":
         try:
             log_path = Path(__file__).resolve().parent / "host_error.log"
             with open(log_path, "a", encoding="utf-8") as handle:
+                handle.write(f"native host failure [{_classify_failure(exc)}]: {exc}\n")
                 handle.write(traceback.format_exc() + "\n")
         except Exception:
             pass

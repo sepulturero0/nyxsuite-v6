@@ -139,7 +139,7 @@ def version_decl(name, text):
 
 
 def test_extension_version_metadata_is_synced():
-    expected_version = "6.5.8"
+    expected_version = "6.6.0"
     version_py = read("core/version.py")
     nyx_manifest = json.loads(read("nyx_extension/manifest.json"))
     nyxify_manifest = json.loads(read("nyxify_extension/manifest.json"))

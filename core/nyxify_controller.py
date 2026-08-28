@@ -9,6 +9,8 @@ Account-creation/signup automation is untouched; this only orchestrates the
 runner process and answers queue/status queries.
 """
 
+import threading
+
 from core import runner_flags
 from core.adspower_live import annotate_rows_with_open_state
 from core.process_utils import APP_DATA_DIR, LOGS_DIR, ROOT_DIR
@@ -60,6 +62,12 @@ class NyxifyController:
         self.adspower = adspower
         self.supervisor = supervisor
         self.runner = supervisor.register(self._spec())
+        # Per-product action lock: serialises start/stop/pause/resume/etc so a
+        # double click or a concurrent hotkey never races a spawn against a kill.
+        self._action_lock = threading.RLock()
+        # Config read cache keyed by file mtime — the watcher calls status every
+        # ~0.5s, so we avoid re-reading/parsing nyxify_config.json each tick.
+        self._config_cache = {"mtime": None, "value": {}}
 
     def _spec(self) -> RunnerSpec:
         return RunnerSpec(
@@ -73,6 +81,25 @@ class NyxifyController:
             process_names=RUNNER_EXECUTABLE_PROCESS_NAMES,
             env_builder=self._base_env,
         )
+
+    def _cached_config(self) -> dict:
+        """Config with an mtime cache so the hot status path never re-reads
+        nyxify_config.json. Falls back to a fresh read when stat/load fails."""
+        try:
+            from core.nyxify_runtime_config import CONFIG_PATH
+
+            try:
+                mtime = CONFIG_PATH.stat().st_mtime_ns
+            except OSError:
+                return _load_config()
+            cache = self._config_cache
+            if cache["mtime"] == mtime:
+                return cache["value"]
+            value = _load_config()
+            self._config_cache.update({"mtime": mtime, "value": value})
+            return value
+        except Exception:
+            return {}
 
     def _base_env(self) -> dict:
         env = {
@@ -102,9 +129,8 @@ class NyxifyController:
         return env
 
     # ------------------------------------------------------------------ status
-    def status_snapshot(self) -> dict:
-        tasks = self.store.list_tasks(limit=500)
-        live = annotate_rows_with_open_state(tasks, ("adspower_profile_id", "adspower_id"))
+    @staticmethod
+    def _counts_from(tasks) -> dict:
         pending = sum(1 for r in tasks if r["status"] == "PENDING")
         waiting = sum(
             1
@@ -114,64 +140,108 @@ class NyxifyController:
         running = sum(1 for r in tasks if r["status"] == "RUNNING")
         failed = sum(1 for r in tasks if r["status"] == "FAILED")
         done = sum(1 for r in tasks if r["status"] == "DONE")
+        return {
+            "pending": pending,
+            "waiting": waiting,
+            "ready": max(0, pending - waiting),
+            "running": running,
+            "failed": failed,
+            "done": done,
+            "recent": len(tasks),
+        }
 
-        pid = self.runner.resolve_pid()
-        paused = runner_flags.nyxify_is_paused()
+    def _compute_bot(self, pid, paused) -> dict:
+        """Derive the ``bot`` block. STARTING/STOPPING from the latched transition
+        overlay win over the (possibly stale) pid check so a Start/Stop request is
+        reflected immediately, then the SSE watcher confirms the final state."""
+        transition = self.runner.transition()
+        if transition == "starting":
+            return {"state": "STARTING", "detail": "Nyxify runner is starting...", "pid": pid}
+        if transition == "stopping":
+            return {"state": "STOPPING", "detail": "Nyxify runner is stopping...", "pid": pid}
         if paused:
-            state = "PAUSED"
             detail = f"Nyxify runner is paused (PID {pid})." if pid else "Nyxify runner is paused."
-        elif pid:
-            state, detail = "RUNNING", "Nyxify runner is active."
-        else:
-            state, detail = "STOPPED", "Nyxify runner is not running."
+            return {"state": "PAUSED", "detail": detail, "pid": pid if pid else None}
+        if pid:
+            return {"state": "RUNNING", "detail": "Nyxify runner is active.", "pid": pid}
+        return {"state": "STOPPED", "detail": "Nyxify runner is not running.", "pid": None}
 
+    def status_snapshot(self) -> dict:
+        tasks = self.store.list_tasks(limit=500)
+        live = annotate_rows_with_open_state(tasks, ("adspower_profile_id", "adspower_id"))
+        pid = self.runner.resolve_pid()
         return {
             "rows": tasks,
-            "counts": {
-                "pending": pending,
-                "waiting": waiting,
-                "ready": max(0, pending - waiting),
-                "running": running,
-                "failed": failed,
-                "done": done,
-                "recent": len(tasks),
-            },
-            "bot": {"state": state, "detail": detail, "pid": pid if pid else None},
+            "counts": self._counts_from(tasks),
+            "bot": self._compute_bot(pid, runner_flags.nyxify_is_paused()),
             "adspower_live": live,
-            "config": _load_config(),
+            "config": self._cached_config(),
+        }
+
+    def light_status(self) -> dict:
+        """Cheap status for an action ack: bot + counts, no rows and no AdsPower
+        annotations. The SSE watcher pushes the full snapshot, so an ack never
+        builds the expensive table just to confirm the button press."""
+        tasks = self.store.list_tasks(limit=500)
+        return {
+            "bot": self._compute_bot(
+                self.runner.resolve_pid(), runner_flags.nyxify_is_paused()
+            ),
+            "counts": self._counts_from(tasks),
+            "config": self._cached_config(),
         }
 
     # ---------------------------------------------------------- action handlers
     def start(self, payload=None) -> dict:
-        runner_flags.nyxify_set_paused(False)
-        pid, started = self.supervisor.start(
-            self.NAME, force_restart=bool((payload or {}).get("force_restart", False))
-        )
-        return {
-            "ok": True,
-            "message": f"Nyxify runner started (PID {pid})."
-            if started
-            else f"Nyxify runner already running (PID {pid}).",
-            "status": self.status_snapshot(),
-        }
+        """Start Nyxify and return a fast ack. The latched "starting" state is
+        reported immediately; the SSE watcher confirms the final state."""
+        with self._action_lock:
+            runner_flags.nyxify_set_paused(False)
+            self.runner.mark_starting()
+            pid = None
+            try:
+                pid, started = self.supervisor.start(
+                    self.NAME, force_restart=bool((payload or {}).get("force_restart", False))
+                )
+                ack_status = self.light_status()
+            finally:
+                self.runner.clear_transition()
+            return {
+                "ok": True,
+                "message": f"Nyxify runner started (PID {pid})."
+                if started
+                else f"Nyxify runner already running (PID {pid}).",
+                "status": ack_status,
+            }
 
     def pause(self, payload=None) -> dict:
-        runner_flags.nyxify_set_paused(True)
-        return {"ok": True, "message": "Nyxify runner paused.", "status": self.status_snapshot()}
+        with self._action_lock:
+            runner_flags.nyxify_set_paused(True)
+            return {"ok": True, "message": "Nyxify runner paused.", "status": self.light_status()}
 
     def resume(self, payload=None) -> dict:
-        runner_flags.nyxify_set_paused(False)
-        pid, _started = self.supervisor.start(self.NAME, force_restart=False)
-        return {"ok": True, "message": f"Nyxify runner resumed (PID {pid}).", "status": self.status_snapshot()}
+        with self._action_lock:
+            runner_flags.nyxify_set_paused(False)
+            pid, _started = self.supervisor.start(self.NAME, force_restart=False)
+            return {"ok": True, "message": f"Nyxify runner resumed (PID {pid}).", "status": self.light_status()}
 
     def stop(self, payload=None) -> dict:
-        stopped = self.supervisor.stop(self.NAME)
-        runner_flags.nyxify_set_paused(False)
-        return {
-            "ok": True,
-            "message": "Nyxify runner stopped." if stopped else "No Nyxify runner process was found.",
-            "status": self.status_snapshot(),
-        }
+        """Stop Nyxify and return a fast ack. The latched "stopping" state is
+        reported immediately; the supervisor still performs a complete
+        process-tree termination, and the SSE watcher confirms "STOPPED"."""
+        with self._action_lock:
+            self.runner.mark_stopping()
+            try:
+                stopped = self.supervisor.stop(self.NAME)
+                ack_status = self.light_status()
+            finally:
+                self.runner.clear_transition()
+            runner_flags.nyxify_set_paused(False)
+            return {
+                "ok": True,
+                "message": "Nyxify runner stopped." if stopped else "No Nyxify runner process was found.",
+                "status": ack_status,
+            }
 
     def reset_failed(self, payload=None) -> dict:
         count = self.store.reset_failed_tasks()
@@ -179,7 +249,7 @@ class NyxifyController:
             "ok": True,
             "count": count,
             "message": f"Reset {count} failed Nyxify row(s).",
-            "status": self.status_snapshot(),
+            "status": self.light_status(),
         }
 
     def clear_queue(self, payload=None) -> dict:
@@ -188,7 +258,7 @@ class NyxifyController:
             "ok": True,
             "count": count,
             "message": f"Cleared {count} Nyxify row(s).",
-            "status": self.status_snapshot(),
+            "status": self.light_status(),
         }
 
     def delete_adspower_profile(self, payload=None) -> dict:

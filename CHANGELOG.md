@@ -1,5 +1,57 @@
 # Changelog
 
+## 6.6.0 - Performance, SMS verification, Nyxmoji accuracy, and update safety
+
+### Runner controls & timing (Phases 1-2)
+- Redacted timing diagnostics (opt-in via `NYXSUITE_TIMING=1`) for bridge startup,
+  dashboard status, and Start/Stop actions.
+- Start/Stop now acknowledge immediately and the SSE watcher confirms the final
+  state; cached runner/process state, explicit STARTING/STOPPING states, and
+  per-product action locks prevent duplicate clicks.
+- All PowerShell/tasklist calls are time-bounded; a timed-out probe fails closed.
+- Fast action acks no longer build the full 500-row status snapshot.
+
+### Dashboard performance (Phase 3)
+- Status card/tiles and the table now render independently, so bot-only SSE
+  updates don't rebuild the whole table.
+- Duplicate Start/Stop clicks are guarded and the requested transition is shown
+  immediately.
+- An aggregate `/bridge/status` cache reduces repeated full-snapshot builds.
+
+### Extension popup performance (Phase 4)
+- Popups render the last-known status on open, then refresh in the background.
+- Local-API requests are timeout-bounded, config reads are cached, and status
+  JSON signatures are compacted; the popup `/status` payload is much smaller.
+
+### RAM/CPU reduction (Phase 5)
+- The large Bitmoji catalog and outfit config are cached by modification time and
+  no longer re-parsed on every garment/colour operation.
+- SnapBoard polling pauses when the tab is hidden; the mutation observer is
+  scoped to the row table area.
+
+### Windows startup & hang recovery (Phase 6)
+- All v6 paths are unified under `NyxSuite`; the native host supports the
+  machine-local v6 venv; PowerShell/tasklist calls are bounded; actionable
+  failure logs for Python/ports/permissions/native-messaging/AdsPower.
+
+### SMS verification repair (Phase 7)
+- Check SMS/OTP detection is row-scoped and tolerant of button/link/role/text/
+  aria-label/title/case variants, with a robust page-world click.
+- SMS/OTP are served ahead of long email batches; the retrieved code is verified
+  as actually typed into Snapchat before it is submitted.
+
+### Nyxmoji accuracy (Phase 8)
+- The selected custom preset is the one the runner uses; custom garment IDs and
+  colours are preserved when the live catalog is stale; config preservation is
+  separated from runtime validity.
+- The configured garment colour is applied consistently (closest swatch) and the
+  colour picker waits for rendering.
+
+### Update data preservation (Phase 9)
+- Updates preserve `data/*.db`, `bridge_config.json`, `nyx_config.json`,
+  `nyxify_config.json`, `bitmoji_models.json`, `bitmoji_outfits.json`, usernames,
+  signup names, and logs; generated catalogs may be replaced by releases.
+
 ## 6.5.8 - Web dashboard redesign
 
 - The web dashboard was redesigned with a new topbar and tabbed navigation

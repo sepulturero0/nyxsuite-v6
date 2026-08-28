@@ -36,8 +36,11 @@ DEFAULT_SKIP_PATHS = [
 # Default patterns for files to preserve during data merge (new structure).
 DEFAULT_DATA_PRESERVE_PATHS = [
     "data/*.db",
+    "data/bridge_config.json",
     "data/nyx_config.json",
     "data/nyxify_config.json",
+    "data/bitmoji_models.json",
+    "data/bitmoji_outfits.json",
     "data/full_auto_usernames/*",
     "data/signup_names/*",
     "data/logs/*",

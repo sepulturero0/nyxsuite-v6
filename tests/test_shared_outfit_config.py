@@ -185,5 +185,70 @@ class SharedOutfitConfigTests(unittest.TestCase):
         self.assertNotEqual(first["top"]["selector"], second["top"]["selector"])
 
 
+    def test_preserve_keeps_builtin_presets_and_stale_ids(self):
+        from core.bitmoji_outfit_config import preserve_outfit_config
+
+        raw = {
+            "active_custom_preset_id": "night",
+            "custom_presets": {
+                "night": {
+                    "name": "Night Fit",
+                    "features": {
+                        "tops": {
+                            "mode": "random",
+                            "pool": ["999999"],
+                            "colors_by_option": {"999999": ["#abcdef"]},
+                        },
+                    },
+                },
+                "builtin_mix": {
+                    "name": "Mix",
+                    "features": {"tops": {"mode": "random", "pool": ["801"]}},
+                },
+            },
+        }
+
+        preserved = preserve_outfit_config(raw)
+
+        # Config preservation: builtin presets survive, and custom garment ids /
+        # colours that the (stale) live catalog no longer knows are kept verbatim.
+        self.assertIn("builtin_mix", preserved["custom_presets"])
+        night = preserved["custom_presets"]["night"]
+        self.assertIn("999999", night["features"]["tops"]["pool"])
+        self.assertEqual(
+            night["features"]["tops"]["colors_by_option"]["999999"], ["#abcdef"]
+        )
+        self.assertEqual(preserved["active_custom_preset_id"], "night")
+
+    def test_generate_prefers_active_preset_over_stale_runtime_id(self):
+        from core.outfit_generator import generate_outfit
+
+        outfit_config = {
+            "active_custom_preset_id": "night",
+            "custom_presets": {
+                "night": {
+                    "id": "night",
+                    "name": "Night Fit",
+                    "features": {
+                        "tops": {"mode": "random", "pool": ["801"]},
+                        "bottoms": {"mode": "random", "pool": ["356"]},
+                        "footwear": {"mode": "random", "pool": ["292"]},
+                    },
+                },
+            },
+        }
+
+        # The runtime config carries a stale preset id, but the editor's active
+        # preset must win so the runner uses what the dashboard shows.
+        with mock.patch("core.outfit_generator.load_nyx_config", return_value={
+            "outfit_style": "custom",
+            "outfit_custom_preset_id": "stale_missing_preset",
+        }), mock.patch("core.outfit_generator.load_outfit_config", return_value=outfit_config):
+            outfit = generate_outfit("profile-x", model="Clea", outfit_seed="seed-x")
+
+        self.assertEqual(outfit["preset_id"], "night")
+        self.assertEqual(outfit["preset_name"], "Night Fit")
+
+
 if __name__ == "__main__":
     unittest.main()

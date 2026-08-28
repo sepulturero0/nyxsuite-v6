@@ -1784,6 +1784,19 @@ class BitmojiOutfitMixin:
         if ctx is None:
             return False
 
+        # The panel-scoped picker can re-render after the garment click; wait
+        # (bounded) for a colour picker to be present so the configured colour is
+        # not skipped because it was clicked too early.
+        deadline = asyncio.get_event_loop().time() + 6.0
+        while asyncio.get_event_loop().time() < deadline:
+            await self.wait_if_paused()
+            try:
+                if await ctx.evaluate(_OUTFIT_ACTIVE_PANEL_COLOR_PICKER_READY):
+                    break
+            except Exception:
+                pass
+            await asyncio.sleep(0.25)
+
         preferred_parts = []
         preferred_hex = ""
         if isinstance(preferred_color, dict):
@@ -1856,7 +1869,11 @@ class BitmojiOutfitMixin:
                                 bestDistance = distance;
                             }
                         }
-                        return best && bestDistance <= 1600 ? best : null;
+                        // An explicit operator colour (shared_outfit) is
+                        // authoritative: click the closest available swatch rather
+                        // than dropping to a random colour, so every account using
+                        // the preset gets the configured colour consistently.
+                        return best ? best : null;
                     })();
                     const preferred = options.find((option) => {
                         if (!preferredParts.length) return false;
@@ -1945,7 +1962,10 @@ class BitmojiOutfitMixin:
                         best_option = option
                 except Exception:
                     continue
-            if best_option is not None and best_distance is not None and best_distance <= 1600:
+            # Authoritative configured colour: click the closest swatch even if it
+            # is not within the tolerance, so an explicitly configured colour is
+            # applied consistently instead of falling back to a random one.
+            if best_option is not None and best_distance is not None:
                 await best_option.scroll_into_view_if_needed(timeout=4000)
                 await self.human_delay(0.2, 0.5, kind="think")
                 await best_option.click()

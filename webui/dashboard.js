@@ -114,6 +114,7 @@ function applyProductSnapshot(p, snap) {
   state[p].health = snap.adspower_health || null;
   state[p].live = snap.adspower_live || null;
   if (snap.config) state[p].config = snap.config;
+  settleRunnerInFlight(p);
 }
 
 function applyUpdate(ev) {
@@ -126,6 +127,20 @@ function applyUpdate(ev) {
   if (ev.adspower_usage !== undefined && ev.adspower_usage !== null) state[p].usage = ev.adspower_usage;
   if (ev.adspower_health !== undefined) state[p].health = ev.adspower_health;
   if (ev.adspower_live !== undefined) state[p].live = ev.adspower_live;
+  settleRunnerInFlight(p);
+}
+
+function settleRunnerInFlight(p) {
+  // A Start/Stop latch is only released once the server confirms a real state.
+  // While it's still in a transition (or the optimistic state is unconfirmed)
+  // the runner buttons stay disabled so a duplicate click can't race a spawn.
+  const st = String(((state[p] && state[p].bot) || {}).state || "").toLowerCase();
+  if (st === "starting" || st === "stopping") return;
+  if (runnerInFlight[p]) {
+    runnerInFlight[p] = false;
+    renderSuiteRunnerButtons();
+    if (active === p) renderPanel(p);
+  }
 }
 
 function onMessage(data) {
@@ -285,6 +300,9 @@ async function callBridge(action, payload) {
 
 function render() {
   el("version").textContent = state.version ? ("v" + state.version) : "v…";
+  // The runner Start/Stop buttons live in the global sidebar dock, so keep them
+  // current on every tick regardless of the active tab (cheap).
+  renderSuiteRunnerButtons();
   if (active === "suite" || active === "nyx" || active === "nyxify") renderPanel(active);
   if (active === "banned") renderBannedPanel();
   // Settings is rendered once on tab open (see setActive); re-rendering on every
@@ -310,6 +328,12 @@ function sortRows(rows, field, dir) {
 // When nothing that affects the table has changed we skip the rebuild entirely,
 // so steady-state ticks become free.
 const panelRenderSig = {};
+// Separate memo for the status card + tiles so a row-only change (or a bot-only
+// change) does not rebuild the table, and vice-versa. This is what makes
+// steady-state SSE ticks free even though the runners update every ~0.5s.
+const statusRenderSig = {};
+// Guards against duplicate Start/Stop clicks while a request is in flight.
+const runnerInFlight = {};
 
 function suiteRows() {
   const rows = [];
@@ -363,37 +387,24 @@ function dispatchSuiteAction(def, keys) {
   });
 }
 
-function suiteSignature() {
-  const s = state.suite;
-  const rows = suiteRows();
-  return [
-    JSON.stringify(suiteBot()),
-    JSON.stringify(suiteCounts()),
-    JSON.stringify(state.nyxify.usage || {}),
-    JSON.stringify(state.nyxify.live || {}),
-    s.statusFilter || "",
-    (s.search || "").toLowerCase().trim(),
-    s.sort || "",
-    String(s.dir),
-    selected.suite || "",
-    [...s.checked].sort().join(","),
-    rows.map(r => suiteKey(r) + ":" + SUITE.columns.map(c => String(c.f(r))).join("|")).join("\n"),
-  ].join("##");
-}
-
 function renderPanel(p) {
   if (!p || p === "suite") { renderSuiteBody(); return; }
   renderProductBody(p);
 }
 
-function panelSignature(p, cfg, s) {
-  const rawRows = [...s.rows.values()];
+function productStatusSignature(p, s) {
   return [
     (s.bot && s.bot.state) || "",
     (s.bot && s.bot.detail) || "",
     p === "nyxify" ? JSON.stringify(s.usage || {}) : "",
     p === "nyxify" ? JSON.stringify(s.live || {}) : "",
     JSON.stringify(s.counts || {}),
+  ].join("##");
+}
+
+function productTableSignature(p, cfg, s) {
+  const rawRows = [...s.rows.values()];
+  return [
     s.statusFilter || "",
     (s.search || "").toLowerCase().trim(),
     s.sort || "",
@@ -404,16 +415,8 @@ function panelSignature(p, cfg, s) {
   ].join("##");
 }
 
-function renderProductBody(p) {
-  const cfg = PRODUCTS[p], s = state[p];
-
-  const sig = panelSignature(p, cfg, s);
-  const tbodyEl = el("tbody-" + p);
-  if (panelRenderSig[p] === sig && tbodyEl && tbodyEl.children.length) {
-    return;
-  }
-  panelRenderSig[p] = sig;
-
+function updateProductStatus(p, cfg) {
+  const s = state[p];
   const bs = (s.bot && s.bot.state) || "…";
   const stEl = el("state-" + p);
   if (stEl) { stEl.textContent = bs; stEl.className = "state " + bs; }
@@ -424,7 +427,6 @@ function renderProductBody(p) {
     const uEl = el("usage-nyxify");
     if (uEl) uEl.textContent = live.ready ? ("Open AdsPower profiles: " + (live.open || 0)) : "";
   }
-
   const tiles = el("tiles-" + p); tiles.innerHTML = "";
   cfg.tiles.forEach(k => {
     const d = document.createElement("button"); d.className = "tile"; d.type = "button";
@@ -442,6 +444,10 @@ function renderProductBody(p) {
     };
     tiles.appendChild(d);
   });
+}
+
+function updateProductTable(p, cfg) {
+  const s = state[p];
   buildToolbar("queue-" + p, cfg.queue, p, false);
   buildToolbar("row-" + p, cfg.row, p, true);
 
@@ -514,6 +520,27 @@ function renderProductBody(p) {
   buildGroupToolbar(p);
 }
 
+function renderProductBody(p) {
+  const cfg = PRODUCTS[p], s = state[p];
+
+  // Status card + tiles: cheap, updated only when state/counts actually changed.
+  const stSig = productStatusSignature(p, s);
+  if (statusRenderSig[p] !== stSig) {
+    statusRenderSig[p] = stSig;
+    updateProductStatus(p, cfg);
+  }
+
+  // Table: rebuilt only when the row set or view state changed — a bot-only
+  // SSE update (rows = []) no longer rebuilds the whole table.
+  const tblSig = productTableSignature(p, cfg, s);
+  const tbodyEl = el("tbody-" + p);
+  if (panelRenderSig[p] === tblSig && tbodyEl && tbodyEl.children.length) {
+    return;
+  }
+  panelRenderSig[p] = tblSig;
+  updateProductTable(p, cfg);
+}
+
 function buildToolbar(id, defs, p, isRow) {
   const bar = el(id); bar.innerHTML = "";
   if (!defs || !defs.length) { bar.style.display = "none"; return; }
@@ -565,16 +592,32 @@ function buildGroupToolbar(p) {
   });
 }
 
-function renderSuiteBody() {
+function suiteStatusSignature() {
   const s = state.suite;
+  return [
+    JSON.stringify(suiteBot()),
+    JSON.stringify(suiteCounts()),
+    JSON.stringify(state.nyxify.usage || {}),
+    JSON.stringify(state.nyxify.live || {}),
+  ].join("##");
+}
 
-  const sig = suiteSignature();
-  const tbodyEl = el("tbody-suite");
-  if (panelRenderSig.suite === sig && tbodyEl && tbodyEl.children.length) {
-    return;
-  }
-  panelRenderSig.suite = sig;
+function suiteTableSignature() {
+  const s = state.suite;
+  const rows = suiteRows();
+  return [
+    s.statusFilter || "",
+    (s.search || "").toLowerCase().trim(),
+    s.sort || "",
+    String(s.dir),
+    selected.suite || "",
+    [...s.checked].sort().join(","),
+    rows.map(r => suiteKey(r) + ":" + SUITE.columns.map(c => String(c.f(r))).join("|")).join("\n"),
+  ].join("##");
+}
 
+function updateSuiteStatus() {
+  const s = state.suite;
   const bot = suiteBot();
   const stEl = el("state-suite");
   if (stEl) { stEl.textContent = bot.state; stEl.className = "state " + bot.state; }
@@ -584,7 +627,6 @@ function renderSuiteBody() {
   const live = state.nyxify.live || {};
   if (uEl) uEl.textContent = live.ready ? ("Open AdsPower profiles: " + (live.open || 0)) : "";
 
-  // Tiles — click to filter by status (counts merged across both products)
   const counts = suiteCounts();
   const tiles = el("tiles-suite"); tiles.innerHTML = "";
   SUITE.tiles.forEach(k => {
@@ -604,6 +646,10 @@ function renderSuiteBody() {
     tiles.appendChild(d);
   });
   renderSuiteRunnerButtons();
+}
+
+function updateSuiteTable() {
+  const s = state.suite;
   buildSuiteToolbar("queue-suite", SUITE_QUEUE, "queue");
   buildSuiteToolbar("row-suite", SUITE_ROW, "row");
 
@@ -618,16 +664,12 @@ function renderSuiteBody() {
       return id.includes(q) || uname.includes(q);
     });
   }
-  // Status filter
   if (s.statusFilter) {
     const sf = s.statusFilter.toUpperCase();
     rows = rows.filter(r => String(r.status || "").toUpperCase() === sf);
   }
-
-  // Sort
   rows = sortRows(rows, s.sort, s.dir);
 
-  // Render header with checkbox + sortable columns
   const colCount = SUITE.columns.length + 1;
   const allChecked = rows.length > 0 && rows.every(r => s.checked.has(suiteKey(r)));
   const arrow = f => s.sort === f ? (s.dir === 1 ? " &#9650;" : " &#9660;") : "";
@@ -681,6 +723,63 @@ function renderSuiteBody() {
   buildSuiteGroupToolbar();
 }
 
+function renderSuiteBody() {
+  // Status card + tiles + runner buttons: cheap, updated on state/counts change.
+  const stSig = suiteStatusSignature();
+  if (statusRenderSig.suite !== stSig) {
+    statusRenderSig.suite = stSig;
+    updateSuiteStatus();
+  }
+  // Table: rebuilt only when the row set or view state changed.
+  const tblSig = suiteTableSignature();
+  const tbodyEl = el("tbody-suite");
+  if (panelRenderSig.suite === tblSig && tbodyEl && tbodyEl.children.length) {
+    return;
+  }
+  panelRenderSig.suite = tblSig;
+  updateSuiteTable();
+}
+
+function setRunnerTransition(product, action) {
+  const s = state[product];
+  if (!s) return;
+  s.bot = Object.assign({}, s.bot || {}, {
+    state: action === "start" ? "starting" : "stopping",
+    detail: action === "start" ? `${product} is starting…` : `${product} is stopping…`,
+  });
+}
+
+function runnerToggle(products, action) {
+  products.forEach(p => {
+    if (runnerInFlight[p]) return;  // ignore duplicate Start/Stop clicks
+    runnerInFlight[p] = true;
+    setRunnerTransition(p, action);      // show the request immediately
+    renderPanelForRunner(p);
+    callAction(p, action, {}).then(ack => {
+      // A failed/unreachable request must not leave the control stuck disabled.
+      if (!ack || ack.ok === false) {
+        runnerInFlight[p] = false;
+        renderPanelForRunner(p);
+      }
+      // Otherwise the latch is released by settleRunnerInFlight once the SSE
+      // stream confirms the real runner state.
+    });
+    // Safety net: never leave the button disabled forever even if SSE is down.
+    setTimeout(() => {
+      if (runnerInFlight[p]) { runnerInFlight[p] = false; renderPanelForRunner(p); }
+    }, 5000);
+  });
+}
+
+function renderPanelForRunner(p) {
+  // The suite runner buttons live in the global sidebar dock; refresh them, and
+  // refresh the currently-visible panel so the status card/tiles reflect the
+  // requested transition immediately.
+  renderSuiteRunnerButtons();
+  if (active === p) renderPanel(p);
+  else if (active === "suite") renderPanel("suite");
+}
+
 function renderSuiteRunnerButtons() {
   const bar = el("runner-suite");
   if (!bar) return;
@@ -693,16 +792,15 @@ function renderSuiteRunnerButtons() {
     { label: "Nyxify", products: ["nyxify"] },
   ].forEach(def => {
     const anyActive = def.products.some(p => isActive(stateOf(p)));
+    const inFlight = def.products.some(p => runnerInFlight[p]);
     const b = document.createElement("button");
     b.className = "btn" + (anyActive ? " bad" : " primary");
     b.classList.add("runner-start-stop");
     b.type = "button";
-    b.textContent = anyActive ? `Stop ${def.label}` : `Start ${def.label}`;
-    b.title = (anyActive ? "Stop " : "Start ") + def.label + " runner";
-    b.onclick = () => {
-      const path = anyActive ? "/bot/stop" : "/bot/start";
-      def.products.forEach(p => callAction(p, path, {}));
-    };
+    b.disabled = !!inFlight;
+    b.textContent = inFlight ? "Working…" : (anyActive ? `Stop ${def.label}` : `Start ${def.label}`);
+    b.title = (inFlight ? "Working…" : (anyActive ? "Stop " : "Start ") + def.label + " runner");
+    b.onclick = () => runnerToggle(def.products, anyActive ? "stop" : "start");
     g.appendChild(b);
   });
   bar.style.display = "flex";

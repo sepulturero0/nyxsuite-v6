@@ -297,6 +297,19 @@ DEFAULT_BASE_AVATAR = (
 
 _lock = threading.Lock()
 
+# Cache parsed JSON files (catalog, models) keyed by (path, mtime_ns). The
+# Bitmoji catalog is large; re-reading + json.load-ing it for every garment /
+# colour operation is a major CPU/memory cost in the Nyxmoji editor. The cache
+# keys on mtime so a release-replaced file is picked up immediately, while
+# steady-state operations reuse the already-parsed dictionary.
+_json_read_cache: dict = {}
+_json_read_cache_lock = threading.Lock()
+
+
+def _invalidate_json_cache() -> None:
+    with _json_read_cache_lock:
+        _json_read_cache.clear()
+
 
 def _color_to_decimal(hex_value: str) -> str | None:
     try:
@@ -383,9 +396,21 @@ def render_param_map() -> dict:
 
 def _read_json(path: Path) -> dict:
     try:
-        return json.loads(path.read_text(encoding="utf-8-sig"))
+        mtime = path.stat().st_mtime_ns
+    except OSError:
+        return {}
+    key = str(path)
+    with _json_read_cache_lock:
+        cached = _json_read_cache.get(key)
+        if cached is not None and cached[0] == mtime:
+            return cached[1]
+    try:
+        data = json.loads(path.read_text(encoding="utf-8-sig"))
     except Exception:
         return {}
+    with _json_read_cache_lock:
+        _json_read_cache[key] = (mtime, data)
+    return data
 
 
 def _normalize_catalog(data: dict) -> dict:

@@ -20,6 +20,14 @@ const SCRAPE_RUNNER_STOPPED = "stopped";
 const POPUP_PORT_NAME = "nyx-popup-live";
 const POPUP_LIVE_POLL_MS = 1100;
 const STATUS_CACHE_TTL_MS = 700;
+// Cap a local-API fetch so a slow/hung bridge never keeps the popup waiting for
+// several seconds. Any of these fetch() calls should return (error) within 4s.
+const LOCAL_API_TIMEOUT_MS = 4000;
+// Short-lived config cache so per-tick calls (status/badge, every ~1.1s) don't
+// hit chrome.storage.sync on each request.
+const LOCAL_CONFIG_CACHE_TTL_MS = 3500;
+let localConfigCache = null;
+let localConfigCacheAt = 0;
 let flushInFlight = null;
 let activeScrapeRun = null;
 let scrapeHydrationInFlight = null;
@@ -32,6 +40,29 @@ let popupStatusCache = {
   at: 0,
   status: null,
 };
+
+function fetchWithTimeout(url, options, timeoutMs) {
+  // AbortController may not be available in every sandbox (e.g. tests); degrade
+  // to a plain fetch rather than throwing on a slow call.
+  if (typeof AbortController === "undefined") {
+    return fetch(url, options || {});
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs || LOCAL_API_TIMEOUT_MS);
+  return fetch(url, Object.assign({}, options || {}, { signal: controller.signal }))
+    .finally(() => clearTimeout(timer));
+}
+
+async function getLocalConfig() {
+  const now = Date.now();
+  if (localConfigCache && (now - localConfigCacheAt) < LOCAL_CONFIG_CACHE_TTL_MS) {
+    return localConfigCache;
+  }
+  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+  localConfigCache = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  localConfigCacheAt = now;
+  return localConfigCache;
+}
 
 function normalizeConfig(config) {
   const safeConfig = config || {};
@@ -158,7 +189,24 @@ function postStatusToPopupPorts(payload) {
 
 function buildPopupStatusSignature(status) {
   try {
-    return JSON.stringify(status || {});
+    // Compact signature over only the fields the popup actually renders. Avoids
+    // repeatedly JSON.stringify-ing the full (huge) status/queue on every poll.
+    const rs = (status && status.runnerStatus) || {};
+    const bot = rs.bot || {};
+    const counts = rs.counts || {};
+    const cfg = rs.config || {};
+    const top = (status && status.config) || {};
+    return [
+      bot.state || "", bot.detail || "",
+      counts.pending || 0, counts.running || 0,
+      counts.failed || 0, counts.done || 0,
+      cfg.pending_threshold || "", cfg.max_parallel_profiles || "",
+      cfg.automation_speed || 1, cfg.hair_randomizer_enabled === true,
+      top.enabled !== false, top.rowLimit || 100,
+      (status && status.lastSync) ? (status.lastSync.message || "") : "",
+      Array.isArray(status && status.pendingEntries) ? status.pendingEntries.length : 0,
+      Array.isArray(status && status.lastSeenEntries) ? status.lastSeenEntries.length : 0,
+    ].join("||");
   } catch (error) {
     return `status-error:${String(error && error.message || error)}`;
   }
@@ -468,7 +516,7 @@ async function callLocalNyxForScrape(method, path, payload) {
     headers["X-Nyx-Token"] = config.nyxSharedSecret;
   }
 
-  const response = await fetch(`${config.nyxLocalApiUrl}${path}`, {
+  const response = await fetchWithTimeout(`${config.nyxLocalApiUrl}${path}`, {
     method,
     headers,
     body: method === "GET" ? undefined : JSON.stringify(payload || {}),
@@ -2004,8 +2052,7 @@ async function fetchAndSaveLocalToken(apiUrl) {
 }
 
 async function callLocalNyx(method, path, payload) {
-  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
-  const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  const config = await getLocalConfig();
 
   if (!config.localApiUrl) {
     throw new Error("Nyx local API missing.");
@@ -2023,7 +2070,7 @@ async function callLocalNyx(method, path, payload) {
       headers["X-Nyx-Token"] = tok;
       bodyPayload.token = tok;
     }
-    return fetch(`${config.localApiUrl}${path}`, {
+    return fetchWithTimeout(`${config.localApiUrl}${path}`, {
       method: method,
       headers: headers,
       body: method === "GET" ? undefined : JSON.stringify(bodyPayload),
@@ -2048,8 +2095,7 @@ async function callLocalNyx(method, path, payload) {
 }
 
 async function callLocalNyxify(method, path, payload) {
-  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
-  const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  const config = await getLocalConfig();
   const nyxBase = config.localApiUrl || "http://127.0.0.1:8865";
   const localApiUrl = nyxBase.replace(/:8865\b/, ":8866");
   let token = config.localToken;
@@ -2065,7 +2111,7 @@ async function callLocalNyxify(method, path, payload) {
     bodyPayload.token = token;
   }
 
-  const response = await fetch(`${localApiUrl}${path}`, {
+  const response = await fetchWithTimeout(`${localApiUrl}${path}`, {
     method,
     headers,
     body: method === "GET" ? undefined : JSON.stringify(bodyPayload),

@@ -9,9 +9,10 @@ from __future__ import annotations
 import json
 import re
 import threading
+from copy import deepcopy
 from pathlib import Path
 
-from core.bitmoji_config import catalog_option, load_catalog_raw, option_colors
+from core.bitmoji_config import CATALOG_PATH, catalog_option, load_catalog_raw, option_colors
 from core.process_utils import APP_DATA_DIR
 
 DATA_DIR = APP_DATA_DIR / "data"
@@ -198,6 +199,86 @@ def _preset_items(custom_presets: object) -> list[tuple[str, object]]:
     return []
 
 
+def _preserve_feature_selection(selection: object) -> dict | None:
+    """Keep a configured feature selection verbatim (no catalog validity check).
+
+    Configuration is preserved exactly as the operator saved it: custom garment
+    ids stay even when the live catalog is stale, and configured colours are kept
+    even if they can't be re-verified against the (possibly rotated) catalog.
+    Runtime validity is handled separately at use time (build_selector / click).
+    """
+    if not isinstance(selection, dict):
+        return None
+    mode = str(selection.get("mode") or "random").strip().lower()
+    if mode != "random":
+        return None
+    pool = _string_collection(selection.get("pool"))
+    if not pool:
+        return None
+    entry = {"mode": "random", "pool": pool}
+    raw_colors = selection.get("colors_by_option")
+    colors_by_option = {}
+    if isinstance(raw_colors, dict):
+        for option_id in pool:
+            configured = _string_collection(raw_colors.get(option_id))
+            if configured:
+                colors_by_option[option_id] = configured
+    if colors_by_option:
+        entry["colors_by_option"] = colors_by_option
+    return entry
+
+
+def preserve_outfit_config(config: object) -> dict:
+    """Normalize the structure of a saved outfit config WITHOUT dropping anything.
+
+    Unlike :func:`sanitize_outfit_config` (which validates against the live
+    catalog and discards builtin presets), this keeps builtin presets and any
+    custom garment/colour the operator configured, only making ids/names safe.
+    This is what separates *configuration preservation* from *runtime validity*.
+    """
+    raw = config if isinstance(config, dict) else {}
+    presets = {}
+
+    for index, (preset_key, preset) in enumerate(_preset_items(raw.get("custom_presets"))):
+        if not isinstance(preset, dict):
+            continue
+        preset_id = _safe_id(preset.get("id") or preset_key, f"preset_{index + 1}")
+        features = {}
+        raw_features = preset.get("features") if isinstance(preset.get("features"), dict) else {}
+        for feature in OUTFIT_FEATURES:
+            selection = _preserve_feature_selection(raw_features.get(feature))
+            if selection:
+                features[feature] = selection
+        presets[preset_id] = {
+            "id": preset_id,
+            "name": _safe_name(preset.get("name"), preset_id.replace("_", " ").title()),
+            "tuck_in": _safe_tuck(preset.get("tuck_in", True)),
+            "features": features,
+        }
+
+    if not presets:
+        presets[DEFAULT_CUSTOM_PRESET_ID] = {
+            "id": DEFAULT_CUSTOM_PRESET_ID,
+            "name": "Custom",
+            "tuck_in": True,
+            "features": {},
+        }
+
+    active = _safe_id(
+        raw.get("active_custom_preset_id") or raw.get("activePresetId") or raw.get("active"),
+        "",
+    )
+    if active and active not in presets and not active.startswith(BUILTIN_PRESET_PREFIX):
+        active = ""
+    if not active:
+        active = DEFAULT_CUSTOM_PRESET_ID if DEFAULT_CUSTOM_PRESET_ID in presets else next(iter(presets), "")
+
+    return {
+        "active_custom_preset_id": active,
+        "custom_presets": presets,
+    }
+
+
 def sanitize_outfit_config(config: object, catalog: dict | None = None) -> dict:
     source = load_catalog_raw() if catalog is None else catalog
     raw = config if isinstance(config, dict) else {}
@@ -237,8 +318,28 @@ def sanitize_outfit_config(config: object, catalog: dict | None = None) -> dict:
     }
 
 
+def _mtime_ns(path: Path) -> int:
+    try:
+        return path.stat().st_mtime_ns
+    except OSError:
+        return 0
+
+
+# load_outfit_config() is rebuilt on every garment/colour operation; cache the
+# sanitised result keyed on the outfits + catalog mtimes so a steady-state edit
+# session never re-reads/re-sanitises the config. A deepcopy is returned so
+# callers never mutate the shared cache.
+_outfit_cache = {"key": None, "value": None}
+
+
 def load_outfit_config() -> dict:
-    config = sanitize_outfit_config(_read_json(OUTFITS_PATH))
+    key = (_mtime_ns(OUTFITS_PATH), _mtime_ns(CATALOG_PATH))
+    if _outfit_cache["value"] is not None and _outfit_cache["key"] == key:
+        return deepcopy(_outfit_cache["value"])
+    # Preserve the operator's config exactly (builtin presets + custom garment
+    # ids/colours) even if the live catalog is stale; runtime validity is checked
+    # later at use time.
+    config = preserve_outfit_config(_read_json(OUTFITS_PATH))
     presets = config.setdefault("custom_presets", {})
     if not presets:
         presets[DEFAULT_CUSTOM_PRESET_ID] = {
@@ -251,15 +352,16 @@ def load_outfit_config() -> dict:
         presets.setdefault(preset_id, preset)
     if not config.get("active_custom_preset_id"):
         config["active_custom_preset_id"] = DEFAULT_CUSTOM_PRESET_ID
-    return config
+    _outfit_cache.update({"key": key, "value": config})
+    return deepcopy(config)
 
 
 def save_outfit_config(config: object) -> dict:
-    sanitized = sanitize_outfit_config(config)
+    preserved = preserve_outfit_config(config)
     with _lock:
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        OUTFITS_PATH.write_text(json.dumps(sanitized, indent=2), encoding="utf-8")
-    return sanitized
+        OUTFITS_PATH.write_text(json.dumps(preserved, indent=2), encoding="utf-8")
+    return preserved
 
 
 def get_custom_preset(config: dict, preset_id: str = "") -> dict | None:

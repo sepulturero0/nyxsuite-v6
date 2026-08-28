@@ -32,6 +32,7 @@ from core.agent_token import get_or_create_token
 from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
 from core.runner_supervisor import RunnerSupervisor
+from core.timing_diag import elapsed, log_timing, now
 from core.webui_server import WebDashboardServer
 
 SINGLE_INSTANCE_PORT = int(os.getenv("NYXSUITE_BRIDGE_PORT", "8869"))
@@ -99,6 +100,7 @@ class BridgeApp:
 
     def build(self):
         _ensure_data_dirs()
+        start = now()
         from core.adspower import AdsPowerManager
         from core.nyx_controller import NyxController
         from core.nyxify_controller import NyxifyController
@@ -109,9 +111,10 @@ class BridgeApp:
         self.adspower = AdsPowerManager()
         self.nyx = NyxController(self.supervisor, adspower=self.adspower)
         self.nyxify = NyxifyController(self.supervisor, adspower=self.adspower)
-        pass
+        log_timing("bridge.build", start, "bridge")
 
     def start_servers(self):
+        start = now()
         from core.nyx_local_api import NyxLocalApiServer
         from core.nyxify_local_api import NyxifyLocalApiServer
 
@@ -125,7 +128,7 @@ class BridgeApp:
                 host="127.0.0.1",
                 port=NYX_API_PORT,
                 token=os.getenv("NYX_LOCAL_API_TOKEN") or self.token,
-                status_provider=self.nyx.status_snapshot,
+                status_provider=self.nyx.light_status,
                 action_handlers=self.nyx.action_handlers(),
             )
             self.nyx_api.start()
@@ -139,7 +142,7 @@ class BridgeApp:
                 host="127.0.0.1",
                 port=NYXIFY_API_PORT,
                 token=os.getenv("NYXIFY_LOCAL_API_TOKEN") or self.token,
-                status_provider=self.nyxify.status_snapshot,
+                status_provider=self.nyxify.light_status,
                 action_handlers=self.nyxify.action_handlers(),
             )
             self.nyxify_api.start()
@@ -168,6 +171,7 @@ class BridgeApp:
             })
         except Exception as exc:
             log(f"Ctrl+F7/F8 stop/start hotkeys unavailable: {exc}")
+        log_timing("bridge.start_servers", start, "bridge")
 
     def _bridge_actions(self) -> dict:
         return {
@@ -998,8 +1002,10 @@ def main():
             log(f"update watchdog skipped: {exc}")
 
         app = BridgeApp()
+        startup_marker = now()
         app.build()
         app.start_servers()
+        log_timing("bridge.startup", startup_marker, "bridge")
         log("Nyx Suite bridge ready.")
         app.run()
     finally:

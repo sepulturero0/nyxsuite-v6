@@ -16,6 +16,21 @@ let popupSettingsSaveTimer = null;
 let popupSettingsDirty = false;
 let bitmojiIndicatorsVisible = false;
 const DAILY_ROWS_AUTO_REFRESH_MS = 15000;
+// Last-known runner status, persisted by the popup on each successful refresh so
+// the next open can paint an immediate "connected/running" card before the live
+// refresh lands. Kept tiny (runnerStatus is now a compact bot+counts+config).
+const LAST_RUNNER_STATUS_KEY = "nyxLastRunnerStatus";
+
+// Redacted timing diagnostics (baseline). Inert unless window.__NYX_TIMING__ is
+// set from the DevTools console. Logs only a label + ms — never credentials.
+function diagTiming(label, start) {
+  if (!window || !window.__NYX_TIMING__) return;
+  try {
+    console.debug("[nyx-timing] " + label + " | " + (performance.now() - start).toFixed(1) + " ms");
+  } catch (e) {
+    /* best-effort */
+  }
+}
 
 function setHeaderRefreshLoading(isLoading) {
   const refreshButton = document.getElementById("headerRefreshButton");
@@ -882,9 +897,34 @@ const runnerStatus = safeStatus.runnerStatus || {};
   }
   renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
   renderNyxScrapeSection(scrapeStatus);
+  persistLastRunnerStatus(runnerStatus);
   if (!latestDailyRows.length || Date.now() - lastDailyRowsRefreshAt > DAILY_ROWS_AUTO_REFRESH_MS) {
     maybeAutoRefreshDailyRows(false);
   }
+}
+
+// Persist the last-known runner status so a future popup open can paint it
+// immediately instead of waiting for the first live refresh. Fire-and-forget.
+function persistLastRunnerStatus(runnerStatus) {
+  if (!runnerStatus || (!runnerStatus.bot && !runnerStatus.unavailable)) return;
+  try {
+    chrome.storage.local.set({
+      [LAST_RUNNER_STATUS_KEY]: { runnerStatus, at: Date.now() },
+    });
+  } catch (error) {
+    /* storage is best-effort */
+  }
+}
+
+// Paint the last-known cached status immediately on open, then the live refresh
+// overwrites it. Falls back to the disconnected hint if nothing was cached.
+function renderStoredRunnerStatus() {
+  chrome.storage.local.get(LAST_RUNNER_STATUS_KEY, (data) => {
+    const entry = data && data[LAST_RUNNER_STATUS_KEY];
+    if (entry && entry.runnerStatus) {
+      renderRunnerStatus(entry.runnerStatus);
+    }
+  });
 }
 
 function refreshPopupStatus(statusMessage, options = {}) {
@@ -893,7 +933,9 @@ function refreshPopupStatus(statusMessage, options = {}) {
     setPrimaryStatus(statusMessage, 1500);
   }
 
+  const diagStart = performance.now();
   chrome.runtime.sendMessage({ type: "NYX_GET_STATUS", force }, (response) => {
+    diagTiming("popup.status", diagStart);
     if (!response || !response.ok) {
       updateBotStateIndicator({ unavailable: true });
       setPrimaryStatus((response && response.error) || "Could not load Nyx status.", 2500);
@@ -1647,5 +1689,6 @@ checkExtensionReload();
 
 document.getElementById("runnerStatusCard").open = false;
 syncBitmojiShowButtonState();
+renderStoredRunnerStatus();
 connectLiveStatus();
 maybeAutoRefreshDailyRows(true);
