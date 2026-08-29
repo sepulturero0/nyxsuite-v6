@@ -9,6 +9,18 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.2
+
+- Restored Auto-Fill Row, Full Auto username updates, and SnapBoard bridge
+  polling while the SnapBoard tab is backgrounded.
+- Prevented a late old-page disconnect from removing the replacement bridge
+  after a SnapBoard reload.
+- Check Code and Check SMS now retry through temporary row re-renders and
+  ignore stale codes after replacement email/phone requests.
+- Enabling Full Auto rescans already-loaded SnapBoard rows.
+- Fixed custom outfit colors by using Bitmoji's shared color wheel outside the
+  selected garment panel.
+
 ### NyxSuite v6.6.1
 
 - Fixed malformed Nyx and Nyxify Start/Stop dashboard requests.

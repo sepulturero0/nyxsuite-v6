@@ -2094,9 +2094,12 @@ class BitmojiOutfitMixin:
             and bool(str(preferred_color.get("hex") or "").strip())
         )
         if preferred_hex_requested and str(preferred_color.get("source") or "") == "shared_outfit":
+            # The live scanner captures this as one global wheel shared by all
+            # garment panels, so do not require the picker to be nested in the
+            # active garment container.
             return await self.pick_random_color_option(
                 profile_id, outfit_seed, preferred_color=preferred_color,
-                active_panel_only=selected_item_is_verified_color_capable,
+                active_panel_only=False,
             )
         try:
             from core.bitmoji_config import load_models as _load_models, resolve_option_color

@@ -50,6 +50,7 @@ class _StubColor(BitmojiOutfitMixin):
         self._ctx = ctx
         self.random_called = False
         self.random_args = None
+        self.random_active_panel_only = None
 
     async def wait_if_paused(self):
         return None
@@ -64,6 +65,7 @@ class _StubColor(BitmojiOutfitMixin):
                                        active_panel_only=False, ctx=None):
         self.random_called = True
         self.random_args = (profile_id, outfit_seed, preferred_color)
+        self.random_active_panel_only = active_panel_only
         return "RANDOM"
 
 
@@ -141,6 +143,22 @@ class PickConfiguredColorTests(unittest.IsolatedAsyncioTestCase):
             stub.random_args,
             ("p1", "seed", {"hex": "#ec2020", "source": "shared_outfit"}),
         )
+        self.assertFalse(stub.random_active_panel_only)
+
+    async def test_shared_outfit_color_uses_global_wheel_when_catalog_knows_item(self):
+        ctx = _FakeCtx(clicked=True)
+        stub = _StubColor(ctx)
+        with mock.patch("core.bitmoji_config.load_catalog_raw", return_value={"features": {}}), \
+             mock.patch("core.bitmoji_config.catalog_option", return_value={"colors_verified": True}), \
+             mock.patch("core.bitmoji_config.option_colors", return_value=["#ec2020"]):
+            result = await stub.pick_configured_color_option(
+                "p1", "M", ("tops",), "seed",
+                preferred_color={"hex": "#ec2020", "source": "shared_outfit"},
+                selected_option_id="801",
+            )
+
+        self.assertEqual(result, "RANDOM")
+        self.assertFalse(stub.random_active_panel_only)
 
 
 class ColourApplySourceTests(unittest.TestCase):

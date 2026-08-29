@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Nyx v6",
-  "version": "6.6.1",
-  "version_name": "6.6.1",
+  "version": "6.6.2",
+  "version_name": "6.6.2",
   "description": "Detect AdsPower IDs and models from SnapBoard and sync them into the Nyx queue.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAn4rJAw4cYzbtKcLYLptvJq7IxK5JqBJwMMn4mI+XmESm7RThhj4PPBFyqnxHdmydPEVXvKbypJfWhDMbuDjXAXf7kB5aQCPZHXzea7nhcaBPhmXAblWVez5C1ynx//pOFVab3tY9/kLtCCMRnrEbHo49TA286SuCwbhHe1aYbvhXnNu/crT70tm7SVGnRYsu5XjwitgfjhcKChIb1IfHcdrd/tRFn148Ra8NQfNGjfa+iT4dUEywVGacEp8lC96zGMen3+mOg3zzYkqRI7QkveZHAVXdTHs9RZ5Phc/dFGnIi75ghpFUnXyJInn/+UgAOaDICW4n58Vb+RGLB0wadQIDAQAB",
   "permissions": [

@@ -548,6 +548,36 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertEqual(dispatcher_for('action: "otp"'), "snapboardFetchWithRelogin")
         self.assertEqual(dispatcher_for('action: "sms"'), "snapboardFetchWithRelogin")
 
+    def test_background_does_not_drop_new_port_after_snapboard_reload(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+
+        # The old port can disconnect after the reloaded page has already
+        # connected. Its callback must not delete that replacement port.
+        self.assertIn("if (snapboardPorts.get(tabId) === port)", background)
+
+    def test_snapboard_automation_continues_when_tab_is_backgrounded(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        # Auto-Fill, Full Auto username updates, and bridge refresh polling all
+        # run while the SnapBoard tab is not foregrounded. The 6.6.0 visibility
+        # pause stopped all of them until the page was revisited.
+        self.assertNotIn("document.hidden", content)
+        self.assertIn("scanObserver.observe(root, { childList: true, subtree: true, characterData: true });", content)
+
+    def test_replacement_code_check_retries_until_the_fetch_window(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        check_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split(
+            "async function rotateProxyUntilChanged", 1
+        )[0]
+
+        # A replacement request can temporarily remove the Check Code/SMS
+        # control while SnapBoard re-renders. Do not fail after the old 2.5s
+        # click interval; keep retrying and ignore the previous row code.
+        self.assertIn("var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);", check_fn)
+        self.assertIn("var rowCode = getOtpTextForRow(rowId);", content)
+        self.assertIn("var rowCode = getSmsTextForRow(rowId);", content)
+        self.assertNotIn("Date.now() - startedAt) >= OTP_CLICK_RETRY_INTERVAL_MS", check_fn)
+
     def test_snapboard_refresh_bridge_is_wired_in_background_and_content(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")

@@ -1206,7 +1206,11 @@ chrome.runtime.onConnect.addListener((port) => {
   snapboardPorts.set(tabId, port);
   ensureBridgeLoop();
   port.onDisconnect.addListener(() => {
-    snapboardPorts.delete(tabId);
+    // A reload can connect the new content script before the old port's
+    // disconnect event arrives. Never let that late event delete the live port.
+    if (snapboardPorts.get(tabId) === port) {
+      snapboardPorts.delete(tabId);
+    }
   });
 });
 

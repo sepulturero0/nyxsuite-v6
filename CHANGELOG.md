@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.6.2 - SnapBoard bridge and Bitmoji outfit fixes
+
+### SnapBoard automation
+- Restored Auto-Fill Row, Full Auto username updates, and bridge polling while
+  the SnapBoard tab is backgrounded.
+- Prevented a late disconnect from the previous page from removing the live
+  bridge after a SnapBoard reload.
+- Check Code and Check SMS now keep retrying through a temporary row re-render
+  and ignore the code displayed before a replacement email or phone request.
+- Enabling Full Auto now rescans rows that were already loaded on SnapBoard.
+
+### Bitmoji custom outfits
+- Custom outfit colors now use Bitmoji's shared color wheel, which is rendered
+  outside the selected garment panel, and apply the configured closest swatch.
+
 ## 6.6.1 - Runner and update control fixes
 
 ### Dashboard controls

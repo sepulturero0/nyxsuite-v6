@@ -395,9 +395,6 @@
   }
 
   function queueScan() {
-    if (document.hidden) {
-      return;
-    }
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(sendRows, ROW_SCAN_DEBOUNCE_MS);
   }
@@ -415,11 +412,9 @@
       scanObserver.disconnect();
     }
     scanObserver = new MutationObserver(function () {
-      if (!document.hidden) {
-        queueScan();
-      }
+      queueScan();
     });
-    scanObserver.observe(root, { childList: true, subtree: true });
+    scanObserver.observe(root, { childList: true, subtree: true, characterData: true });
   }
 
   function getStoredConfig() {
@@ -1877,7 +1872,7 @@
     });
   }
 
-  function waitForOtpCode(rowId, timeoutMs, popupSnapshot) {
+  function waitForOtpCode(rowId, timeoutMs, popupSnapshot, previousCode) {
     return new Promise(function (resolve) {
       var startedAt = Date.now();
       var observer = null;
@@ -1899,7 +1894,12 @@
       }
 
       function checkNow() {
-        var code = getOtpTextForRow(rowId) || getNewOtpPopupCode(popupSnapshot);
+        var rowCode = getOtpTextForRow(rowId);
+        var popupCode = getNewOtpPopupCode(popupSnapshot);
+        var code = rowCode || popupCode;
+        if (code && previousCode && code === previousCode) {
+          code = popupCode && popupCode !== previousCode ? popupCode : "";
+        }
         if (code) {
           cleanup(code);
           return true;
@@ -1938,7 +1938,7 @@
     });
   }
 
-  function waitForSmsCode(rowId, timeoutMs, popupSnapshot) {
+  function waitForSmsCode(rowId, timeoutMs, popupSnapshot, previousCode) {
     return new Promise(function (resolve) {
       var startedAt = Date.now();
       var observer = null;
@@ -1960,7 +1960,12 @@
       }
 
       function checkNow() {
-        var code = getSmsTextForRow(rowId) || getNewOtpPopupCode(popupSnapshot);
+        var rowCode = getSmsTextForRow(rowId);
+        var popupCode = getNewOtpPopupCode(popupSnapshot);
+        var code = rowCode || popupCode;
+        if (code && previousCode && code === previousCode) {
+          code = popupCode && popupCode !== previousCode ? popupCode : "";
+        }
         if (code) {
           cleanup(code);
           return true;
@@ -2011,6 +2016,7 @@
     var startedAt = Date.now();
     var diagStart = performance.now();
     var popupSnapshot = captureOtpPopupSnapshot();
+    var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);
     while ((Date.now() - startedAt) < timeoutMs) {
       var clicked = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
       if (clicked) {
@@ -2018,7 +2024,8 @@
         var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
           rowId,
           Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
-          popupSnapshot
+          popupSnapshot,
+          previousCode
         );
         if (latestCode) {
           diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
@@ -2035,17 +2042,10 @@
         }
         await sleep(300);
       } else {
-        // Never proceed without having actually clicked the check button; fail
-        // fast when it can't be found/clicked instead of burning the window.
+        // The row can be re-rendering after a replacement email/number request.
+        // Keep looking for the control during the same fetch window instead of
+        // turning that transient absence into a permanent verification failure.
         await sleep(500);
-        if ((Date.now() - startedAt) >= OTP_CLICK_RETRY_INTERVAL_MS) {
-          return {
-            ok: false,
-            error: sms
-              ? "Check SMS button not found on SnapBoard row."
-              : "Check Code button not found on SnapBoard row.",
-          };
-        }
       }
     }
     return {
@@ -2629,6 +2629,10 @@
     configCache = changes[CONFIG_KEY].newValue || {};
     configCacheAt = Date.now();
     scheduleProviderLock();
+    // Re-scan existing rows when Full Auto is enabled after the board has
+    // already loaded; otherwise no DOM mutation would trigger the username
+    // replacement request.
+    queueScan();
   });
 
   if (document.readyState === "loading") {
@@ -2638,50 +2642,10 @@
   }
   connectBridgePort();
 
-  // Mutation observer scoped to the SnapBoard row-table area, without
-  // characterData so trivial text edits don't repeatedly trigger a full-table
-  // rescan. Reattached whenever the table root changes (e.g. on refresh).
+  // Mutation observer scoped to the SnapBoard row-table area. Reattached
+  // whenever the table root changes (e.g. on refresh).
   var scanObserverRoot = null;
   var scanObserver = null;
-
-  // Pause every interval poller + observer while the tab is hidden/inactive, so
-  // an idle background tab stops burning CPU/RAM; resume on visibility.
-  function pausePolls() {
-    if (otpPollTimer) { window.clearInterval(otpPollTimer); otpPollTimer = null; }
-    if (proxyRotatePollTimer) { window.clearInterval(proxyRotatePollTimer); proxyRotatePollTimer = null; }
-    if (usernameUpdatePollTimer) { window.clearInterval(usernameUpdatePollTimer); usernameUpdatePollTimer = null; }
-    if (adspowerUpdatePollTimer) { window.clearInterval(adspowerUpdatePollTimer); adspowerUpdatePollTimer = null; }
-    if (adspowerNameUpdatePollTimer) { window.clearInterval(adspowerNameUpdatePollTimer); adspowerNameUpdatePollTimer = null; }
-    if (statusUpdatePollTimer) { window.clearInterval(statusUpdatePollTimer); statusUpdatePollTimer = null; }
-    if (snapboardRefreshPollTimer) { window.clearInterval(snapboardRefreshPollTimer); snapboardRefreshPollTimer = null; }
-    if (autoFillPollTimer) { window.clearInterval(autoFillPollTimer); autoFillPollTimer = null; }
-    if (providerLockTimer) { window.clearInterval(providerLockTimer); providerLockTimer = null; }
-    if (autoLoginTimer) { window.clearInterval(autoLoginTimer); autoLoginTimer = null; }
-    if (scanObserver) { scanObserver.disconnect(); scanObserver = null; }
-  }
-
-  function resumePolls() {
-    if (document.hidden) {
-      return;
-    }
-    reattachScanObserver();
-    startAutoFillPoll();
-    startUsernameUpdatePoll();
-    startAdspowerUpdatePoll();
-    startAdspowerNameUpdatePoll();
-    startStatusUpdatePoll();
-    startSnapboardRefreshPoll();
-    startProviderLockPoll();
-    startAutoLoginPoll();
-  }
-
-  document.addEventListener("visibilitychange", function () {
-    if (document.hidden) {
-      pausePolls();
-    } else {
-      resumePolls();
-    }
-  });
 
   reattachScanObserver();
   startAutoFillPoll();
