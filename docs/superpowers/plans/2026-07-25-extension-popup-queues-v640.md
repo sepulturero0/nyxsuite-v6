@@ -214,7 +214,7 @@ Run:
 
 ```bash
 gh release create v6.4.0 dist/NyxSuite-v6.4.0.zip \
-  --repo jaymaroldan026/nyxsuite-v6 \
+  --repo sepulturero0/nyxsuite-v6 \
   --title "NyxSuite v6.4.0" \
   --notes-file /tmp/nyxsuite-v6.4.0-notes.md
 ```

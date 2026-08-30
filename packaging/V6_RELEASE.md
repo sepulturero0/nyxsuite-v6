@@ -3,7 +3,7 @@
 > **Current version:** see `core/version.py` and `VERSION`.
 
 Nyx Suite v6 is published from one public GitHub repository:
-`jaymaroldan026/nyxsuite-v6`.
+`sepulturero0/nyxsuite-v6`.
 
 The same repo hosts:
 
@@ -16,7 +16,7 @@ The same repo hosts:
 1. Create or reuse the repo:
 
    ```bash
-   gh repo create jaymaroldan026/nyxsuite-v6 --public --source . --remote origin
+   gh repo create sepulturero0/nyxsuite-v6 --public --source . --remote origin
    ```
 
 2. Install dependencies:
@@ -44,13 +44,13 @@ powershell -ExecutionPolicy Bypass -File .\packaging\create_release_zip.ps1 -Ver
 ```
 
 Both scripts generate `NyxSuite-v<version>.zip` with `update_config.json`
-pointing at `jaymaroldan026/nyxsuite-v6`.
+pointing at `sepulturero0/nyxsuite-v6`.
 
 ## Publish
 
 ```bash
 gh release create v<version> dist/NyxSuite-v<version>.zip `
-  --repo jaymaroldan026/nyxsuite-v6 `
+  --repo sepulturero0/nyxsuite-v6 `
   --title "NyxSuite v<version>" `
   --notes "Describe the user-facing changes."
 ```

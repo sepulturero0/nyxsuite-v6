@@ -133,7 +133,7 @@ echo "  + VERSION ($VERSION)"
 cat > "$STAGE/update_config.json" << 'JSONEOF'
 {
   "app": "nyxsuite",
-  "repo": "jaymaroldan026/nyxsuite-v6",
+  "repo": "sepulturero0/nyxsuite-v6",
   "asset_pattern": "NyxSuite-v*.zip",
   "exe_to_relaunch": "",
   "data_preserve_paths": [
@@ -194,4 +194,4 @@ echo "[create_release_zip] Done: $ZIP_PATH"
 echo "[create_release_zip] Size: ${SIZE} KB"
 echo ""
 echo "Upload to GitHub Releases:"
-echo "  gh release upload $LABEL '$ZIP_PATH' --repo jaymaroldan026/nyxsuite-v6"
+echo "  gh release upload $LABEL '$ZIP_PATH' --repo sepulturero0/nyxsuite-v6"

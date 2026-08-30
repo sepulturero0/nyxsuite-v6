@@ -916,7 +916,7 @@
 ## 6.0.0 — Public v6 source and release line
 
 - Rebrands source-visible older line labels to v6.
-- Uses the public `jaymaroldan026/nyxsuite-v6` repo for both source and dashboard update releases.
+- Uses the public `sepulturero0/nyxsuite-v6` repo for both source and dashboard update releases.
 - Nyxify signup now uses each SnapBoard row's Password column, with the old default password retained only as a blank-row fallback.
 - Keeps the no-API AdsPower GUI automation path for Windows and macOS.
 

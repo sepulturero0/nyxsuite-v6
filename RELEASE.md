@@ -1,7 +1,7 @@
 # Nyx Suite v6 Release Guide
 
 Nyx Suite v6 uses a single public GitHub repository for source and update
-assets: `jaymaroldan026/nyxsuite-v6`.
+assets: `sepulturero0/nyxsuite-v6`.
 
 The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
@@ -517,7 +517,7 @@ For a new version:
 git tag v<version> HEAD
 git push origin refs/tags/v<version>
 gh release create v<version> dist/NyxSuite-v<version>.zip \
-  --repo jaymaroldan026/nyxsuite-v6 \
+  --repo sepulturero0/nyxsuite-v6 \
   --title "NyxSuite v<version>" \
   --notes "Describe the user-facing changes."
 ```
@@ -528,7 +528,7 @@ For an explicitly authorized same-version rebuild:
 git tag -f v<version> HEAD
 git push origin refs/tags/v<version> --force
 gh release upload v<version> dist/NyxSuite-v<version>.zip \
-  --repo jaymaroldan026/nyxsuite-v6 \
+  --repo sepulturero0/nyxsuite-v6 \
   --clobber
 ```
 
@@ -540,7 +540,7 @@ intended release:
 ```bash
 git ls-remote origin refs/heads/master
 git ls-remote --tags origin "v<version>"
-gh release view v<version> --repo jaymaroldan026/nyxsuite-v6 \
+gh release view v<version> --repo sepulturero0/nyxsuite-v6 \
   --json tagName,targetCommitish,assets,url
 ```
 
@@ -557,7 +557,7 @@ announcing the release.
 
 ## Update Package Rules
 
-- Keep `update_config.json` pointed at `jaymaroldan026/nyxsuite-v6`.
+- Keep `update_config.json` pointed at `sepulturero0/nyxsuite-v6`.
 - Keep `asset_pattern` as `NyxSuite-v*.zip`.
 - Do not ship runtime databases, local `.env`, logs, local update backups, or license/signing secrets.
 - The release ZIP preserves runtime DB/config/log paths during update.

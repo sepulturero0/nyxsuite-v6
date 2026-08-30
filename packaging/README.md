@@ -30,7 +30,7 @@ powershell -ExecutionPolicy Bypass -File .\packaging\build_bridge.ps1
 
 ## Release
 
-Publish `NyxSuite-v<version>.zip` to the public `jaymaroldan026/nyxsuite-v6`
+Publish `NyxSuite-v<version>.zip` to the public `sepulturero0/nyxsuite-v6`
 GitHub release. The `update_config.json` baked into the build points the in-app
 updater at that same repo.
 

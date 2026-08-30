@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Publish the current NyxSuite feature set as v6 in `jaymaroldan026/nyxsuite-v6` and use SnapBoard row passwords during signup.
+**Goal:** Publish the current NyxSuite feature set as v6 in `sepulturero0/nyxsuite-v6` and use SnapBoard row passwords during signup.
 
 **Architecture:** Extend the existing SnapBoard row pipeline with a `password` field from browser content script through local API, SQLite, runner, and signup form. Rebrand visible/package/update metadata to v6 and point the source-based updater at the same public GitHub repository that hosts source and releases.
 
@@ -74,7 +74,7 @@
 - Modify: `agent_host/com.nyxsuite.agent.json`
 - Test: `tests/test_release_packaging.py`
 
-- [ ] Add failing release tests that assert generated ZIP `update_config.json` points at `jaymaroldan026/nyxsuite-v6`.
+- [ ] Add failing release tests that assert generated ZIP `update_config.json` points at `sepulturero0/nyxsuite-v6`.
 - [ ] Replace user-facing v4/v5 branding with v6 where it affects users, builders, extension popups, or release instructions.
 - [ ] Set version files/manifests to `6.0.0`.
 - [ ] Reset checked-in native host manifest path to `agent_host/host_main.py`.
@@ -86,7 +86,7 @@
 - Create: `RELEASE.md`
 - Modify: `README.md`
 
-- [ ] Document the v6 release flow: bump `core/version.py`, run `scripts/sync_version.py`, build ZIP with shell or PowerShell, create GitHub release in `jaymaroldan026/nyxsuite-v6`, upload `NyxSuite-v<version>.zip`, verify dashboard update on Windows and macOS.
+- [ ] Document the v6 release flow: bump `core/version.py`, run `scripts/sync_version.py`, build ZIP with shell or PowerShell, create GitHub release in `sepulturero0/nyxsuite-v6`, upload `NyxSuite-v<version>.zip`, verify dashboard update on Windows and macOS.
 - [ ] Include what update assets must contain and which runtime files are preserved.
 
 ### Task 6: Verify, Commit, Create Repo, Push
@@ -96,7 +96,7 @@
 
 - [ ] Run focused tests: `python -m pytest tests/test_nyxify_snapboard_bridge.py tests/test_signup_blockers.py tests/test_release_packaging.py -q`.
 - [ ] Run broader tests if time permits: `python -m pytest -q`.
-- [ ] Create public repo `jaymaroldan026/nyxsuite-v6` if missing.
+- [ ] Create public repo `sepulturero0/nyxsuite-v6` if missing.
 - [ ] Set `origin` to the v6 repo.
 - [ ] Stage the full intended working tree so current v6 features are included, while respecting `.gitignore` secrets.
 - [ ] Commit with a v6 release message.

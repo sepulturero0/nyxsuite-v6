@@ -182,7 +182,7 @@ macOS `~/Library/Application Support/.../NativeMessagingHosts` / Linux `~/.confi
 ## Release updates
 
 Nyx Suite v6 uses one public GitHub repo for source and update releases:
-`jaymaroldan026/nyxsuite-v6`. The dashboard updater checks that repo's GitHub
+`sepulturero0/nyxsuite-v6`. The dashboard updater checks that repo's GitHub
 Releases for an asset matching `NyxSuite-v*.zip`.
 
 Release checklist for future agents:
@@ -192,6 +192,6 @@ Release checklist for future agents:
 3. Build a source release ZIP:
    - macOS/Linux: `bash packaging/create_release_zip.sh --version <version>`
    - Windows: `powershell -ExecutionPolicy Bypass -File .\packaging\create_release_zip.ps1 -Version <version>`
-4. Create/publish a GitHub release in `jaymaroldan026/nyxsuite-v6` with tag `v<version>`.
+4. Create/publish a GitHub release in `sepulturero0/nyxsuite-v6` with tag `v<version>`.
 5. Upload `dist/NyxSuite-v<version>.zip` to that release.
 6. From an older install on Windows and macOS, open Dashboard -> Settings -> Check for Update -> Apply Update.

@@ -1,6 +1,6 @@
 {
   "app": "__APP__",
-  "repo": "jaymaroldan026/nyxsuite-v6",
+  "repo": "sepulturero0/nyxsuite-v6",
   "asset_pattern": "__ASSET_PATTERN__",
   "exe_to_relaunch": "__EXE__",
   "skip_paths": ["data", "logs", ".env"],

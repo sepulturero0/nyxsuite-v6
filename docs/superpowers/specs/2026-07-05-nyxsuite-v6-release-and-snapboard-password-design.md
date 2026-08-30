@@ -2,7 +2,7 @@
 
 ## Goal
 
-Ship the current working NyxSuite feature set as the v6 line in one public GitHub repository, `jaymaroldan026/nyxsuite-v6`, and make Nyxify signup use each SnapBoard row's Password column instead of a single hard-coded password.
+Ship the current working NyxSuite feature set as the v6 line in one public GitHub repository, `sepulturero0/nyxsuite-v6`, and make Nyxify signup use each SnapBoard row's Password column instead of a single hard-coded password.
 
 ## Scope
 
@@ -14,7 +14,7 @@ Ship the current working NyxSuite feature set as the v6 line in one public GitHu
 
 ## Architecture
 
-The existing update system already checks GitHub Releases through `update_config.json` and applies source-based ZIP updates to `core/`, `webui/`, extension folders, scripts, root launchers, and data defaults. v6 keeps that architecture, but changes the configured repository to `jaymaroldan026/nyxsuite-v6`.
+The existing update system already checks GitHub Releases through `update_config.json` and applies source-based ZIP updates to `core/`, `webui/`, extension folders, scripts, root launchers, and data defaults. v6 keeps that architecture, but changes the configured repository to `sepulturero0/nyxsuite-v6`.
 
 The existing SnapBoard-to-Nyxify pipeline is extended with a `password` field:
 
@@ -41,4 +41,4 @@ The existing SnapBoard-to-Nyxify pipeline is extended with a `password` field:
 
 ## Publishing
 
-After implementation and verification, create the public GitHub repo `jaymaroldan026/nyxsuite-v6` if it does not exist, set it as `origin`, commit the intended working tree, push source to the default branch, and use the same repo for future `gh release create` / `gh release upload` update assets.
+After implementation and verification, create the public GitHub repo `sepulturero0/nyxsuite-v6` if it does not exist, set it as `origin`, commit the intended working tree, push source to the default branch, and use the same repo for future `gh release create` / `gh release upload` update assets.

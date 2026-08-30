@@ -90,7 +90,7 @@ if (Test-Path $updaterStaged) {
 $updateConfig = @"
 {
   "app": "nyxsuite",
-  "repo": "jaymaroldan026/nyxsuite-v6",
+  "repo": "sepulturero0/nyxsuite-v6",
   "asset_pattern": "NyxSuite-v*.zip",
   "exe_to_relaunch": "$bridgeName.exe",
   "skip_paths": ["data", "logs", ".env", "local_update_backups"]
@@ -114,5 +114,5 @@ if (Test-Path $createZipScript) {
     & $createZipScript -Version $version
 } else {
     Write-Warning "create_release_zip.ps1 not found; skipping clean release ZIP."
-    Write-Host "Next: compress it to 'NyxSuite-$label.zip' and publish release '$label' to jaymaroldan026/nyxsuite-v6."
+    Write-Host "Next: compress it to 'NyxSuite-$label.zip' and publish release '$label' to sepulturero0/nyxsuite-v6."
 }
