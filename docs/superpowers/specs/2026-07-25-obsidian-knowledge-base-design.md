@@ -2,7 +2,7 @@
 
 ## Goal
 
-Set up `/Users/heisnberg/Documents/nyxsuite v5/Agent Memory` as an Obsidian-backed project knowledge base for shared agent memory, project decisions, workflows, commands, issues, architecture notes, troubleshooting, and release notes.
+Set up `/Users/heisnberg/Documents/nyxsuite v6/Agent Memory` as an Obsidian-backed project knowledge base for shared agent memory, project decisions, workflows, commands, issues, architecture notes, troubleshooting, and release notes.
 
 ## Design
 

@@ -9,6 +9,20 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.3
+
+- Bitmoji outfit panel scanning is now limited to 3 passes (was 14), so a
+  slow or busy outfit selector can no longer stall signup runs.
+- The web dashboard tiles are now equal-sized across the Suite, Nyx, and
+  Nyxify dashboards.
+- Added a sidebar collapse/expand toggle (icon-only rail) that remembers its
+  state across reloads.
+- Row action buttons (Mark Done / Relaunch / Remove) are removed from the
+  single-row selection; actions now appear only after checking rows with the
+  checkbox, matching the Suite dashboard behavior.
+- Runtime username lists under `data/full_auto_usernames/` are no longer
+  tracked in git.
+
 ### NyxSuite v6.6.2
 
 - Restored Auto-Fill Row, Full Auto username updates, and SnapBoard bridge

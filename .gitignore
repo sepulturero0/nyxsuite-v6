@@ -23,8 +23,6 @@ local_update_backups/
 data/*
 !data/signup_names/
 !data/signup_names/*.txt
-!data/full_auto_usernames/
-!data/full_auto_usernames/*.txt
 !data/bitmoji_catalog.json
 data/*.db
 data/*_config.json
@@ -61,3 +59,6 @@ artifacts/
 
 # Generated per-install agent token (secret — never commit)
 agent_token.txt
+
+# Runtime agent logs (never commit)
+agent_host/*.log

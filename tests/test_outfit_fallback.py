@@ -10,6 +10,7 @@ opt-in last resort (NYX_OUTFIT_FALLBACK_CATALOG=1) used only when the whole pool
 has rotated out.
 """
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from core.bitmoji import outfit_flow
@@ -61,6 +62,11 @@ class OutfitFallbackTests(unittest.IsolatedAsyncioTestCase):
 
     async def asyncTearDown(self):
         self._sleep.stop()
+
+    def test_outfit_panel_scan_is_limited_to_three_passes(self):
+        source = Path(outfit_flow.__file__).read_text(encoding="utf-8")
+        self.assertIn("_OUTFIT_PANEL_SCAN_STEPS = 3", source)
+        self.assertIn("for attempt_index in range(_OUTFIT_PANEL_SCAN_STEPS):", source)
 
     async def test_pool_fallback_selects_another_pool_item(self):
         pool = ["top=chosen", "top=alt1", "top=alt2"]

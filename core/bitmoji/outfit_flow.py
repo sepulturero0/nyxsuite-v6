@@ -50,6 +50,10 @@ _OUTFIT_ALLOW_FALLBACK = os.getenv("NYX_OUTFIT_FALLBACK_ANY", "1").strip().lower
 # a fully-retired pool now fails the step instead of dressing the avatar at random.
 # Set NYX_OUTFIT_FALLBACK_CATALOG=1 to re-enable the any-available-item net.
 _OUTFIT_ALLOW_CATALOG_FALLBACK = os.getenv("NYX_OUTFIT_FALLBACK_CATALOG", "0").strip().lower() in ("1", "true", "yes")
+# Limit the bounded panel walk for one outfit selector. The final scan below
+# still runs after these passes so an item at the current scroll position is
+# checked once more.
+_OUTFIT_PANEL_SCAN_STEPS = 3
 
 
 # Every garment path resolves one active editor panel before inspecting tiles.
@@ -1105,7 +1109,7 @@ class BitmojiOutfitMixin:
         await self.reset_editor_panel_scroll(ctx)
         scroll_history = []
 
-        for attempt_index in range(14):
+        for attempt_index in range(_OUTFIT_PANEL_SCAN_STEPS):
             clicked = await ctx.evaluate(
                 """({ requirements }) => {""" + _OUTFIT_ACTIVE_PANEL_RESOLVER + r"""
                     const isVisible = (el) => {

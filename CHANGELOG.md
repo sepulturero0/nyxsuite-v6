@@ -1,5 +1,22 @@
 # Changelog
 
+## 6.6.3 - Dashboard polish and outfit scan fix
+
+### Bitmoji outfits
+- Outfit panel scanning is now limited to 3 passes (was 14) so a slow or busy
+  outfit selector can no longer stall signup runs.
+
+### Web dashboard
+- Status tiles are now equal-sized across the Suite, Nyx, and Nyxify dashboards.
+- Added a sidebar collapse/expand toggle (icon-only rail) that persists across
+  reloads.
+- Removed the single-row action buttons (Mark Done / Relaunch / Remove);
+  actions now appear only after checking rows, matching the Suite dashboard.
+
+### Housekeeping
+- Runtime username lists under `data/full_auto_usernames/` are no longer
+  tracked in git.
+
 ## 6.6.2 - SnapBoard bridge and Bitmoji outfit fixes
 
 ### SnapBoard automation

@@ -10,7 +10,13 @@
 <body>
   <div class="wrapper">
     <aside class="sidebar" id="sidebar">
-      <div class="sidebar-brand">Nyx<span>Suite</span></div>
+      <div class="sidebar-head">
+        <button id="sidebar-collapse" class="sidebar-collapse" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+          <svg class="collapse-icon collapse-in" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+          <svg class="collapse-icon collapse-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>
+        <div class="sidebar-brand">Nyx<span>Suite</span></div>
+      </div>
       <nav class="sidebar-nav tabs" id="tabs">
         <div class="nav-section">Runner</div>
         <div class="runner-dock">
@@ -87,7 +93,6 @@
               </div>
               <div class="action-row action-row-controls" id="actions-row-suite">
                 <div class="toolbar group" id="group-suite"></div>
-                <div class="toolbar sub" id="row-suite"></div>
               </div>
             </div>
           </div>
@@ -112,7 +117,6 @@
               </div>
               <div class="action-row action-row-controls" id="actions-row-nyx">
                 <div class="toolbar group" id="group-nyx"></div>
-                <div class="toolbar sub" id="row-nyx"></div>
               </div>
             </div>
           </div>
@@ -135,7 +139,6 @@
               </div>
               <div class="action-row action-row-controls" id="actions-row-nyxify">
                 <div class="toolbar group" id="group-nyxify"></div>
-                <div class="toolbar sub" id="row-nyxify"></div>
               </div>
             </div>
           </div>

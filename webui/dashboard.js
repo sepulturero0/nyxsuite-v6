@@ -452,7 +452,6 @@ function updateProductStatus(p, cfg) {
 function updateProductTable(p, cfg) {
   const s = state[p];
   buildToolbar("queue-" + p, cfg.queue, p, false);
-  buildToolbar("row-" + p, cfg.row, p, true);
 
   const searchEl = el("search-" + p);
   if (searchEl) { searchEl.value = s.search || ""; }
@@ -547,6 +546,8 @@ function renderProductBody(p) {
 function buildToolbar(id, defs, p, isRow) {
   const bar = el(id); bar.innerHTML = "";
   if (!defs || !defs.length) { bar.style.display = "none"; return; }
+  // Row actions are contextual — only take space when a row is selected.
+  if (isRow && !selected[p]) { bar.style.display = "none"; return; }
   bar.style.display = "flex";
   let group = null;
   defs.forEach(d => {
@@ -654,7 +655,6 @@ function updateSuiteStatus() {
 function updateSuiteTable() {
   const s = state.suite;
   buildSuiteToolbar("queue-suite", SUITE_QUEUE, "queue");
-  buildSuiteToolbar("row-suite", SUITE_ROW, "row");
 
   const searchEl = el("search-suite");
   if (searchEl) { searchEl.value = s.search || ""; }
@@ -908,6 +908,22 @@ function renderBannedPanel() {
 
 el("sidebar-toggle").addEventListener("click", () => document.body.classList.toggle("sidebar-open"));
 el("sidebar-backdrop").addEventListener("click", () => document.body.classList.remove("sidebar-open"));
+
+// Sidebar collapse / expand (desktop icon rail). Persists across reloads.
+const collapseBtn = el("sidebar-collapse");
+if (collapseBtn) {
+  const applyMin = (on) => {
+    document.body.classList.toggle("sidebar-min", on);
+    collapseBtn.setAttribute("aria-label", on ? "Expand sidebar" : "Collapse sidebar");
+    collapseBtn.title = on ? "Expand sidebar" : "Collapse sidebar";
+  };
+  try { applyMin(localStorage.getItem("nyx_sidebar_min") === "1"); } catch (e) {}
+  collapseBtn.addEventListener("click", () => {
+    const on = !document.body.classList.contains("sidebar-min");
+    applyMin(on);
+    try { localStorage.setItem("nyx_sidebar_min", on ? "1" : "0"); } catch (e) {}
+  });
+}
 
 // ---------- Settings panel ----------
 async function renderSettings() {
