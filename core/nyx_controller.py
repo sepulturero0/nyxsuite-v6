@@ -397,22 +397,20 @@ class NyxController:
             return {"ok": True, "message": f"Closed AdsPower profile {profile_id}."}
 
         def handle_clear_cache_logs(payload):
-            removed = 0
             try:
-                for log_file in LOGS_DIR.glob("*.log"):
-                    try:
-                        log_file.unlink()
-                        removed += 1
-                    except Exception:
-                        # A log held open by a running process can't be deleted;
-                        # truncate it instead so the on-disk size is reclaimed.
-                        try:
-                            log_file.write_text("", encoding="utf-8")
-                        except Exception:
-                            pass
+                from core.process_utils import clear_runtime_logs_and_cache
+
+                result = clear_runtime_logs_and_cache()
             except Exception as exc:
-                return {"ok": False, "error": f"Could not clear logs: {exc}"}
-            return {"ok": True, "count": removed, "message": f"Cleared {removed} Nyx log file(s)."}
+                return {"ok": False, "error": f"Could not clear logs and cache: {exc}"}
+            return {
+                "ok": True,
+                **result,
+                "message": (
+                    f"Cleared {result['logs_removed'] + result['logs_truncated']} log file(s) "
+                    f"and {result['cache_removed']} cache item(s)."
+                ),
+            }
 
         return {
             "start": self.start,

@@ -97,7 +97,7 @@ const state = {
   version: "",
   update: { checked: false, available: false, current: "", latest: "", latest_name: "", notes: "", backups: [], availableVersions: [] },
 };
-let active = "suite";
+let active = "nyxify";
 const selected = { suite: null, nyx: null, nyxify: null };
 
 const el = id => document.getElementById(id);
@@ -1233,6 +1233,27 @@ el("tray-transparent-toggle").addEventListener("change", async () => {
     if (feedback) feedback.textContent = r.error || "Could not save menu bar icon setting.";
   }
   if (feedback) feedback.dataset.busy = "";
+});
+
+el("clear-cache-logs-btn").addEventListener("click", async () => {
+  const button = el("clear-cache-logs-btn");
+  const feedback = el("clear-cache-logs-feedback");
+  if (!button || button.disabled) return;
+  if (!confirm("Clear NyxSuite logs and cached runtime data?")) return;
+  button.disabled = true;
+  button.textContent = "Clearing…";
+  if (feedback) feedback.textContent = "Clearing disposable runtime data…";
+  try {
+    const result = await callBridge("clear_cache_logs");
+    if (feedback) {
+      feedback.textContent = result && result.ok !== false
+        ? (result.message || "Logs and cache cleared.")
+        : (result && result.error) || "Could not clear logs and cache.";
+    }
+  } finally {
+    button.disabled = false;
+    button.textContent = "Clear Logs & Cache";
+  }
 });
 
 el("update-check-btn").addEventListener("click", async () => {

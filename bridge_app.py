@@ -189,6 +189,7 @@ class BridgeApp:
             "sync_extensions": self._action_sync_extensions,
             "hotkey_product": self._action_hotkey_product,
             "adspower_test": self._action_adspower_test,
+            "clear_cache_logs": self._action_clear_cache_logs,
             "shutdown": self._action_shutdown,
         }
 
@@ -255,6 +256,22 @@ class BridgeApp:
             }
         except Exception as exc:
             return {"ok": False, "code": "error", "message": f"AdsPower test failed: {exc}"}
+
+    def _action_clear_cache_logs(self, payload=None) -> dict:
+        try:
+            from core.process_utils import clear_runtime_logs_and_cache
+
+            result = clear_runtime_logs_and_cache()
+            return {
+                "ok": True,
+                **result,
+                "message": (
+                    f"Cleared {result['logs_removed'] + result['logs_truncated']} log file(s) "
+                    f"and {result['cache_removed']} cache item(s)."
+                ),
+            }
+        except Exception as exc:
+            return {"ok": False, "error": f"Could not clear logs and cache: {exc}"}
 
     def _action_shutdown(self, payload=None) -> dict:
         log("Shutdown requested via bridge action.")

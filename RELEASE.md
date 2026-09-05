@@ -9,6 +9,18 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.4
+
+- Improved Snapchat email/phone replacement transitions so stale verification
+  entry cards do not trigger premature OTP retries.
+- SnapBoard Check Code / Check SMS now waits for the exact refreshed row, uses
+  native control activation first, and returns actionable click diagnostics.
+- Terminal no-pending and row-mismatch responses no longer cause repeated
+  SnapBoard refresh loops.
+- Added Settings -> Clear Logs & Cache for disposable runtime data.
+- Nyxify is now the first/default sidebar product; the merged Suite dashboard is
+  no longer shown in the sidebar.
+
 ### NyxSuite v6.6.3
 
 - Bitmoji outfit panel scanning is now limited to 3 passes (was 14), so a

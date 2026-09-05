@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.6.4 - Verification recovery and dashboard defaults
+
+### Snapchat verification
+- Replacement email and phone attempts now wait through stale entry-card renders
+  before deciding that Snapchat did not advance to OTP.
+- SnapBoard Check Code / Check SMS waits for the exact refreshed row, uses native
+  control activation first, and reports row/candidate diagnostics on failure.
+- Terminal no-pending and row-mismatch responses no longer trigger repeated
+  SnapBoard refresh loops.
+
+### Dashboard and runtime cleanup
+- Nyxify is now the first and default sidebar product; the merged Suite dashboard
+  is no longer shown in the sidebar.
+- Settings now includes Clear Logs & Cache for disposable runtime data.
+
 ## 6.6.3 - Dashboard polish and outfit scan fix
 
 ### Bitmoji outfits

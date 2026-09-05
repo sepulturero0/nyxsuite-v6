@@ -310,7 +310,7 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(code, "123456")
         self.assertEqual(store.requested, [("snapboard:1", "submitted@example.com")])
 
-    async def test_otp_no_pending_order_gets_one_refresh_retry_only(self):
+    async def test_otp_no_pending_order_is_terminal_for_current_attempt(self):
         class FakeOtpStore:
             def __init__(self):
                 self.requests = 0
@@ -341,9 +341,9 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(code, "")
-        self.assertEqual(store.requests, 2)
-        self.assertEqual(store.clears, 2)
-        refresh_mock.assert_awaited_once()
+        self.assertEqual(store.requests, 1)
+        self.assertEqual(store.clears, 1)
+        refresh_mock.assert_not_awaited()
 
     async def test_otp_missing_expected_email_does_not_refresh_retry(self):
         class FakeOtpStore:

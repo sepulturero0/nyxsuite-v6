@@ -240,6 +240,20 @@
     ).indexOf(expected.slice(-10)) >= 0;
   }
 
+  async function waitForExpectedRowValue(rowId, expectedValue, kind, timeoutMs) {
+    var deadline = Date.now() + Math.max(500, timeoutMs || 8000);
+    while (Date.now() < deadline) {
+      var matches = kind === "phone"
+        ? rowMatchesExpectedPhone(rowId, expectedValue)
+        : rowMatchesExpectedEmail(rowId, expectedValue);
+      if (matches) {
+        return true;
+      }
+      await sleep(250);
+    }
+    return false;
+  }
+
   function getRowRoot() {
     return document.querySelector("#tableBody")
       || document.querySelector("tbody")
@@ -929,7 +943,7 @@
   function getRowEl(rowId) {
     return document.querySelector('tr[data-id="' + rowId + '"]')
       || document.querySelector('[data-row-id="' + rowId + '"]')
-      || getRowRoot();
+      || null;
   }
 
   function _isClickableControl(node) {
@@ -939,6 +953,19 @@
     if (node.disabled) {
       return false;
     }
+    if (String(node.getAttribute && node.getAttribute("aria-disabled") || "").toLowerCase() === "true") {
+      return false;
+    }
+    try {
+      var style = window.getComputedStyle(node);
+      if (style.display === "none" || style.visibility === "hidden" || style.pointerEvents === "none") {
+        return false;
+      }
+      var rect = node.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return false;
+      }
+    } catch (_err) {}
     var role = String(node.getAttribute && node.getAttribute("role") || "").toLowerCase();
     return node.tagName === "BUTTON"
       || node.tagName === "A"
@@ -1009,9 +1036,27 @@
 
   function _findAuthCheckButton(rowId, kind) {
     var rowEl = getRowEl(rowId);
+    if (!rowEl) {
+      return null;
+    }
     var candidates = _authCheckCandidates(rowEl, kind, rowId);
     var clickable = candidates.filter(function (node) { return _isClickableControl(node); });
     return clickable[0] || candidates[0] || null;
+  }
+
+  function _authCheckState(rowId, kind) {
+    var rowEl = getRowEl(rowId);
+    if (!rowEl) {
+      return { rowPresent: false, candidates: 0, clickable: 0, button: null };
+    }
+    var candidates = _authCheckCandidates(rowEl, kind, rowId);
+    var clickable = candidates.filter(function (node) { return _isClickableControl(node); });
+    return {
+      rowPresent: true,
+      candidates: candidates.length,
+      clickable: clickable.length,
+      button: clickable[0] || candidates[0] || null,
+    };
   }
 
   // Click a page control with scroll/focus + a full mousedown/mouseup/click
@@ -1030,35 +1075,35 @@
         node.focus();
       }
     } catch (_err) {}
-    var dispatched = false;
+    // Use the native activation path first. SnapBoard's handlers can ignore a
+    // synthetic mouse sequence even though dispatchEvent reports success.
+    try {
+      if (typeof node.click === "function") {
+        node.click();
+        return true;
+      }
+    } catch (_err) {
+      // Fall through to the event sequence for non-standard controls.
+    }
     try {
       var opts = { bubbles: true, cancelable: true, view: window };
       node.dispatchEvent(new MouseEvent("mousedown", opts));
       node.dispatchEvent(new MouseEvent("mouseup", opts));
       node.dispatchEvent(new MouseEvent("click", opts));
-      dispatched = true;
+      return true;
     } catch (_err) {
-      dispatched = false;
+      return false;
     }
-    if (!dispatched) {
-      try {
-        if (typeof node.click === "function") {
-          node.click();
-          dispatched = true;
-        }
-      } catch (_err) {
-        dispatched = false;
-      }
-    }
-    return dispatched;
   }
 
   function clickCheckCode(rowId) {
-    return clickAuthElement(_findAuthCheckButton(rowId, "code"));
+    var state = _authCheckState(rowId, "code");
+    return { clicked: clickAuthElement(state.button), state: state };
   }
 
   function clickCheckSms(rowId) {
-    return clickAuthElement(_findAuthCheckButton(rowId, "sms"));
+    var state = _authCheckState(rowId, "sms");
+    return { clicked: clickAuthElement(state.button), state: state };
   }
 
   function clickGetEmailButton(rowId) {
@@ -2017,8 +2062,13 @@
     var diagStart = performance.now();
     var popupSnapshot = captureOtpPopupSnapshot();
     var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);
+    var lastClickState = { rowPresent: false, candidates: 0, clickable: 0 };
+    var clickAttempts = 0;
     while ((Date.now() - startedAt) < timeoutMs) {
-      var clicked = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
+      var clickResult = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
+      var clicked = !!(clickResult && clickResult.clicked);
+      lastClickState = (clickResult && clickResult.state) || lastClickState;
+      clickAttempts += 1;
       if (clicked) {
         diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
@@ -2050,7 +2100,11 @@
     }
     return {
       ok: false,
-      error: sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.",
+      error: (sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.")
+        + " [check_attempts=" + clickAttempts
+        + ", row_present=" + (lastClickState.rowPresent ? "1" : "0")
+        + ", candidates=" + Number(lastClickState.candidates || 0)
+        + ", clickable=" + Number(lastClickState.clickable || 0) + "]",
     };
   }
 
@@ -2122,7 +2176,7 @@
         });
         return;
       }
-      if (!rowMatchesExpectedEmail(rowId, payload.request.email)) {
+      if (!await waitForExpectedRowValue(rowId, payload.request.email, "email", 8000)) {
         headers["Content-Type"] = "application/json";
         await fetch(apiConfig.localApiUrl + "/otp/result", {
           method: "POST",
@@ -2516,7 +2570,7 @@
           sendResponse({ ok: false, terminal: true, error: "Missing expected email for OTP check." });
           return;
         }
-        if (!rowMatchesExpectedEmail(rowId, message.email || message.expected_email)) {
+        if (!await waitForExpectedRowValue(rowId, message.email || message.expected_email, "email", 8000)) {
           sendResponse({ ok: false, error: "SnapBoard row email does not match pending OTP account." });
           return;
         }
@@ -2546,7 +2600,7 @@
       }
 
       if (message.action === "sms") {
-        if (!rowMatchesExpectedPhone(rowId, message.phone || message.expected_phone)) {
+        if (!await waitForExpectedRowValue(rowId, message.phone || message.expected_phone, "phone", 8000)) {
           sendResponse({ ok: false, error: "SnapBoard row phone does not match pending SMS account." });
           return;
         }

@@ -1112,7 +1112,15 @@ def _otp_error_allows_refresh(error):
     normalized = str(error or "").strip().lower()
     if not normalized:
         return True
-    if "missing expected email" in normalized:
+    terminal_markers = (
+        "missing expected email",
+        "row email does not match",
+        "row phone does not match",
+        "no pending email order",
+        "no pending phone order",
+        "no pending order",
+    )
+    if any(marker in normalized for marker in terminal_markers):
         return False
     return True
 

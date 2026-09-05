@@ -1899,6 +1899,7 @@ async def _wait_for_signup_progress(
     progress_callback=None,
     resubmit_callback=None,
     stall_state=None,
+    entry_transition_grace_ms: int = 0,
 ) -> str:
     email_selectors = _EMAIL_INPUT_SELECTORS
     otp_selectors = _OTP_INPUT_SELECTORS
@@ -1916,6 +1917,7 @@ async def _wait_for_signup_progress(
     email_switch_clicked = False
     email_switch_failures = 0
     last_progress_step = ""
+    entry_transition_until = time.monotonic() + max(0, int(entry_transition_grace_ms or 0)) / 1000.0
 
     async def set_progress(step: str) -> None:
         nonlocal last_progress_step
@@ -2018,10 +2020,20 @@ async def _wait_for_signup_progress(
             return "otp"
 
         if handoff_stage == "phone":
+            if time.monotonic() < entry_transition_until:
+                await page.wait_for_timeout(300)
+                if remaining_ms is not None:
+                    remaining_ms -= 300
+                continue
             await set_progress("awaiting_phone_verification")
             return "phone"
 
         if handoff_stage == "email":
+            if time.monotonic() < entry_transition_until:
+                await page.wait_for_timeout(300)
+                if remaining_ms is not None:
+                    remaining_ms -= 300
+                continue
             await set_progress("awaiting_email_verification")
             return "email"
 
@@ -2357,11 +2369,20 @@ async def _fill_and_submit_verification_email(signup_page, email: str, logger=No
         try:
             loc = signup_page.locator(email_sel).first
             if await loc.is_visible():
-                await _humanized_type_only(signup_page, email_sel, email, logger, f"[{profile_id}] email")
+                typed = await _humanized_type_only(signup_page, email_sel, email, logger, f"[{profile_id}] email")
+                if not typed or str(await loc.input_value() or "").strip().lower() != str(email).strip().lower():
+                    logger and logger.warning(f"[{profile_id}] Verification email value was not accepted by Snapchat.")
+                    continue
                 await signup_page.wait_for_timeout(400)
-                await _wait_enabled(signup_page, "button[type='submit']", timeout_ms=5000)
+                enabled = await _wait_enabled(signup_page, "button[type='submit']", timeout_ms=5000)
+                if not enabled:
+                    logger and logger.warning(f"[{profile_id}] Verification email submit stayed disabled.")
+                    continue
                 await _human_pause(signup_page, 250, 800)
-                await _js_click(signup_page, "button[type='submit']")
+                clicked = await _js_click(signup_page, "button[type='submit']")
+                if not clicked:
+                    logger and logger.warning(f"[{profile_id}] Verification email submit click failed.")
+                    continue
                 await signup_page.wait_for_timeout(1200)
                 return True
         except Exception:
@@ -2514,6 +2535,7 @@ async def _handle_optional_phone_sms_verification(
             progress_callback=progress_callback,
             resubmit_callback=resubmit_callback,
             stall_state=stall_state,
+            entry_transition_grace_ms=5000,
         )
         if stage == "welcome":
             result["final_username"] = await _read_success_username(signup_page)
@@ -2726,9 +2748,17 @@ async def _recover_otp_via_back_and_new_email(
             continue
 
         stage = await _wait_for_signup_progress(
-            signup_page, logger, profile_id, timeout_ms=120000, progress_callback=progress_callback
+            signup_page,
+            logger,
+            profile_id,
+            timeout_ms=120000,
+            progress_callback=progress_callback,
+            entry_transition_grace_ms=5000,
         )
         if stage != "otp":
+            logger and logger.warning(
+                f"[{profile_id}] Replacement email did not reach OTP stage; observed {stage!r}."
+            )
             continue
         await _emit_signup_progress(progress_callback, "fetching_otp", logger, profile_id)
         otp = await _fetch_otp_from_provider(otp_fetcher, new_email)
@@ -2788,7 +2818,12 @@ async def _recover_sms_via_new_phone(
             continue
 
         stage = await _wait_for_signup_progress(
-            signup_page, logger, profile_id, timeout_ms=120000, progress_callback=progress_callback
+            signup_page,
+            logger,
+            profile_id,
+            timeout_ms=120000,
+            progress_callback=progress_callback,
+            entry_transition_grace_ms=5000,
         )
         if stage == "welcome":
             # The fresh number was enough on its own — no SMS step at all.
@@ -2934,7 +2969,25 @@ async def _handle_verification(
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
     if stage == "email" and _is_valid_email(email):
         await _emit_signup_progress(progress_callback, "filling_email_verification", logger, profile_id)
-        await _fill_and_submit_verification_email(signup_page, email, logger, profile_id)
+        submitted_email = await _fill_and_submit_verification_email(signup_page, email, logger, profile_id)
+        if not submitted_email and email_fetcher is not None:
+            logger and logger.warning(f"[{profile_id}] Could not submit verification email; requesting a replacement.")
+            await _emit_signup_progress(progress_callback, "fetching_replacement_email", logger, profile_id)
+            replacement_email = await _fetch_email_from_provider(
+                email_fetcher,
+                force_new=True,
+                logger=logger,
+                profile_id=profile_id,
+            )
+            if _is_valid_email(replacement_email):
+                email = replacement_email
+                result["email"] = email
+                await _emit_signup_progress(progress_callback, "filling_email_verification", logger, profile_id)
+                submitted_email = await _fill_and_submit_verification_email(
+                    signup_page, email, logger, profile_id
+                )
+        if not submitted_email:
+            logger and logger.warning(f"[{profile_id}] Verification email could not be submitted.")
 
         for replacement_attempt in range(1, EMAIL_VERIFY_MAX_ATTEMPTS + 1):
             signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
@@ -2994,6 +3047,7 @@ async def _handle_verification(
             progress_callback=progress_callback,
             resubmit_callback=resubmit_callback,
             stall_state=stall_state,
+            entry_transition_grace_ms=5000 if stage == "email" else 0,
         )
     if stage == "welcome":
         result["reached_verification"] = True

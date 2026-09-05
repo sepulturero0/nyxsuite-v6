@@ -1,4 +1,5 @@
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -42,6 +43,7 @@ def get_app_data_dir():
 ROOT_DIR = get_root_dir()
 APP_DATA_DIR = get_app_data_dir()
 LOGS_DIR = APP_DATA_DIR / "logs"
+CACHE_DIR = APP_DATA_DIR / "cache"
 
 
 def windows_creation_flags():
@@ -261,6 +263,43 @@ def ensure_logs_dir():
     APP_DATA_DIR.mkdir(parents=True, exist_ok=True)
     LOGS_DIR.mkdir(parents=True, exist_ok=True)
     return LOGS_DIR
+
+
+def clear_runtime_logs_and_cache():
+    """Clear disposable runtime logs and cache files without removing folders."""
+    ensure_logs_dir()
+    removed_logs = 0
+    truncated_logs = 0
+    for log_file in LOGS_DIR.glob("*.log"):
+        try:
+            # Truncate first so an active FileHandler keeps writing to the same
+            # inode after cleanup.
+            log_file.write_text("", encoding="utf-8")
+            truncated_logs += 1
+        except Exception:
+            try:
+                log_file.unlink()
+                removed_logs += 1
+            except Exception:
+                pass
+
+    removed_cache = 0
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    for child in CACHE_DIR.iterdir():
+        try:
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+            removed_cache += 1
+        except Exception:
+            pass
+
+    return {
+        "logs_removed": removed_logs,
+        "logs_truncated": truncated_logs,
+        "cache_removed": removed_cache,
+    }
 
 
 def is_pid_running(pid):

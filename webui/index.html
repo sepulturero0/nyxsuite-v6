@@ -22,18 +22,13 @@
         <div class="runner-dock">
           <div class="toolbar runner-controls" id="runner-suite" aria-label="Suite runner controls"></div>
         </div>
-        <div class="nav-section">Suite</div>
-        <button class="tab active" data-tab="suite" title="Queue, runners and tools">
-          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/></svg>
-          Dashboard
+        <button class="tab active" data-tab="nyxify" title="Nyxify — Snapchat signup queue">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+          Nyxify
         </button>
         <button class="tab" data-tab="nyx" title="Nyx — Bitmoji queue">
           <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
           Nyx
-        </button>
-        <button class="tab" data-tab="nyxify" title="Nyxify — Snapchat signup queue">
-          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
-          Nyxify
         </button>
         <button class="tab" data-tab="banned" title="Scan and manage banned AdsPower rows">
           <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><line x1="4" y1="22" x2="4" y2="15"/></svg>
@@ -84,7 +79,7 @@
 
     <div class="main">
       <main class="content">
-        <section class="panel" id="panel-suite" data-product="suite">
+        <section class="panel hidden" id="panel-suite" data-product="suite">
           <div class="suite-top">
             <div class="tiles" id="tiles-suite"></div>
             <div class="suite-actions">
@@ -130,7 +125,7 @@
           </div>
         </section>
 
-        <section class="panel hidden" id="panel-nyxify" data-product="nyxify">
+        <section class="panel" id="panel-nyxify" data-product="nyxify">
           <div class="suite-top">
             <div class="tiles tiles-product" id="tiles-nyxify"></div>
             <div class="suite-actions">
@@ -342,6 +337,15 @@
                 </label>
               </div>
               <span id="tray-transparent-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card">
+              <h2>Runtime Cleanup</h2>
+              <p class="hint">Remove disposable NyxSuite log files and cached runtime data. Active log files are truncated safely.</p>
+              <div class="setting-row">
+                <button id="clear-cache-logs-btn" class="btn bad" type="button">Clear Logs &amp; Cache</button>
+              </div>
+              <span id="clear-cache-logs-feedback" class="feedback"></span>
             </div>
 
             <div class="card settings-card">

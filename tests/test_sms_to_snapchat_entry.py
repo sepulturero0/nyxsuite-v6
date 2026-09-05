@@ -20,6 +20,10 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("function _checkCodeCandidateMatches", content)
         self.assertIn("function _authCheckCandidates", content)
         self.assertIn("function _findAuthCheckButton", content)
+        self.assertIn("function _authCheckState", content)
+        self.assertIn("waitForExpectedRowValue", content)
+        self.assertIn("check_attempts=", content)
+        self.assertIn("|| null;", content[content.index("function getRowEl"):content.index("function _isClickableControl")])
         self.assertIn("function _isClickableControl", content)
         # Page-world click with scroll/focus + mousedown/mouseup/click sequence.
         self.assertIn("function clickAuthElement", content)
