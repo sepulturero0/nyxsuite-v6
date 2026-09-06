@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.6.6 - SnapBoard verification control and repeating failure alarm
+
+### SnapBoard verification
+- Check Code / Check SMS controls remain row-scoped.
+- Disabled controls are no longer treated as successful clicks, preventing
+  repeated checks on a completed or pending SnapBoard row.
+- Existing code retrieval behavior remains compatible with row displays and
+  popup responses.
+
+### Nyxify failure alarm
+- Active failure/stall incidents now replay the alarm every eight seconds until
+  they clear or the alarm is disabled.
+- Windows uses a distinct descending warning-tone pattern instead of the normal
+  Windows notification beep.
+
 ## 6.6.5 - Dashboard routing, verification priority, and failure alarm
 
 ### Dashboard

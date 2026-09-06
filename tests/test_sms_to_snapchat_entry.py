@@ -39,6 +39,18 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("function rowMatchesExpectedPhone", content)
         self.assertIn("expected.slice(-10)", content)
 
+    def test_check_controls_do_not_reactivate_disabled_rows(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        state_fn = content.split("function _authCheckState", 1)[1].split("function clickAuthElement", 1)[0]
+        click_fn = content.split("function clickAuthElement", 1)[1].split("function clickCheckCode", 1)[0]
+        retrieval_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split("async function rotateProxyUntilChanged", 1)[0]
+
+        self.assertIn("button: clickable[0] || null", state_fn)
+        self.assertIn("if (!node || !_isClickableControl(node))", click_fn)
+        self.assertIn("getOtpTextForRow(rowId)", retrieval_fn)
+        self.assertIn("getSmsTextForRow(rowId)", retrieval_fn)
+
     def test_signup_flow_gates_submit_on_typed_otp(self):
         flow = (ROOT / "core" / "signup_flow.py").read_text(encoding="utf-8")
 

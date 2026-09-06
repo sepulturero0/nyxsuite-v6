@@ -1041,7 +1041,7 @@
     }
     var candidates = _authCheckCandidates(rowEl, kind, rowId);
     var clickable = candidates.filter(function (node) { return _isClickableControl(node); });
-    return clickable[0] || candidates[0] || null;
+    return clickable[0] || null;
   }
 
   function _authCheckState(rowId, kind) {
@@ -1055,14 +1055,14 @@
       rowPresent: true,
       candidates: candidates.length,
       clickable: clickable.length,
-      button: clickable[0] || candidates[0] || null,
+      button: clickable[0] || null,
     };
   }
 
   // Click a page control with scroll/focus + a full mousedown/mouseup/click
   // sequence (reaching the page's handlers), falling back to the native .click().
   function clickAuthElement(node) {
-    if (!node) {
+    if (!node || !_isClickableControl(node)) {
       return false;
     }
     try {
@@ -2091,6 +2091,25 @@
           };
         }
         await sleep(300);
+      } else if (
+        lastClickState.rowPresent
+        && Number(lastClickState.candidates || 0) > 0
+        && Number(lastClickState.clickable || 0) === 0
+      ) {
+        // SnapBoard disables the row control while its request is pending. Do
+        // not invoke a disabled control again: it can be the completed row
+        // from the previous task, and HTMLElement.click() still reports a
+        // synthetic click even though SnapBoard ignores it.
+        var pendingCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+          rowId,
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
+          popupSnapshot,
+          previousCode
+        );
+        if (pendingCode) {
+          diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
+          return { ok: true, code: pendingCode };
+        }
       } else {
         // The row can be re-rendering after a replacement email/number request.
         // Keep looking for the control during the same fetch window instead of

@@ -9,6 +9,17 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.6
+
+- SnapBoard Check Code / Check SMS selection remains scoped to the requested row
+  and no longer treats a disabled control from a completed or pending row as a
+  successful click, preventing repeated checks against stale rows.
+- Nyxify Failure Alarm now repeats an audible warning every eight seconds while
+  a failure or stalled task remains active. Windows uses a distinct warning-tone
+  pattern instead of a normal notification beep.
+- Added regression coverage for disabled SnapBoard controls, row-scoped code
+  retrieval, active alarm tracking, and warning-tone playback.
+
 ### NyxSuite v6.6.5
 
 - Extension dashboard links now open the matching Nyx or Nyxify dashboard panel.

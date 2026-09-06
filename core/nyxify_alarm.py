@@ -6,6 +6,7 @@ import sys
 
 
 DEFAULT_STUCK_AFTER_SECONDS = 300
+ALARM_REPEAT_SECONDS = 8.0
 
 
 def _parse_updated_at(value):
@@ -79,25 +80,31 @@ class NyxifyAlarmTracker:
     def clear(self):
         self._active.clear()
 
+    def active_incidents(self):
+        return list(self._active.values())
+
 
 def play_alarm_sound():
-    """Play one non-blocking alarming system sound without showing UI."""
+    """Play an audible warning pattern without showing UI."""
     try:
         if sys.platform.startswith("win"):
             import winsound
 
-            winsound.MessageBeep(winsound.MB_ICONHAND)
+            # MessageBeep is too easy to miss because it is just a normal
+            # Windows notification. Use a short descending warning pattern.
+            for frequency, duration in ((880, 220), (660, 220), (880, 220), (660, 420)):
+                winsound.Beep(frequency, duration)
             return
         if sys.platform == "darwin":
-            for command in (
+            subprocess.Popen(
                 ["afplay", "/System/Library/Sounds/Basso.aiff"],
-                ["osascript", "-e", "beep 3"],
-            ):
-                try:
-                    subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    return
-                except Exception:
-                    continue
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
         print("\a\a\a", end="", flush=True)
     except Exception:
-        pass
+        try:
+            print("\a\a\a", end="", flush=True)
+        except Exception:
+            pass

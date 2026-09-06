@@ -1,5 +1,9 @@
 from datetime import datetime, timedelta, timezone
+import sys
+from types import SimpleNamespace
+from unittest import mock
 
+import core.nyxify_alarm as nyxify_alarm
 from core.nyxify_alarm import NyxifyAlarmTracker, detect_nyxify_alarm_incidents
 
 
@@ -49,3 +53,23 @@ def test_alarm_tracker_deduplicates_until_incident_clears():
     assert tracker.observe([failed], now=NOW) == []
     assert tracker.observe([], now=NOW) == []
     assert len(tracker.observe([failed], now=NOW)) == 1
+
+
+def test_alarm_tracker_exposes_active_incidents_for_repeating_alarm():
+    tracker = NyxifyAlarmTracker()
+    failed = task(status="FAILED", error="Failed.")
+
+    tracker.observe([failed], now=NOW)
+    assert len(tracker.active_incidents()) == 1
+    tracker.observe([], now=NOW)
+    assert tracker.active_incidents() == []
+
+
+def test_windows_alarm_uses_warning_tones_instead_of_message_beep():
+    winsound = SimpleNamespace(Beep=mock.Mock(), MessageBeep=mock.Mock())
+    with mock.patch.object(nyxify_alarm.sys, "platform", "win32"), \
+            mock.patch.dict(sys.modules, {"winsound": winsound}):
+        nyxify_alarm.play_alarm_sound()
+
+    assert winsound.Beep.call_count == 4
+    winsound.MessageBeep.assert_not_called()
