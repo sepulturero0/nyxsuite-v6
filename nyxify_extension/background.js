@@ -62,6 +62,7 @@ const DEFAULT_TEMPORARY_PROFILE_NAME = "Snapchat:";
 const DEFAULT_ADSPOWER_GROUP = "Snapchat";
 const DEFAULT_EXTENSION_CATEGORY = "Snap";
 const DEFAULT_TAG_ONE = "";
+const DEFAULT_VERIFICATION_PRIORITY = "auto";
 
 let flushInFlight = null;
 let activeScrapeRun = null;
@@ -91,6 +92,7 @@ function normalizePositiveInteger(value, fallback = 0) {
 
 function normalizeConfig(config) {
   const safeConfig = config || {};
+  const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
   const parsedRowLimit = normalizePositiveInteger(safeConfig.rowLimit, 20);
   const parsedMaxParallel = normalizePositiveInteger(safeConfig.maxParallelProfiles, 1);
   const hasBlockedProxies = Object.prototype.hasOwnProperty.call(safeConfig, "blockedProxies");
@@ -122,6 +124,7 @@ function normalizeConfig(config) {
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
     keepProfileOpenAfterSignup: safeConfig.keepProfileOpenAfterSignup === true,
+    verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
     autoFillAccountTarget: normalizePositiveInteger(safeConfig.autoFillAccountTarget, 0),
     lockG5: safeConfig.lockG5 === true,
@@ -152,6 +155,7 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
     fullAutoModeEnabled: runner.full_auto_mode_enabled === true,
     continuousModeEnabled: runner.continuous_mode_enabled === true,
     keepProfileOpenAfterSignup: runner.keep_profile_open_after_signup === true,
+    verificationPriority: runner.verification_priority || base.verificationPriority,
   });
 }
 
@@ -172,6 +176,7 @@ function runnerConfigPayloadFromExtensionConfig(config, replaceBlocked = false) 
     full_auto_mode_enabled: safe.fullAutoModeEnabled,
     continuous_mode_enabled: safe.continuousModeEnabled,
     keep_profile_open_after_signup: safe.keepProfileOpenAfterSignup,
+    verification_priority: safe.verificationPriority,
   };
   // The runner ignores blocked_proxies unless this flag says the caller is a
   // deliberate banned-list editor — so an incidental save can't wipe bans added

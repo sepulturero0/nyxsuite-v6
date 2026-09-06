@@ -33,6 +33,7 @@ from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
 from core.runner_supervisor import RunnerSupervisor
 from core.timing_diag import elapsed, log_timing, now
+from core.nyxify_alarm import NyxifyAlarmTracker, play_alarm_sound
 from core.webui_server import WebDashboardServer
 
 SINGLE_INSTANCE_PORT = int(os.getenv("NYXSUITE_BRIDGE_PORT", "8869"))
@@ -86,6 +87,8 @@ class BridgeApp:
         self._tray_icon = None
         self._last_tray_image = None
         self._transparent_tray_icon = False
+        self._nyxify_failure_alarm_enabled = False
+        self._nyxify_alarm_tracker = NyxifyAlarmTracker()
         self._stop = threading.Event()
         self.token = ""
 
@@ -107,7 +110,11 @@ class BridgeApp:
 
         # Per-install token required on state-changing endpoints (env can override).
         self.token = os.getenv("NYXSUITE_TOKEN") or get_or_create_token()
-        self._transparent_tray_icon = bool(load_bridge_config().get("transparent_tray_icon", False))
+        bridge_config = load_bridge_config()
+        self._transparent_tray_icon = bool(bridge_config.get("transparent_tray_icon", False))
+        self._nyxify_failure_alarm_enabled = bool(
+            bridge_config.get("nyxify_failure_alarm_enabled", False)
+        )
         self.adspower = AdsPowerManager()
         self.nyx = NyxController(self.supervisor, adspower=self.adspower)
         self.nyxify = NyxifyController(self.supervisor, adspower=self.adspower)
@@ -171,6 +178,7 @@ class BridgeApp:
             })
         except Exception as exc:
             log(f"Ctrl+F7/F8 stop/start hotkeys unavailable: {exc}")
+        self._start_nyxify_alarm_watcher()
         log_timing("bridge.start_servers", start, "bridge")
 
     def _bridge_actions(self) -> dict:
@@ -186,6 +194,7 @@ class BridgeApp:
             "install_deps_status": self._action_install_deps_status,
             "tray_icon": self._action_tray_icon,
             "set_tray_icon": self._action_set_tray_icon,
+            "set_nyxify_failure_alarm": self._action_set_nyxify_failure_alarm,
             "sync_extensions": self._action_sync_extensions,
             "hotkey_product": self._action_hotkey_product,
             "adspower_test": self._action_adspower_test,
@@ -196,7 +205,45 @@ class BridgeApp:
     def _bridge_settings_snapshot(self) -> dict:
         return {
             "transparent_tray_icon": bool(getattr(self, "_transparent_tray_icon", False)),
+            "nyxify_failure_alarm_enabled": bool(
+                getattr(self, "_nyxify_failure_alarm_enabled", False)
+            ),
         }
+
+    def _action_set_nyxify_failure_alarm(self, payload=None) -> dict:
+        enabled = bool((payload or {}).get("enabled"))
+        config = save_bridge_config({"nyxify_failure_alarm_enabled": enabled})
+        self._nyxify_failure_alarm_enabled = bool(config["nyxify_failure_alarm_enabled"])
+        if not self._nyxify_failure_alarm_enabled:
+            self._nyxify_alarm_tracker.clear()
+        return {
+            "ok": True,
+            "enabled": self._nyxify_failure_alarm_enabled,
+            "message": "Nyxify failure alarm enabled." if enabled else "Nyxify failure alarm disabled.",
+        }
+
+    def _start_nyxify_alarm_watcher(self):
+        def loop():
+            while not self._stop.is_set():
+                try:
+                    if self._nyxify_failure_alarm_enabled and self.nyxify is not None:
+                        fresh_incidents = self._nyxify_alarm_tracker.observe(
+                            self.nyxify.store.list_tasks(limit=500)
+                        )
+                        for incident in fresh_incidents:
+                            log(
+                                "Nyxify alarm: "
+                                f"{incident['kind']} row={incident['row_key']} "
+                                f"reason={incident['reason']}"
+                            )
+                            play_alarm_sound()
+                    elif not self._nyxify_failure_alarm_enabled:
+                        self._nyxify_alarm_tracker.clear()
+                except Exception as exc:
+                    log(f"Nyxify alarm watcher failed: {exc}")
+                self._stop.wait(1.0)
+
+        threading.Thread(target=loop, name="nyxify-alarm", daemon=True).start()
 
     def _action_hotkey_product(self, payload=None) -> dict:
         # Kept only so older cached dashboards calling this endpoint don't get an

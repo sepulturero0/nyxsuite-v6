@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.6.5 - Dashboard routing, verification priority, and failure alarm
+
+### Dashboard
+- Extension Open Dashboard buttons now deep-link to the matching Nyx or Nyxify panel.
+
+### Nyxify verification
+- Added Email, Phone, and Auto Verification priority settings.
+- Auto uses the first verification method Snapchat presents.
+- Explicit Email and Phone priorities fall back once to the opposite method when
+  the preferred verification path fails.
+
+### Nyxify failure alarm
+- Added an optional Dashboard -> Settings alarm toggle, disabled by default.
+- When enabled, Nyxify plays a system alarm sound for failed tasks or tasks with
+  no progress for five minutes. No visual popup is shown.
+
 ## 6.6.4 - Verification recovery and dashboard defaults
 
 ### Snapchat verification

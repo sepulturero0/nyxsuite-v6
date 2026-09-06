@@ -96,7 +96,8 @@ const backendConfig = {
   push_adspower_id_enabled: true,
   full_auto_mode_enabled: true,
   continuous_mode_enabled: true,
-  keep_profile_open_after_signup: true
+  keep_profile_open_after_signup: true,
+  verification_priority: "phone"
 };
 
 const context = {
@@ -166,16 +167,20 @@ vm.runInContext(
     assert data["mapped"]["fullAutoModeEnabled"] is True
     assert data["mapped"]["continuousModeEnabled"] is True
     assert data["mapped"]["keepProfileOpenAfterSignup"] is True
+    assert data["mapped"]["verificationPriority"] == "phone"
     assert data["payload"]["tag_one"] == ""
     assert data["payload"]["adspower_tags_enabled"] is False
     assert data["payload"]["continuous_mode_enabled"] is True
     assert data["payload"]["keep_profile_open_after_signup"] is True
+    assert data["payload"]["verification_priority"] == "phone"
     assert data["statusConfig"]["tagOne"] == ""
     assert data["statusConfig"]["adspowerTagsEnabled"] is False
     assert data["statusConfig"]["continuousModeEnabled"] is True
     assert data["statusConfig"]["keepProfileOpenAfterSignup"] is True
+    assert data["statusConfig"]["verificationPriority"] == "phone"
     assert data["savedConfig"]["tagOne"] == ""
     assert data["savedConfig"]["keepProfileOpenAfterSignup"] is True
+    assert data["savedConfig"]["verificationPriority"] == "phone"
     assert data["fetchedConfig"] is True
     assert data["storageSetCount"] >= 1
 

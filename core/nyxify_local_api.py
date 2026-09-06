@@ -1808,6 +1808,7 @@ class NyxifyLocalApiServer:
                         "push_adspower_id_enabled",
                         "full_auto_mode_enabled",
                         "continuous_mode_enabled",
+                        "verification_priority",
                         "keep_profile_open_after_signup",
                         "disable_extensions_enabled",
                         "launch_on_windows_startup",

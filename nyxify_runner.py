@@ -1333,6 +1333,9 @@ async def process_task(task, store, adspower):
     push_adspower_id_enabled = bool(config.get("push_adspower_id_enabled", True))
     full_auto_mode_enabled = bool(config.get("full_auto_mode_enabled", False))
     continuous_mode_enabled = bool(config.get("continuous_mode_enabled", False))
+    verification_priority = str(config.get("verification_priority") or "auto").strip().lower()
+    if verification_priority not in {"email", "phone", "auto"}:
+        verification_priority = "auto"
     keep_profile_open_after_signup = bool(config.get("keep_profile_open_after_signup", False))
     names_dir = _resolve_names_dir(config)
     created = None
@@ -1817,6 +1820,7 @@ async def process_task(task, store, adspower):
                 progress_callback=_signup_progress,
                 phone_fetcher=phone_fetcher,
                 sms_fetcher=sms_fetcher,
+                verification_priority=verification_priority,
             )
 
             signup_error = str(creds.get("error") or "").strip()

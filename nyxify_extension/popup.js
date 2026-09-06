@@ -15,6 +15,7 @@ const DEFAULT_TEMPORARY_PROFILE_NAME = "Snapchat:";
 const DEFAULT_ADSPOWER_GROUP = "Snapchat";
 const DEFAULT_EXTENSION_CATEGORY = "Snap";
 const DEFAULT_TAG_ONE = "";
+const DEFAULT_VERIFICATION_PRIORITY = "auto";
 
 function normalizePositiveInteger(value, fallback = 0) {
   const parsed = parseInt(value, 10);
@@ -23,6 +24,7 @@ function normalizePositiveInteger(value, fallback = 0) {
 
 function normalizePopupConfig(config) {
   const safeConfig = config || {};
+  const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
   return {
     enabled: safeConfig.enabled !== false,
     pushAdspowerIdEnabled: safeConfig.pushAdspowerIdEnabled !== false,
@@ -32,6 +34,7 @@ function normalizePopupConfig(config) {
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
     keepProfileOpenAfterSignup: safeConfig.keepProfileOpenAfterSignup === true,
+    verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
     lockG5: safeConfig.lockG5 === true,
     lockTV: safeConfig.lockTV === true,

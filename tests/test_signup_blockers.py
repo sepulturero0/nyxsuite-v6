@@ -811,7 +811,7 @@ class SignupUsernameRetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(steps, ["awaiting_email_verification"])
         self.assertEqual(page.waits, [])
 
-    async def test_email_switch_wins_over_stale_username_taken_error(self):
+    async def test_auto_phone_card_wins_over_stale_username_taken_error(self):
         class FakeProgressPage:
             url = "https://accounts.snapchat.com/v2/signup"
 
@@ -831,7 +831,7 @@ class SignupUsernameRetryTests(unittest.IsolatedAsyncioTestCase):
             mock.patch.object(signup_flow, "_read_input_value", mock.AsyncMock(return_value="milyaure")), \
             mock.patch.object(signup_flow, "_is_username_taken_error_visible", mock.AsyncMock(return_value=True)), \
             mock.patch.object(signup_flow, "_is_use_email_switch_visible", mock.AsyncMock(return_value=True)), \
-            mock.patch.object(signup_flow, "_click_use_email_instead", mock.AsyncMock(return_value=True)) as click_email, \
+             mock.patch.object(signup_flow, "_click_use_email_instead", mock.AsyncMock(return_value=True)) as click_email, \
             mock.patch.object(signup_flow, "_visible_any", mock.AsyncMock(return_value="")), \
             mock.patch.object(signup_flow, "_retry_taken_username", mock.AsyncMock(return_value="")) as retry_taken, \
             mock.patch.object(signup_flow, "_is_unable_to_process_error_visible", mock.AsyncMock(return_value=False)):
@@ -845,10 +845,10 @@ class SignupUsernameRetryTests(unittest.IsolatedAsyncioTestCase):
                 progress_callback=lambda step: steps.append(step),
             )
 
-        self.assertEqual(stage, "")
-        click_email.assert_awaited_once()
+        self.assertEqual(stage, "phone")
+        click_email.assert_not_awaited()
         retry_taken.assert_not_awaited()
-        self.assertEqual(steps, ["clicking_use_email_instead"])
+        self.assertEqual(steps, ["awaiting_phone_verification"])
 
     async def test_unable_to_process_retry_uses_fast_submit_and_short_settle(self):
         class FakeProgressPage:
@@ -921,10 +921,10 @@ class SignupUsernameRetryTests(unittest.IsolatedAsyncioTestCase):
                 progress_callback=lambda step: steps.append(step),
             )
 
-        self.assertEqual(stage, "")
-        click_email.assert_awaited_once()
+        self.assertEqual(stage, "phone")
+        click_email.assert_not_awaited()
         click_submit.assert_not_awaited()
-        self.assertEqual(steps, ["clicking_use_email_instead"])
+        self.assertEqual(steps, ["awaiting_phone_verification"])
 
 
 if __name__ == "__main__":

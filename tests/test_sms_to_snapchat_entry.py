@@ -62,9 +62,8 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn('return "phone"', flow)
         self.assertIn("falling back to phone verification", flow)
         self.assertIn('if stage == "phone":', flow)
-        self.assertIn(
-            "return await _handle_optional_phone_sms_verification(", flow
-        )
+        self.assertIn("async def run_phone_verification", flow)
+        self.assertIn("fallback_callback=phone_fallback_callback", flow)
 
     def test_email_verify_failure_switches_to_phone(self):
         flow = (ROOT / "core" / "signup_flow.py").read_text(encoding="utf-8")
@@ -126,7 +125,7 @@ class PhoneRoutingSourceTests(unittest.TestCase):
         #   2) phone shown during/after the email path (email-OTP not taken),
         #   3) phone shown as a SECOND verification after a successful email OTP.
         self.assertGreaterEqual(
-            flow.count("return await _handle_optional_phone_sms_verification("), 3
+            flow.count("return await run_phone_verification("), 3
         )
 
 

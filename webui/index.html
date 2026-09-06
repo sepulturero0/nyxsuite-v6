@@ -340,6 +340,19 @@
             </div>
 
             <div class="card settings-card">
+              <h2>Nyxify Failure Alarm</h2>
+              <p class="hint">Play an alarming sound when a Nyxify task fails or stops progressing for 5 minutes. No popup is shown.</p>
+              <div class="toggle-row">
+                <span class="toggle-text">Failure alarm</span>
+                <label class="toggle-switch" for="nyxify-failure-alarm-toggle">
+                  <input id="nyxify-failure-alarm-toggle" type="checkbox">
+                  <span class="toggle-slider"></span>
+                </label>
+              </div>
+              <span id="nyxify-failure-alarm-feedback" class="feedback"></span>
+            </div>
+
+            <div class="card settings-card">
               <h2>Runtime Cleanup</h2>
               <p class="hint">Remove disposable NyxSuite log files and cached runtime data. Active log files are truncated safely.</p>
               <div class="setting-row">

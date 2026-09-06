@@ -93,7 +93,7 @@ const state = {
   nyx: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, advancedVisible: false, search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
   nyxify: { rows: new Map(), counts: {}, bot: {}, usage: null, health: null, live: null, config: {}, fullautoVisible: false, proxyrankVisible: false, advancedVisible: false, bannedRows: [], proxyRankingRows: [], search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
   suite: { search: "", sort: "", dir: 1, statusFilter: "", checked: new Set() },
-  bridge: { settings: { transparent_tray_icon: false } },
+  bridge: { settings: { transparent_tray_icon: false, nyxify_failure_alarm_enabled: false } },
   version: "",
   update: { checked: false, available: false, current: "", latest: "", latest_name: "", notes: "", backups: [], availableVersions: [] },
 };
@@ -936,6 +936,7 @@ async function renderSettings() {
     state.bridge.settings.transparent_tray_icon = !!tray.transparent;
   }
   renderTrayIconPreference();
+  renderNyxifyFailureAlarmPreference();
 
   await refreshConfig("nyx");
   renderAdsPowerModeControls();
@@ -957,6 +958,19 @@ function renderTrayIconPreference() {
     feedback.textContent = toggle && toggle.checked
       ? "Transparent on macOS; click target stays active."
       : "Current visible status dot.";
+  }
+}
+
+function renderNyxifyFailureAlarmPreference() {
+  const toggle = el("nyxify-failure-alarm-toggle");
+  if (toggle) {
+    toggle.checked = (state.bridge.settings || {}).nyxify_failure_alarm_enabled !== false;
+  }
+  const feedback = el("nyxify-failure-alarm-feedback");
+  if (feedback && !feedback.dataset.busy) {
+    feedback.textContent = toggle && toggle.checked
+      ? "Sound alarm enabled."
+      : "Sound alarm disabled.";
   }
 }
 
@@ -1182,8 +1196,11 @@ function renderNyxifyAdvanced() {
   // Pre-fill the warm-up editor with the built-in list when no custom list has
   // been saved yet, so the sites are visible and can be edited/removed.
   const warmupSites = (Array.isArray(v.cookie_warmup_sites) && v.cookie_warmup_sites.length)
-    ? v.cookie_warmup_sites
-    : (Array.isArray(v.cookie_warmup_sites_default) ? v.cookie_warmup_sites_default : []);
+     ? v.cookie_warmup_sites
+     : (Array.isArray(v.cookie_warmup_sites_default) ? v.cookie_warmup_sites_default : []);
+  const verificationPriority = ["email", "phone", "auto"].includes(v.verification_priority)
+    ? v.verification_priority
+    : "auto";
   body.innerHTML = `
     <div class="adv-grid">
       <label class="adv-field"><span>Max parallel</span><input id="ncfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 1)}"></label>
@@ -1198,6 +1215,11 @@ function renderNyxifyAdvanced() {
       <div class="adv-field toggle-row"><span class="toggle-text">Proxy Checker <span class="muted">(uses AdsPower check)</span></span><label class="toggle-switch"><input id="ncfg-proxy_checker_enabled" type="checkbox" ${v.proxy_checker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Full Auto Mode</span><label class="toggle-switch"><input id="ncfg-full_auto_mode_enabled" type="checkbox" ${v.full_auto_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Continuous Mode <span class="muted">(send completed signups to Nyx)</span></span><label class="toggle-switch"><input id="ncfg-continuous_mode_enabled" type="checkbox" ${v.continuous_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+      <label class="adv-field"><span>Verification priority</span><select id="ncfg-verification_priority" class="input">
+        <option value="email" ${verificationPriority === "email" ? "selected" : ""}>Email</option>
+        <option value="phone" ${verificationPriority === "phone" ? "selected" : ""}>Phone</option>
+        <option value="auto" ${verificationPriority === "auto" ? "selected" : ""}>Auto</option>
+      </select></label>
       <div class="adv-field toggle-row"><span class="toggle-text">Disable extensions on create <span class="muted">(off = leave extensions on during signup)</span></span><label class="toggle-switch"><input id="ncfg-disable_extensions_enabled" type="checkbox" ${v.disable_extensions_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Cookie Warm-up <span class="muted">(browse sites before signup)</span></span><label class="toggle-switch"><input id="ncfg-cookie_warmup_enabled" type="checkbox" ${v.cookie_warmup_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">whox Trust Check <span class="muted">(deep-scan whox.com before warm-up)</span></span><label class="toggle-switch"><input id="ncfg-whox_check_enabled" type="checkbox" ${v.whox_check_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
@@ -1231,6 +1253,25 @@ el("tray-transparent-toggle").addEventListener("change", async () => {
   } else {
     el("tray-transparent-toggle").checked = !transparent;
     if (feedback) feedback.textContent = r.error || "Could not save menu bar icon setting.";
+  }
+  if (feedback) feedback.dataset.busy = "";
+});
+
+el("nyxify-failure-alarm-toggle").addEventListener("change", async () => {
+  const toggle = el("nyxify-failure-alarm-toggle");
+  const feedback = el("nyxify-failure-alarm-feedback");
+  const enabled = !!toggle.checked;
+  if (feedback) {
+    feedback.dataset.busy = "1";
+    feedback.textContent = "Saving alarm setting...";
+  }
+  const result = await callBridge("set_nyxify_failure_alarm", { enabled });
+  if (result.ok) {
+    state.bridge.settings.nyxify_failure_alarm_enabled = !!result.enabled;
+    if (feedback) feedback.textContent = result.message || "Alarm setting saved.";
+  } else {
+    toggle.checked = !enabled;
+    if (feedback) feedback.textContent = result.error || "Could not save alarm setting.";
   }
   if (feedback) feedback.dataset.busy = "";
 });
@@ -1432,6 +1473,7 @@ document.addEventListener("click", async (e) => {
       proxy_checker_enabled: el("ncfg-proxy_checker_enabled").checked,
       full_auto_mode_enabled: el("ncfg-full_auto_mode_enabled").checked,
       continuous_mode_enabled: el("ncfg-continuous_mode_enabled").checked,
+      verification_priority: el("ncfg-verification_priority").value,
       disable_extensions_enabled: el("ncfg-disable_extensions_enabled").checked,
       cookie_warmup_enabled: el("ncfg-cookie_warmup_enabled").checked,
       cookie_warmup_sites: el("ncfg-cookie_warmup_sites").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
@@ -2637,8 +2679,9 @@ setTimeout(() => { runUpdateCheck(false).catch(() => {}); }, 1200);
 // Deep link: the extension's "Setup & Install" button opens the dashboard at
 // #setup — jump to Settings and highlight the Setup & Install card.
 function handleHashRoute() {
-  // Legacy #nyx / #nyxify deep links land on the merged suite table.
-  if (location.hash === "#nyx" || location.hash === "#nyxify" || location.hash === "#suite") { setActive("suite"); return; }
+  if (location.hash === "#nyx") { setActive("nyx"); return; }
+  if (location.hash === "#nyxify") { setActive("nyxify"); return; }
+  if (location.hash === "#suite") { setActive("suite"); return; }
   if (location.hash === "#setup") {
     setActive("settings");
     setTimeout(() => {

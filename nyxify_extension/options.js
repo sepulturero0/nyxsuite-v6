@@ -4,6 +4,7 @@ const DEFAULT_TEMPORARY_PROFILE_NAME = "Snapchat:";
 const DEFAULT_ADSPOWER_GROUP = "Snapchat";
 const DEFAULT_EXTENSION_CATEGORY = "Snap";
 const DEFAULT_TAG_ONE = "";
+const DEFAULT_VERIFICATION_PRIORITY = "auto";
 const TOGGLE_OPTIONS = [
   ["proxyBlockerToggle", "proxyBlockerEnabled", "Proxy Blocker enabled.", "Proxy Blocker disabled."],
   ["proxyCheckerToggle", "proxyCheckerEnabled", "Proxy Checker enabled.", "Proxy Checker disabled."],
@@ -33,6 +34,7 @@ function normalizeStringConfig(config, key, defaultValue, allowBlank = true) {
 
 function normalizeConfig(config) {
   const safeConfig = config || {};
+  const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
   const parsedAutoFillTarget = Number.parseInt(safeConfig.autoFillAccountTarget, 10);
   return {
     localApiUrl: String(safeConfig.localApiUrl || "http://127.0.0.1:8866").trim(),
@@ -54,6 +56,7 @@ function normalizeConfig(config) {
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
     keepProfileOpenAfterSignup: safeConfig.keepProfileOpenAfterSignup === true,
+    verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
     autoFillAccountTarget: Number.isFinite(parsedAutoFillTarget) && parsedAutoFillTarget > 0 ? parsedAutoFillTarget : 0,
     lockG5: safeConfig.lockG5 === true,
@@ -82,6 +85,7 @@ function loadOptions() {
     document.getElementById("keepProfileOpenToggle").checked = config.keepProfileOpenAfterSignup === true;
     document.getElementById("autoFillRowToggle").checked = config.autoFillRow;
     document.getElementById("autoFillAccountTarget").value = config.autoFillAccountTarget > 0 ? config.autoFillAccountTarget : "";
+    document.getElementById("verificationPriority").value = config.verificationPriority;
     document.getElementById("lockG5Toggle").checked = config.lockG5;
     document.getElementById("lockTVToggle").checked = config.lockTV;
     document.getElementById("enabledToggle").checked = config.enabled;
@@ -113,6 +117,7 @@ function saveOptions() {
     keepProfileOpenAfterSignup: document.getElementById("keepProfileOpenToggle").checked,
     autoFillRow: document.getElementById("autoFillRowToggle").checked,
     autoFillAccountTarget: document.getElementById("autoFillAccountTarget").value,
+    verificationPriority: document.getElementById("verificationPriority").value,
     lockG5: document.getElementById("lockG5Toggle").checked,
     lockTV: document.getElementById("lockTVToggle").checked,
     enabled: document.getElementById("enabledToggle").checked,

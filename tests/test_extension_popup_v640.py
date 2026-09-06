@@ -132,6 +132,30 @@ def test_dashboard_uses_shared_outfit_editor_and_hides_outfits_category():
     assert "bm-outfit-add" in dashboard_html
 
 
+def test_extension_dashboard_links_open_the_matching_product_panel():
+    dashboard_js = read("webui/dashboard.js")
+    nyx_popup_js = read("nyx_extension/popup.js")
+    nyxify_popup_js = read("nyxify_extension/popup.js")
+
+    assert 'DASHBOARD_URL + "#nyx"' in nyx_popup_js
+    assert 'DASHBOARD_URL + "#nyxify"' in nyxify_popup_js
+    assert 'if (location.hash === "#nyx") { setActive("nyx"); return; }' in dashboard_js
+    assert 'if (location.hash === "#nyxify") { setActive("nyxify"); return; }' in dashboard_js
+
+
+def test_nyxify_verification_priority_is_exposed_in_config_surfaces():
+    dashboard_js = read("webui/dashboard.js")
+    options_html = read("nyxify_extension/options.html")
+    options_js = read("nyxify_extension/options.js")
+    background_js = read("nyxify_extension/background.js")
+
+    assert 'id="ncfg-verification_priority"' in dashboard_js
+    assert 'verification_priority: el("ncfg-verification_priority").value' in dashboard_js
+    assert 'id="verificationPriority"' in options_html
+    assert "verificationPriority" in options_js
+    assert "verification_priority" in background_js
+
+
 def version_decl(name, text):
     match = re.search(rf'^{name}\s*=\s*"([^"]+)"', text, re.MULTILINE)
     assert match, f"{name} declaration not found"
@@ -139,7 +163,7 @@ def version_decl(name, text):
 
 
 def test_extension_version_metadata_is_synced():
-    expected_version = "6.6.4"
+    expected_version = "6.6.5"
     version_py = read("core/version.py")
     nyx_manifest = json.loads(read("nyx_extension/manifest.json"))
     nyxify_manifest = json.loads(read("nyxify_extension/manifest.json"))

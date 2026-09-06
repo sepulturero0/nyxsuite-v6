@@ -72,6 +72,7 @@ DEFAULTS = {
     "push_adspower_id_enabled": True,
     "full_auto_mode_enabled": False,
     "continuous_mode_enabled": False,
+    "verification_priority": "auto",
     "keep_profile_open_after_signup": False,
     # Turning off the profile's Chrome extensions during account creation is now
     # opt-in and OFF by default (users asked to stop disabling extensions while
@@ -94,6 +95,8 @@ DEFAULTS = {
     "whox_min_trust_score": 70,
     "whox_url": "https://whox.com/",
 }
+
+VERIFICATION_PRIORITIES = {"email", "phone", "auto"}
 
 
 def _safe_int(value, default):
@@ -130,6 +133,11 @@ def _safe_bool(value, default):
     if value is None:
         return default
     return bool(value)
+
+
+def _safe_verification_priority(value, default="auto"):
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in VERIFICATION_PRIORITIES else default
 
 
 def _safe_score(value, default, lo=1, hi=100):
@@ -196,6 +204,10 @@ def load_nyxify_config():
         "continuous_mode_enabled": _safe_bool(
             raw.get("continuous_mode_enabled"),
             DEFAULTS["continuous_mode_enabled"],
+        ),
+        "verification_priority": _safe_verification_priority(
+            raw.get("verification_priority"),
+            DEFAULTS["verification_priority"],
         ),
         "keep_profile_open_after_signup": _safe_bool(
             raw.get("keep_profile_open_after_signup"),
@@ -280,6 +292,10 @@ def save_nyxify_config(updates):
         "continuous_mode_enabled": _safe_bool(
             updates.get("continuous_mode_enabled"),
             current["continuous_mode_enabled"],
+        ),
+        "verification_priority": _safe_verification_priority(
+            updates.get("verification_priority", current["verification_priority"]),
+            current["verification_priority"],
         ),
         "keep_profile_open_after_signup": _safe_bool(
             updates.get("keep_profile_open_after_signup"),

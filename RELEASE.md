@@ -9,6 +9,18 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.5
+
+- Extension dashboard links now open the matching Nyx or Nyxify dashboard panel.
+- Added Nyxify Verification priority settings for Email, Phone, and Auto. Auto
+  uses whichever verification card appears first, while explicit priorities use
+  a one-way fallback to the other method when verification fails.
+- Added an optional Nyxify Failure Alarm in Dashboard -> Settings. When enabled,
+  it plays a system alarm sound for failed tasks or tasks with no progress for
+  five minutes; it does not show a popup.
+- Added regression coverage for dashboard routing, verification fallback, alarm
+  detection, alarm deduplication, and persisted settings.
+
 ### NyxSuite v6.6.4
 
 - Improved Snapchat email/phone replacement transitions so stale verification

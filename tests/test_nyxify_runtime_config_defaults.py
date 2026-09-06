@@ -52,3 +52,19 @@ def test_keep_profile_open_after_signup_flag_round_trips_through_save():
             nrc.save_nyxify_config({"keep_profile_open_after_signup": False})
             reloaded = nrc.load_nyxify_config()
             assert reloaded["keep_profile_open_after_signup"] is False
+
+
+def test_verification_priority_defaults_to_auto_and_round_trips():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            assert nrc.load_nyxify_config()["verification_priority"] == "auto"
+
+            nrc.save_nyxify_config({"verification_priority": "PHONE"})
+            assert nrc.load_nyxify_config()["verification_priority"] == "phone"
+
+            nrc.save_nyxify_config({"verification_priority": "not-a-mode"})
+            assert nrc.load_nyxify_config()["verification_priority"] == "phone"

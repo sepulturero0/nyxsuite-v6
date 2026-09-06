@@ -40,6 +40,8 @@ class DashboardSettingsSourceTests(unittest.TestCase):
 
         self.assertIn('id="clear-cache-logs-btn"', html)
         self.assertIn('callBridge("clear_cache_logs")', script)
+        self.assertIn('id="nyxify-failure-alarm-toggle"', html)
+        self.assertIn('set_nyxify_failure_alarm', script)
         self.assertNotIn('data-tab="suite"', html)
         self.assertIn('data-tab="nyxify" title="Nyxify', html)
         self.assertIn('let active = "nyxify";', script)
