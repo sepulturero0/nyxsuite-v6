@@ -1,5 +1,19 @@
 # Changelog
 
+## 6.6.7 - Spoken failure warning and wrong-code recovery wording
+
+### Nyxify failure alarm
+- The alarm speaks “There's an error. Please check manually.” after the warning
+  tone and repeats the voice warning every ten seconds while the incident is
+  active.
+- Windows uses PowerShell System.Speech; macOS uses `say`; Linux tries `spd-say`
+  and `espeak` when available.
+
+### Snapchat verification
+- Recognizes both “That code isn't right” and “That code is not right” as wrong
+  verification-code responses.
+- Routes those responses through the existing fresh email/phone recovery logic.
+
 ## 6.6.6 - SnapBoard verification control and repeating failure alarm
 
 ### SnapBoard verification

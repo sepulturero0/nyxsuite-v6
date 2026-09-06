@@ -9,6 +9,18 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.7
+
+- Nyxify Failure Alarm now speaks “There's an error. Please check manually.”
+  after the warning tone and repeats the voice warning every ten seconds while
+  the active failure or stall remains unresolved. Windows, macOS, and supported
+  Linux speech commands are used when available.
+- Snapchat's “That code isn't right. Please try again” wording is now recognized
+  as a wrong verification code and enters the existing fresh email/phone recovery
+  path.
+- Added regression coverage for platform speech dispatch and the new Snapchat
+  wrong-code wording.
+
 ### NyxSuite v6.6.6
 
 - SnapBoard Check Code / Check SMS selection remains scoped to the requested row

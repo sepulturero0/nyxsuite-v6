@@ -73,3 +73,13 @@ def test_windows_alarm_uses_warning_tones_instead_of_message_beep():
 
     assert winsound.Beep.call_count == 4
     winsound.MessageBeep.assert_not_called()
+
+
+def test_windows_alarm_voice_uses_platform_speech_command():
+    with mock.patch.object(nyxify_alarm.sys, "platform", "win32"), \
+            mock.patch.object(nyxify_alarm.subprocess, "Popen") as popen:
+        nyxify_alarm.play_alarm_voice()
+
+    command = popen.call_args.args[0]
+    assert command[:3] == ["powershell", "-NoProfile", "-NonInteractive"]
+    assert "There's an error. Please check manually." in command[-1]

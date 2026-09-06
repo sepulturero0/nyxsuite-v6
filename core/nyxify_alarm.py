@@ -7,6 +7,8 @@ import sys
 
 DEFAULT_STUCK_AFTER_SECONDS = 300
 ALARM_REPEAT_SECONDS = 8.0
+ALARM_VOICE_REPEAT_SECONDS = 10.0
+ALARM_VOICE_MESSAGE = "There's an error. Please check manually."
 
 
 def _parse_updated_at(value):
@@ -108,3 +110,35 @@ def play_alarm_sound():
             print("\a\a\a", end="", flush=True)
         except Exception:
             pass
+
+
+def play_alarm_voice():
+    """Speak the active-incident warning using the platform TTS command."""
+    try:
+        if sys.platform.startswith("win"):
+            script = (
+                "Add-Type -AssemblyName System.Speech; "
+                "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
+                "$s.Speak(\"There's an error. Please check manually.\")"
+            )
+            subprocess.Popen(
+                ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        if sys.platform == "darwin":
+            subprocess.Popen(
+                ["say", ALARM_VOICE_MESSAGE],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        for command in (["spd-say", ALARM_VOICE_MESSAGE], ["espeak", ALARM_VOICE_MESSAGE]):
+            try:
+                subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                return
+            except Exception:
+                continue
+    except Exception:
+        pass

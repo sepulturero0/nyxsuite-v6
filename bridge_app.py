@@ -33,7 +33,13 @@ from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
 from core.runner_supervisor import RunnerSupervisor
 from core.timing_diag import elapsed, log_timing, now
-from core.nyxify_alarm import ALARM_REPEAT_SECONDS, NyxifyAlarmTracker, play_alarm_sound
+from core.nyxify_alarm import (
+    ALARM_REPEAT_SECONDS,
+    ALARM_VOICE_REPEAT_SECONDS,
+    NyxifyAlarmTracker,
+    play_alarm_sound,
+    play_alarm_voice,
+)
 from core.webui_server import WebDashboardServer
 
 SINGLE_INSTANCE_PORT = int(os.getenv("NYXSUITE_BRIDGE_PORT", "8869"))
@@ -225,6 +231,7 @@ class BridgeApp:
     def _start_nyxify_alarm_watcher(self):
         def loop():
             next_alarm_at = 0.0
+            next_voice_at = 0.0
             while not self._stop.is_set():
                 try:
                     if self._nyxify_failure_alarm_enabled and self.nyxify is not None:
@@ -239,14 +246,20 @@ class BridgeApp:
                             )
                         active_incidents = self._nyxify_alarm_tracker.active_incidents()
                         now = time.monotonic()
-                        if active_incidents and now >= next_alarm_at:
-                            play_alarm_sound()
-                            next_alarm_at = now + ALARM_REPEAT_SECONDS
-                        elif not active_incidents:
+                        if active_incidents:
+                            if now >= next_alarm_at:
+                                play_alarm_sound()
+                                next_alarm_at = now + ALARM_REPEAT_SECONDS
+                            if now >= next_voice_at:
+                                play_alarm_voice()
+                                next_voice_at = now + ALARM_VOICE_REPEAT_SECONDS
+                        else:
                             next_alarm_at = 0.0
+                            next_voice_at = 0.0
                     elif not self._nyxify_failure_alarm_enabled:
                         self._nyxify_alarm_tracker.clear()
                         next_alarm_at = 0.0
+                        next_voice_at = 0.0
                 except Exception as exc:
                     log(f"Nyxify alarm watcher failed: {exc}")
                 self._stop.wait(1.0)

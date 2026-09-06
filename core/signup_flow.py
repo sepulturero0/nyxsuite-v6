@@ -84,6 +84,8 @@ _USERNAME_INVALID_ERROR_MARKERS = [
 _WRONG_VERIFICATION_CODE_ERROR_MARKERS = [
     "that's not the right code",
     "that is not the right code",
+    "that code isn't right",
+    "that code is not right",
     "not the right code",
     "incorrect code",
     "invalid code",

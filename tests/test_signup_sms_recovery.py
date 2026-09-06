@@ -238,6 +238,10 @@ class FetchPhoneFromProviderTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SmsRecoveryWiringTests(unittest.TestCase):
+    def test_wrong_code_markers_cover_snapchat_isnt_right_wording(self):
+        self.assertIn("that code isn't right", signup_flow._WRONG_VERIFICATION_CODE_ERROR_MARKERS)
+        self.assertIn("that code is not right", signup_flow._WRONG_VERIFICATION_CODE_ERROR_MARKERS)
+
     def test_handler_calls_recovery_before_giving_up(self):
         import inspect
 
