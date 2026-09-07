@@ -481,7 +481,7 @@ class RenameDialogFallbackTests(unittest.TestCase):
             "profile_id": "k1target",
             "name": "Snapchat: opalmily",
         })
-        ctrl._rect.assert_called_once_with("Enter Name", "Edit", timeout=0.35)
+        ctrl._rect.assert_called_once_with("Enter Name", "Edit", timeout=0.2)
         ctrl._fill_name.assert_called_once_with("Snapchat: opalmily")
         ctrl._click_ok.assert_called_once_with()
 
@@ -575,7 +575,7 @@ class RenameDialogFallbackTests(unittest.TestCase):
             "profile_id": "k1target",
             "name": "Snapchat: fastname",
         })
-        self.assertIn(("Enter Name", "Edit", 0.35), rect_calls)
+        self.assertIn(("Enter Name", "Edit", 0.2), rect_calls)
         self.assertIn(("OK", "Button", 0.35), rect_calls)
         self.assertNotIn(("Enter Name", "Edit", 1.2), rect_calls)
         self.assertNotIn(("OK", "Button", 4), rect_calls)

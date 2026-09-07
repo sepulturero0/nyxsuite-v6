@@ -1731,6 +1731,8 @@ class AdsPowerUIController:
         never decide which profile row is acted on.
         """
         header_bottoms = []
+        name_headers = []
+        ip_headers = []
         ids = []       # (center_y, top, left, height, str)
         names = []     # (center_y, top, left, str)
         for s, r in self._visible_text_items(fast=True):
@@ -1738,6 +1740,10 @@ class AdsPowerUIController:
             if low in self._HEADER_LABELS:
                 if low in self._ROW_DATA_HEADERS:
                     header_bottoms.append(r.bottom)
+                if low == "name":
+                    name_headers.append(r)
+                elif low == "ip":
+                    ip_headers.append(r)
                 continue
             if low.startswith("profile id is") or low.startswith("profile no./id is") or "filter" in low:
                 continue
@@ -1757,9 +1763,24 @@ class AdsPowerUIController:
                 continue
             seen.add(pid_key)
             tol = max(18, int(round(1.8 * height)))
+            name_header = min(name_headers, key=lambda r: abs(r.left - left), default=None)
+            ip_header = min(ip_headers, key=lambda r: abs(r.left - left), default=None)
+            if name_header is not None:
+                name_left = name_header.left - 40
+                name_right = (
+                    ip_header.left - 12
+                    if ip_header is not None and ip_header.left > name_header.left
+                    else name_header.right + 280
+                )
+                row_names = [
+                    item for item in names
+                    if name_left <= item[2] <= name_right
+                ]
+            else:
+                row_names = names
             same_band_names = [
                 (abs(ncy - cy), nleft, name)
-                for (ncy, _ntop, nleft, name) in names
+                for (ncy, _ntop, nleft, name) in row_names
                 if abs(ncy - cy) <= tol
             ]
             rname = ""
