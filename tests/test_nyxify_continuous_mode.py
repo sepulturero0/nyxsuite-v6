@@ -207,6 +207,7 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
         playwright_stop_delay_seconds=0,
         capture_handoff_state=False,
         capture_events=False,
+        snapboard_wait_side_effect=None,
     ):
         store = _FakeStore()
         events = []
@@ -294,7 +295,11 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(nyxify_runner, "clear_unrelated_tabs_except_adspower", side_effect=fake_clear_tabs, create=True), \
                 mock.patch.object(nyxify_runner, "open_snapchat_signup", side_effect=fake_open_signup), \
                 mock.patch.object(nyxify_runner, "perform_snapchat_signup", side_effect=signup_side_effect), \
-                mock.patch.object(nyxify_runner, "_wait_for_snapboard_update", side_effect=_fake_snapboard_wait), \
+                mock.patch.object(
+                    nyxify_runner,
+                    "_wait_for_snapboard_update",
+                    side_effect=snapboard_wait_side_effect or _fake_snapboard_wait,
+                ), \
                 mock.patch.object(nyxify_runner, "_request_snapboard_username_update", return_value=True), \
                 mock.patch.object(nyxify_runner, "_request_snapboard_adspower_id_update", side_effect=adspower_id_update), \
                 mock.patch.object(nyxify_runner, "_request_snapboard_adspower_name_update", side_effect=record_adspower_name_update), \
@@ -424,6 +429,21 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertIn("snapboard_name:Snapchat: cleepink", events)
         self.assertNotIn("snapboard_name:cleepink", events)
+
+    async def test_continuous_handoff_does_not_wait_for_adspower_name_confirmation(self):
+        waits = []
+
+        async def wait_for_update(_path, _row_key, label, timeout_seconds=30):
+            waits.append((label, timeout_seconds))
+            return label != "AdsPower name"
+
+        _store, _adspower, handoffs = await self._run_task(
+            True,
+            snapboard_wait_side_effect=wait_for_update,
+        )
+
+        self.assertEqual(handoffs, [("k1new", "Clea", "cleepink", "")])
+        self.assertNotIn("AdsPower name", [label for label, _timeout in waits])
 
     async def test_toggle_off_keeps_existing_close_after_signup_behavior(self):
         _store, adspower, handoffs = await self._run_task(False)

@@ -260,6 +260,7 @@ class MacBackendConnectionSpeedTests(unittest.TestCase):
         backend._app_ref = object()
         backend._window = object()
         backend.window_id = 123
+        backend.attr = mock.Mock(return_value=False)
         backend.element_rect = mock.Mock(return_value=Rect(0, 0, 1200, 800))
         backend._frontmost_app_name = mock.Mock(return_value="AdsPower Global")
         backend._find_adspower_app = mock.Mock(
@@ -276,6 +277,34 @@ class MacBackendConnectionSpeedTests(unittest.TestCase):
         backend.wrap.assert_called_once_with(backend._window)
         backend._find_adspower_app.assert_not_called()
         backend.foreground.assert_not_called()
+
+
+class MacBackendFocusTests(unittest.TestCase):
+    def _backend(self):
+        from core.adspower_ui_backend_macos import MacOSAdsPowerBackend
+
+        return MacOSAdsPowerBackend.__new__(MacOSAdsPowerBackend)
+
+    def test_profile_browser_does_not_count_as_global_dashboard(self):
+        backend = self._backend()
+
+        backend._frontmost_app_name = mock.Mock(return_value="AdsPower Browser | k1profile")
+        self.assertFalse(backend._frontmost_is_adspower())
+
+        backend._frontmost_app_name.return_value = "AdsPower Global"
+        self.assertTrue(backend._frontmost_is_adspower())
+
+    def test_cached_minimized_window_is_not_reused(self):
+        from core.adspower_ui_backend_macos import Rect
+
+        backend = self._backend()
+        backend._app = object()
+        backend._app_ref = object()
+        backend._window = object()
+        backend.attr = mock.Mock(side_effect=lambda _element, name: name == "AXMinimized")
+        backend.element_rect = mock.Mock(return_value=Rect(0, 0, 1200, 800))
+
+        self.assertFalse(backend._cached_window_is_usable())
 
 
 if __name__ == "__main__":

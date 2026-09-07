@@ -1304,7 +1304,7 @@ class NyxifyLocalApiServer:
                     path = outer.full_auto_username_store._model_file(model) if model else None
                     lines = FullAutoUsernameStore._read_lines(path) if path else []
                     data_lines = [l.strip() for l in lines if l.strip() and not l.startswith("#") and not l.startswith(";")]
-                    self._write_json(200, {"ok": True, "model": model, "usernames": data_lines})
+                    self._write_json(200, {"ok": True, "model": model, "usernames": data_lines, "count": len(data_lines)})
                     return
 
                 if parsed_path.path == "/signup_names":
@@ -1319,7 +1319,7 @@ class NyxifyLocalApiServer:
                         lines = [l.strip() for l in raw.splitlines() if l.strip() and not l.startswith("#") and not l.startswith(";")]
                     except Exception:
                         pass
-                    self._write_json(200, {"ok": True, "model": model, "resolved": resolved, "signup_names": lines})
+                    self._write_json(200, {"ok": True, "model": model, "resolved": resolved, "signup_names": lines, "count": len(lines)})
                     return
 
                 if parsed_path.path == "/proxy_ranking":

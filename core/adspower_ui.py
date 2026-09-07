@@ -1027,7 +1027,7 @@ class AdsPowerUIController:
         return None
 
     def _fill_name(self, name: str):
-        rect = self._rect("Optional: profile name", "Edit", timeout=4)
+        rect = self._rect("Optional: profile name", "Edit", timeout=1.5)
         if rect is None:
             rect = self._edit_right_of_label("Name")
         if rect is None:
@@ -1331,20 +1331,20 @@ class AdsPowerUIController:
         return str(value or "").strip()
 
     def _click_ok(self):
-        btn = self._rect("OK", "Button", timeout=4)
+        btn = self._rect("OK", "Button", timeout=1.5)
         if btn is not None:
             self._click_rect(btn, template_name="ok_btn")
         elif not self._click_vision("ok_btn"):
             raise AdsPowerUIError("Could not find the form OK button.")
         self._raise_if_plan_limit_popup()
         # Wait for the form to close (OK gone / New Profile button back).
-        deadline = time.time() + 12
+        deadline = time.time() + 5
         while time.time() < deadline:
             self._connect()
             if not self._find("OK", "Button", timeout=0.3, retry=False):
                 logger.info("Profile form submitted (OK closed).")
                 return
-            time.sleep(0.15)
+            time.sleep(0.08)
         logger.warning("OK still present after submit — possible validation error.")
 
     # ------------------------------------------------------------------
@@ -1743,7 +1743,7 @@ class AdsPowerUIController:
                 continue
             if self._is_profile_id_text(s):
                 ids.append((self._rect_center_y(r), r.top, r.left, max(1, r.height()), s))
-            elif low.startswith("snapchat:"):
+            elif low not in self._HEADER_LABELS and not low.startswith("profile id is") and not low.startswith("profile no./id is") and "filter" not in low:
                 names.append((self._rect_center_y(r), r.top, r.left, s))
 
         header_bottom = max(header_bottoms) if header_bottoms else None
@@ -2956,14 +2956,14 @@ class AdsPowerUIController:
                     px = name_rect.right + 12     # the edit pencil, just right of the name
                     py = (name_rect.top + name_rect.bottom) // 2
                     self._click_xy(px, py)
-                    deadline = time.time() + 1.5
+                    deadline = time.time() + 0.8
                     while time.time() < deadline:
                         if self._find("Enter Name", "Edit", timeout=0.3, retry=False) is not None:
                             return True
                         if self._find("OK", "Button", timeout=0.3, retry=False) is not None:
                             return True
                         time.sleep(0.08)
-            time.sleep(0.3)
+            time.sleep(0.1)
         if self._click_row_menu_rename(profile_id):
             deadline = time.time() + 2.5
             while time.time() < deadline:
@@ -2992,6 +2992,7 @@ class AdsPowerUIController:
         current filtered view. Under Nyxify's temp-name filter, a successful
         rename disappears; a failed clear leaves a visible duplicate-prefix name."""
         self._connect()
+        time.sleep(1.0)
         actual = self._visible_row_name(profile_id)
         if actual is None:
             return True
@@ -3047,14 +3048,14 @@ class AdsPowerUIController:
             self._recover_presearch_row_for_rename(profile_id)
         if not self._open_rename_dialog(profile_id):
             raise AdsPowerUIError(f"Could not open the rename dialog for {profile_id}.")
-        rect = self._rect("Enter Name", "Edit", timeout=0.35)
+        rect = self._rect("Enter Name", "Edit", timeout=0.2)
         if rect is None:
             for attempt in range(2):
                 if attempt:
                     if not self._open_rename_dialog(profile_id):
                         raise AdsPowerUIError(
                             f"Could not reopen the rename dialog for {profile_id} after a bad rename.")
-                    rect = self._rect("Enter Name", "Edit", timeout=0.35)
+                    rect = self._rect("Enter Name", "Edit", timeout=0.2)
                     if rect is not None:
                         break
                 self._fill_name(new_name)

@@ -305,6 +305,7 @@ class MacOSAdsPowerBackend:
             )
         self._window = chosen
         self.window_id = id(chosen)
+        self.foreground(force=True)
         return self.wrap(chosen)
 
     def foreground(self, force: bool = False):
@@ -319,6 +320,10 @@ class MacOSAdsPowerBackend:
             except Exception:
                 pass
         if self._window is not None:
+            # A profile browser can be the frontmost AdsPower-owned window while
+            # the Global dashboard is minimized or behind it. Restore the main
+            # dashboard before any accessibility lookup or coordinate click.
+            self.set_attr(self._window, "AXMinimized", False)
             self.perform_action(self._window, "AXRaise")
             self.set_attr(self._window, "AXMain", True)
             self.set_attr(self._window, "AXFocused", True)
@@ -371,6 +376,10 @@ class MacOSAdsPowerBackend:
         if self._window is None or self._app is None or self._app_ref is None:
             return False
         try:
+            if bool(self.attr(self._window, "AXHidden")) or bool(
+                self.attr(self._window, "AXMinimized")
+            ):
+                return False
             rect = self.element_rect(self._window)
         except Exception:
             return False
@@ -380,7 +389,10 @@ class MacOSAdsPowerBackend:
         )
 
     def _frontmost_is_adspower(self) -> bool:
-        return "adspower" in str(self._frontmost_app_name() or "").lower()
+        name = str(self._frontmost_app_name() or "").strip().lower()
+        # AdsPower profile Chromium windows are often named "AdsPower Browser".
+        # They must not suppress raising the AdsPower Global dashboard.
+        return "adspower" in name and "browser" not in name
 
     def current_foreground(self):
         try:
@@ -449,6 +461,7 @@ class MacOSAdsPowerBackend:
         return Rect(int(round(x)), int(round(y)), int(round(x + w)), int(round(y + h)))
 
     def _find_adspower_app(self):
+        fallback = None
         try:
             apps = self._appkit.NSWorkspace.sharedWorkspace().runningApplications()
         except Exception:
@@ -457,11 +470,13 @@ class MacOSAdsPowerBackend:
             try:
                 name = str(app.localizedName() or "")
                 bundle = str(app.bundleIdentifier() or "")
-                if "AdsPower" in name or "adspower" in bundle.lower():
+                if "AdsPower Global" in name or "adspower.global" in bundle.lower():
                     return app
+                if fallback is None and ("AdsPower" in name or "adspower" in bundle.lower()):
+                    fallback = app
             except Exception:
                 continue
-        return None
+        return fallback
 
     def _choose_window(self, windows):
         visible = []

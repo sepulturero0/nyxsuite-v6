@@ -82,6 +82,10 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
         nyxify_runner.NYXIFY_LOCAL_API_TOKEN = self._old_token
         nyxify_runner._LOCAL_API_TOKEN_CACHED = self._old_cached
 
+    def test_replacement_value_fetch_has_budget_for_redo_cooldown(self):
+        self.assertEqual(nyxify_runner._snapboard_value_fetch_timeout(False), 75.0)
+        self.assertEqual(nyxify_runner._snapboard_value_fetch_timeout(True), 180.0)
+
     async def test_email_terminal_bridge_error_returns_after_first_status_result(self):
         clock = FakeClock()
         status_calls = []

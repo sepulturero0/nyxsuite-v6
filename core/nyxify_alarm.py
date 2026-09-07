@@ -116,6 +116,13 @@ def play_alarm_voice():
     """Speak the active-incident warning using the platform TTS command."""
     try:
         if sys.platform.startswith("win"):
+            try:
+                from subprocess import STARTUPINFO
+                startupinfo = STARTUPINFO()
+                startupinfo.dwFlags |= 1  # STARTF_USESHOWWINDOW
+                startupinfo.wShowWindow = 0  # SW_HIDE
+            except Exception:
+                startupinfo = None
             script = (
                 "Add-Type -AssemblyName System.Speech; "
                 "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
@@ -125,6 +132,7 @@ def play_alarm_voice():
                 ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
+                startupinfo=startupinfo,
             )
             return
         if sys.platform == "darwin":

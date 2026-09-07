@@ -1511,8 +1511,12 @@ async function loadFullAutoModel(model) {
   if (!model) { el("fullauto-usernames").value = ""; el("fullauto-signup-names").value = ""; return; }
   const u = await fetch(`http://${HOST}:8866/usernames?model=${encodeURIComponent(model)}`, { headers: tokenHeaders() }).then(r => r.json()).catch(() => ({}));
   el("fullauto-usernames").value = (u.usernames || []).join("\n");
+  const uCount = el("fullauto-username-count");
+  if (uCount) uCount.textContent = `${u.count || 0} usernames`;
   const s = await fetch(`http://${HOST}:8866/signup_names?model=${encodeURIComponent(model)}`, { headers: tokenHeaders() }).then(r => r.json()).catch(() => ({}));
   el("fullauto-signup-names").value = (s.signup_names || []).join("\n");
+  const sCount = el("fullauto-signup-count");
+  if (sCount) sCount.textContent = `${s.count || 0} signup names`;
 }
 
 el("fullauto-model-select").addEventListener("change", () => {

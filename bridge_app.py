@@ -234,7 +234,9 @@ class BridgeApp:
             next_voice_at = 0.0
             while not self._stop.is_set():
                 try:
-                    if self._nyxify_failure_alarm_enabled and self.nyxify is not None:
+                    if (self._nyxify_failure_alarm_enabled
+                            and self.nyxify is not None
+                            and self._is_nyxify_running()):
                         fresh_incidents = self._nyxify_alarm_tracker.observe(
                             self.nyxify.store.list_tasks(limit=500)
                         )
@@ -265,6 +267,16 @@ class BridgeApp:
                 self._stop.wait(1.0)
 
         threading.Thread(target=loop, name="nyxify-alarm", daemon=True).start()
+
+    def _is_nyxify_running(self) -> bool:
+        """Check if the Nyxify runner is actually running (not just a
+        stale controller object). Returns False when nyxify is stopped."""
+        try:
+            status = self.nyxify.light_status()
+            bot = status.get("bot", {})
+            return bot.get("state") == "RUNNING"
+        except Exception:
+            return False
 
     def _action_hotkey_product(self, payload=None) -> dict:
         # Kept only so older cached dashboards calling this endpoint don't get an

@@ -1812,6 +1812,20 @@ async function refreshSnapboardTab(options) {
   return false;
 }
 
+function isTerminalSnapboardFetchResponse(response) {
+  if (!response) {
+    return false;
+  }
+  if (response.terminal || response.no_pending_order) {
+    return true;
+  }
+  const error = String(response.error || "").toLowerCase();
+  return error.includes("no pending email order")
+    || error.includes("no pending phone order")
+    || error.includes("get email first")
+    || error.includes("request a number first");
+}
+
 // Send a fetch to SnapBoard and, if it comes back empty/failed, recover the
 // board and retry — "refresh / re-login the SnapBoard first before retrying",
 // since a stale OR logged-out board is a common cause of a missing
@@ -1821,12 +1835,21 @@ async function snapboardFetchWithRefresh(message) {
   if (response && response.ok) {
     return response;
   }
+  // A terminal no-pending result is an order-state problem, not a stale page.
+  // Refreshing and repeating the same request only creates an email/phone
+  // refresh loop while the signup is already waiting on verification.
+  if (isTerminalSnapboardFetchResponse(response)) {
+    return response;
+  }
   // Cheap path: a logged-out board answers empty for everything — sign back in
   // and retry without a full reload.
   const recovered = await ensureSnapboardLoggedIn();
   if (recovered.loggedIn) {
     const afterLogin = await sendMessageToSnapboardTab(message);
     if (afterLogin && afterLogin.ok) {
+      return afterLogin;
+    }
+    if (isTerminalSnapboardFetchResponse(afterLogin)) {
       return afterLogin;
     }
   }

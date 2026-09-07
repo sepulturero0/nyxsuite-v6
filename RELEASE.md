@@ -9,6 +9,23 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.8
+
+- Full Auto Mode now alerts when no username is available for a model,
+  using audible alarm sound and voice warning instead of silently failing.
+  Alarms are suppressed while Nyxify is stopped.
+- Full Auto editor now displays the remaining count of usernames and
+  signup names per model so operators know how many are left before
+  running out.
+- Nyxify failure alarm no longer shows a popup on Windows; the PowerShell
+  speech command runs hidden so the alarm plays without stealing focus.
+- AdsPower profile rename in the no-API GUI path now works at every zoom
+  level and window size; the `_scan_rows` name reader was fixed to detect
+  any profile name, not just "snapchat:"-prefixed ones.
+- Added count endpoint data to `/usernames` and `/signup_names` API
+  responses; added regression coverage for rename zoom testing, alarm
+  suppression when stopped, and count display.
+
 ### NyxSuite v6.6.7
 
 - Nyxify Failure Alarm now speaks “There's an error. Please check manually.”

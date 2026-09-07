@@ -95,6 +95,28 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertNotIn("if (!expected) {\n      return true;", content)
         self.assertIn("Missing expected email for OTP check", content)
 
+    def test_extension_uses_snapboard_check_countdown_for_otp_wait(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("function readAuthCheckCountdownMs(rowId, kind)", content)
+        self.assertIn("OTP_FETCH_MAX_TIMEOUT_MS", content)
+        self.assertIn("observeCountdown(true)", content)
+        self.assertIn("observeCountdown(false)", content)
+
+    def test_extension_finds_adspower_name_by_table_header_when_class_is_missing(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("function findRowInputByHeader(rowId, selectors, aliases)", content)
+        self.assertIn('"adspower name", "ads power name", "profile name", "browser name"', content)
+        self.assertIn("readElementValue(input)", content)
+
+    def test_extension_does_not_refresh_on_terminal_no_pending_fetch(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+
+        self.assertIn("function isTerminalSnapboardFetchResponse(response)", background)
+        self.assertIn("response.terminal", background)
+        self.assertIn("return response;", background[background.index("if (isTerminalSnapboardFetchResponse(response))"):])
+
     def test_replace_banned_reset_clears_old_adspower_fields(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = NyxifyTaskStore(Path(tmp) / "tasks.db")

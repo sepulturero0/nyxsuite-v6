@@ -11,6 +11,7 @@ import requests as _requests
 from dotenv import load_dotenv
 
 from core.macos_dock import hide_macos_dock_icon
+from core.nyxify_alarm import play_alarm_sound, play_alarm_voice
 
 hide_macos_dock_icon()
 
@@ -45,6 +46,12 @@ SNAPBOARD_BRIDGE_DISPATCH_TIMEOUT_SECONDS = float(
     os.getenv("NYXIFY_SNAPBOARD_BRIDGE_DISPATCH_TIMEOUT_SECONDS", "8")
 )
 SNAPBOARD_REFRESH_TIMEOUT_SECONDS = float(os.getenv("NYXIFY_SNAPBOARD_REFRESH_TIMEOUT_SECONDS", "45"))
+SNAPBOARD_VALUE_FETCH_TIMEOUT_SECONDS = float(
+    os.getenv("NYXIFY_SNAPBOARD_VALUE_FETCH_TIMEOUT_SECONDS", "75")
+)
+SNAPBOARD_REPLACEMENT_FETCH_TIMEOUT_SECONDS = float(
+    os.getenv("NYXIFY_SNAPBOARD_REPLACEMENT_FETCH_TIMEOUT_SECONDS", "180")
+)
 SNAPBOARD_OTP_INITIAL_WAIT_SECONDS = float(os.getenv("NYXIFY_SNAPBOARD_OTP_INITIAL_WAIT_SECONDS", "35"))
 SNAPBOARD_OTP_REFRESH_RETRY_SECONDS = float(os.getenv("NYXIFY_SNAPBOARD_OTP_REFRESH_RETRY_SECONDS", "75"))
 PLAYWRIGHT_RELEASE_TIMEOUT_SECONDS = float(os.getenv("NYXIFY_PLAYWRIGHT_RELEASE_TIMEOUT_SECONDS", "2"))
@@ -615,9 +622,15 @@ async def _request_next_full_auto_username(row_key, model, current_username="", 
 
     reserved_username = str(reservation.get("username") or "").strip()
     if not reserved_username:
+        available = reservation.get("available", 0)
         logger.warning(
-            f"Full Auto Mode has no username available for {normalized_row_key} ({normalized_model})."
+            f"Full Auto Mode has no username available for {normalized_row_key} ({normalized_model}). Available: {available}."
         )
+        try:
+            play_alarm_sound()
+            play_alarm_voice()
+        except Exception:
+            pass
         return ""
 
     update_requested = _request_snapboard_username_update(normalized_row_key, reserved_username)
@@ -1052,6 +1065,13 @@ async def _request_snapboard_phone(row_key, timeout_seconds=120, force_new=False
     )
 
 
+def _snapboard_value_fetch_timeout(force_new=False):
+    """Allow the SnapBoard redo cooldown plus the value-render wait."""
+    if force_new:
+        return max(1.0, float(SNAPBOARD_REPLACEMENT_FETCH_TIMEOUT_SECONDS or 180))
+    return max(1.0, float(SNAPBOARD_VALUE_FETCH_TIMEOUT_SECONDS or 75))
+
+
 async def _request_snapboard_sms(row_key, timeout_seconds=150, expected_phone=""):
     return await _request_snapboard_value(
         row_key,
@@ -1386,11 +1406,11 @@ async def process_task(task, store, adspower):
                 return ""
             store.update_task_state(task_id, last_step="fetching_replacement_email" if force_new else "fetching_email")
             # Replacement orders wait out SnapBoard's ~60s redo cooldown in the
-            # content script, so give the fetch room past that (cooldown + the
-            # ~45s appear window + refresh/relogin retries) before timing out.
+            # content script. Use a larger budget for force_new so the runner does
+            # not return an empty value while the bridge is still waiting.
             fetched_email = await _request_snapboard_email(
                 task_row_key,
-                timeout_seconds=75,
+                timeout_seconds=_snapboard_value_fetch_timeout(force_new),
                 force_new=force_new,
             )
             if fetched_email:
@@ -1423,11 +1443,10 @@ async def process_task(task, store, adspower):
                 last_step="fetching_phone_verification",
             )
             # Replacement numbers wait out SnapBoard's ~60s redo cooldown in the
-            # content script, so allow past that (cooldown + appear window +
-            # refresh/relogin retries) before timing out.
+            # content script, so use the replacement budget for force_new.
             phone = await _request_snapboard_phone(
                 task_row_key,
-                timeout_seconds=75,
+                timeout_seconds=_snapboard_value_fetch_timeout(force_new),
                 force_new=force_new,
             )
             if phone:
@@ -1694,11 +1713,21 @@ async def process_task(task, store, adspower):
                             or normalized
                         )
                         if _request_snapboard_adspower_name_update(row_key_value, snapboard_adspower_name):
-                            snapboard_adspower_name_synced = await _wait_for_snapboard_update(
-                                "/adspower_name_update/status",
-                                row_key_value,
-                                "AdsPower name",
-                            )
+                            if continuous_mode_enabled:
+                                # The name is bookkeeping only in continuous mode.
+                                # Do not hold the verified account for the bridge's
+                                # 30s confirmation window before Nyx handoff.
+                                snapboard_adspower_name_synced = False
+                                logger.info(
+                                    f"Task {task_id}: requested SnapBoard AdsPower name update; "
+                                    "not waiting for confirmation before Nyx handoff."
+                                )
+                            else:
+                                snapboard_adspower_name_synced = await _wait_for_snapboard_update(
+                                    "/adspower_name_update/status",
+                                    row_key_value,
+                                    "AdsPower name",
+                                )
                 else:
                     snapboard_adspower_name_synced = bool(normalized)
                 if not _same_username(normalized, previous_username):

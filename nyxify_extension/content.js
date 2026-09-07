@@ -28,6 +28,11 @@
   var SNAPBOARD_REFRESH_POLL_INTERVAL_MS = 1200;
   var SNAPBOARD_REFRESH_ACK_KEY = "nyxifySnapboardRefreshAck";
   var OTP_FETCH_TIMEOUT_MS = 60000;
+  // The fixed timeout remains the fallback when SnapBoard does not expose a
+  // timer. When the Check Code/Check SMS control does expose its countdown,
+  // the wait follows that timer, but never beyond this safety cap.
+  var OTP_FETCH_MAX_TIMEOUT_MS = 180000;
+  var OTP_COUNTDOWN_GRACE_MS = 1000;
   var EMAIL_FETCH_TIMEOUT_MS = 45000;
   // SnapBoard's "get new email / number" (redo) buttons enforce a ~60s cooldown
   // after each order. Wait a little past that so a reorder click isn't a no-op.
@@ -1106,6 +1111,75 @@
     return { clicked: clickAuthElement(state.button), state: state };
   }
 
+  function _countdownMsFromText(value) {
+    var text = normalizeText(value);
+    var match = text.match(/\b(\d{1,4})\s*(?:s|sec|secs|second|seconds)\b/i);
+    if (match) {
+      return Math.max(0, parseInt(match[1], 10) * 1000);
+    }
+    match = text.match(/\b(\d{1,2}):([0-5]\d)\b/);
+    if (match) {
+      return (parseInt(match[1], 10) * 60 + parseInt(match[2], 10)) * 1000;
+    }
+    return 0;
+  }
+
+  function _countdownMsFromNode(node) {
+    if (!node) {
+      return 0;
+    }
+    var attributes = [
+      "data-countdown",
+      "data-remaining",
+      "data-remaining-seconds",
+      "data-retry-after",
+      "aria-label",
+      "title",
+    ];
+    for (var i = 0; i < attributes.length; i += 1) {
+      var value = node.getAttribute && node.getAttribute(attributes[i]);
+      var parsed = _countdownMsFromText(value);
+      if (parsed) {
+        return Math.min(parsed, OTP_FETCH_MAX_TIMEOUT_MS);
+      }
+      if (attributes[i].indexOf("data-") === 0 && /^\d+$/.test(String(value || "").trim())) {
+        parsed = parseInt(String(value).trim(), 10) * 1000;
+        if (parsed > 0) {
+          return Math.min(parsed, OTP_FETCH_MAX_TIMEOUT_MS);
+        }
+      }
+    }
+    return Math.min(
+      _countdownMsFromText(node.innerText || node.textContent || ""),
+      OTP_FETCH_MAX_TIMEOUT_MS
+    );
+  }
+
+  function readAuthCheckCountdownMs(rowId, kind) {
+    var row = getRowEl(rowId);
+    if (!row) {
+      return 0;
+    }
+    var candidates = _authCheckCandidates(row, kind, rowId);
+    var nodes = [];
+    candidates.forEach(function (node) {
+      if (nodes.indexOf(node) < 0) {
+        nodes.push(node);
+      }
+      if (node.parentElement && nodes.indexOf(node.parentElement) < 0) {
+        nodes.push(node.parentElement);
+      }
+    });
+    nodes.push(row);
+    for (var i = 0; i < nodes.length; i += 1) {
+      var countdown = _countdownMsFromNode(nodes[i]);
+      if (countdown > 0) {
+        return countdown;
+      }
+    }
+    return 0;
+  }
+
   function clickGetEmailButton(rowId) {
     var button = document.querySelector('button.btn-get-email[data-get-email="' + rowId + '"]')
       || document.querySelector('button[data-get-email="' + rowId + '"]');
@@ -1499,6 +1573,13 @@
     }
   }
 
+  function readElementValue(node) {
+    if (!node) {
+      return "";
+    }
+    return "value" in node ? node.value : node.textContent;
+  }
+
   function buttonMatchesSaveIntent(button) {
     var text = normalizeText(button.innerText || button.textContent || "").toLowerCase();
     var title = normalizeText(button.getAttribute("title") || "").toLowerCase();
@@ -1572,6 +1653,24 @@
     return null;
   }
 
+  function findRowInputByHeader(rowId, selectors, aliases) {
+    var direct = findRowInput(rowId, selectors);
+    if (direct) {
+      return direct;
+    }
+    var row = document.querySelector('tr[data-id="' + rowId + '"]');
+    if (!row) {
+      return null;
+    }
+    var headerMap = getTableHeaderMap(row);
+    var cellIndex = findHeaderIndex(headerMap, aliases || []);
+    var cells = getRowCells(row);
+    var cell = cellIndex >= 0 ? cells[cellIndex] : null;
+    return cell
+      ? cell.querySelector("input, textarea, [contenteditable='true']")
+      : null;
+  }
+
   var USERNAME_INPUT_SELECTORS = [
     "input.cell-input.input-username",
     "input.input-username",
@@ -1629,7 +1728,11 @@
   }
 
   function requestAdspowerNameUpdate(rowId, adspowerName) {
-    var input = findRowInput(rowId, ADSPOWER_NAME_INPUT_SELECTORS);
+    var input = findRowInputByHeader(
+      rowId,
+      ADSPOWER_NAME_INPUT_SELECTORS,
+      ["adspower name", "ads power name", "profile name", "browser name"]
+    );
     if (!input) {
       return false;
     }
@@ -1637,7 +1740,7 @@
     setElementValue(input, adspowerName);
     callPageUpdateField(rowId, "adspowerName", adspowerName);
 
-    return normalizeText(input.value || "") === normalizeText(adspowerName);
+    return normalizeText(readElementValue(input)) === normalizeText(adspowerName);
   }
 
   // Set a SnapBoard row's status cell (the <select class="status-select">).
@@ -2060,20 +2163,49 @@
   async function clickAuthCodeUntilFound(rowId, timeoutMs, sms) {
     var startedAt = Date.now();
     var diagStart = performance.now();
+    var fallbackTimeoutMs = Math.max(1000, Number(timeoutMs) || OTP_FETCH_TIMEOUT_MS);
+    var hardDeadline = startedAt + Math.max(fallbackTimeoutMs, OTP_FETCH_MAX_TIMEOUT_MS);
+    var deadline = startedAt + fallbackTimeoutMs;
+    var observedCountdownSeconds = -1;
+    var observedCountdownDeadline = 0;
     var popupSnapshot = captureOtpPopupSnapshot();
     var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);
     var lastClickState = { rowPresent: false, candidates: 0, clickable: 0 };
     var clickAttempts = 0;
-    while ((Date.now() - startedAt) < timeoutMs) {
+    function observeCountdown(force) {
+      var countdownMs = readAuthCheckCountdownMs(rowId, sms ? "sms" : "code");
+      if (!countdownMs) {
+        return;
+      }
+      var now = Date.now();
+      var seconds = Math.ceil(countdownMs / 1000);
+      if (
+        force
+        || observedCountdownSeconds < 0
+        || seconds < observedCountdownSeconds
+        || now >= observedCountdownDeadline
+      ) {
+        observedCountdownSeconds = seconds;
+        observedCountdownDeadline = Math.min(
+          hardDeadline,
+          now + countdownMs + OTP_COUNTDOWN_GRACE_MS
+        );
+        deadline = Math.max(deadline, observedCountdownDeadline);
+      }
+    }
+
+    observeCountdown(false);
+    while (Date.now() < deadline) {
       var clickResult = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
       var clicked = !!(clickResult && clickResult.clicked);
       lastClickState = (clickResult && clickResult.state) || lastClickState;
       clickAttempts += 1;
       if (clicked) {
+        observeCountdown(true);
         diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
           rowId,
-          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
           popupSnapshot,
           previousCode
         );
@@ -2090,6 +2222,7 @@
               : "No pending email order for this account. Get email first.",
           };
         }
+        observeCountdown(false);
         await sleep(300);
       } else if (
         lastClickState.rowPresent
@@ -2102,7 +2235,7 @@
         // synthetic click even though SnapBoard ignores it.
         var pendingCode = await (sms ? waitForSmsCode : waitForOtpCode)(
           rowId,
-          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, timeoutMs - (Date.now() - startedAt))),
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
           popupSnapshot,
           previousCode
         );
@@ -2116,6 +2249,7 @@
         // turning that transient absence into a permanent verification failure.
         await sleep(500);
       }
+      observeCountdown(false);
     }
     return {
       ok: false,
