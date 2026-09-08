@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.6.9 - Verification retry hardening
+
+### Snapchat verification
+- Phone verification now uses three total phone-number attempts before giving
+  up or falling back to email.
+- Email/phone priority switches now retry hidden or temporarily unclickable
+  switch links up to five times before continuing with the available method.
+- Verification now locks out signup-form refresh/refill recovery after the flow
+  has reached email, phone, or OTP, preventing accidental return to the original
+  Snapchat signup form during verification.
+
 ## 6.6.7 - Spoken failure warning and wrong-code recovery wording
 
 ### Nyxify failure alarm

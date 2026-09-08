@@ -9,6 +9,19 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.6.9
+
+- Nyxify phone verification now makes three total phone-number attempts before
+  giving up or falling back to email.
+- Verification priority switches now retry `Use email instead` and
+  `Use Phone Number Instead` up to five times when Snapchat hides or delays the
+  switch link.
+- Once Snapchat reaches email, phone, or OTP verification, Nyxify locks the run
+  in verification recovery and will not refresh/refill the original signup form
+  unless manual recovery is required.
+- Added regression coverage for retry budgets, five-attempt switch recovery,
+  three-attempt phone rejection, and verification-phase refresh prevention.
+
 ### NyxSuite v6.6.8
 
 - Full Auto Mode now alerts when no username is available for a model,

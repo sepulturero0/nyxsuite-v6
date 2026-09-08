@@ -31,12 +31,12 @@ SIGNUP_MAX_REFRESH_ATTEMPTS = int(os.getenv("NYXIFY_SIGNUP_MAX_REFRESH_ATTEMPTS"
 EMAIL_ORDER_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_ORDER_MAX_ATTEMPTS", "4"))
 # Phone numbers can be rejected before Snapchat sends an SMS. When that happens
 # SnapBoard can issue a replacement number via its redo/force-new path.
-PHONE_VERIFICATION_MAX_ATTEMPTS = int(os.getenv("NYXIFY_PHONE_VERIFICATION_MAX_ATTEMPTS", "2"))
+PHONE_VERIFICATION_MAX_ATTEMPTS = int(os.getenv("NYXIFY_PHONE_VERIFICATION_MAX_ATTEMPTS", "3"))
 WRONG_CODE_MAX_RECOVERY_ATTEMPTS = int(os.getenv("NYXIFY_WRONG_CODE_MAX_RECOVERY_ATTEMPTS", "2"))
 # How many times to try "Use email instead" when a phone step appears during the
 # email/OTP path. If the switch is present but never clickable, fall back to the
 # phone verification path (get a number -> SMS OTP) instead of looping forever.
-EMAIL_SWITCH_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_SWITCH_MAX_ATTEMPTS", "3"))
+EMAIL_SWITCH_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_SWITCH_MAX_ATTEMPTS", "5"))
 # How many times email verification may fail (wrong code / already-verified)
 # before we click "Use Phone Number Instead" and switch to the phone -> SMS OTP
 # verification path.
@@ -1588,6 +1588,40 @@ async def _click_use_phone_instead(page, logger=None, profile_id: str = "") -> b
     return False
 
 
+async def _click_verification_method_switch(
+    page,
+    target_method: str,
+    logger=None,
+    profile_id: str = "",
+    progress_callback=None,
+    max_attempts: int | None = None,
+) -> tuple[bool, object]:
+    target_method = str(target_method or "").strip().lower()
+    if target_method not in {"email", "phone"}:
+        return False, page
+
+    attempts = max(1, int(max_attempts or EMAIL_SWITCH_MAX_ATTEMPTS or 1))
+    clicker = _click_use_email_instead if target_method == "email" else _click_use_phone_instead
+    progress_step = "switch_retry_email" if target_method == "email" else "switch_retry_phone"
+    label = "Use email instead" if target_method == "email" else "Use Phone Number Instead"
+
+    for attempt in range(1, attempts + 1):
+        page = await _resolve_active_signup_page(page, logger, profile_id)
+        if attempt > 1:
+            await _emit_signup_progress(progress_callback, progress_step, logger, profile_id)
+        if await clicker(page, logger, profile_id):
+            return True, page
+        logger and logger.warning(
+            f"[{profile_id}] {label!r} was not clickable "
+            f"(attempt {attempt}/{attempts})."
+        )
+        try:
+            await page.wait_for_timeout(700)
+        except Exception:
+            await asyncio.sleep(0.7)
+    return False, page
+
+
 async def _is_email_verification_step(page) -> bool:
     try:
         direct_selector = await _visible_any(
@@ -2015,6 +2049,8 @@ async def _wait_for_signup_progress(
                     )
 
         handoff_stage = await _detect_signup_handoff_stage(page, logger, profile_id)
+        if handoff_stage in {"welcome", "otp", "phone", "email", "email_switch"} and stall_state is not None:
+            stall_state["verification_phase"] = True
         if handoff_stage and stall_state is not None:
             stall_state["form_since"] = None
             stall_state["page_issue_since"] = None
@@ -2200,7 +2236,27 @@ async def _wait_for_signup_progress(
         # window, reload + re-enter the details; escalate after the budget.
         if stall_state is not None and resubmit_callback is not None:
             on_form = bool(await _visible_any(page, ["#firstname", "#username", *submit_selectors]))
-            if on_form:
+            if stall_state.get("verification_phase"):
+                if on_form:
+                    logger and logger.warning(
+                        f"[{profile_id}] Verification had already started, but the signup form is visible again. "
+                        "Leaving the account for manual verification recovery instead of refilling signup."
+                    )
+                    await set_progress("verification_unresponsive")
+                    return "verification_unresponsive"
+                if stall_state.get("page_issue_since") is None:
+                    stall_state["page_issue_since"] = time.monotonic()
+                page_issue_elapsed = time.monotonic() - float(
+                    stall_state.get("page_issue_since") or time.monotonic()
+                )
+                if page_issue_elapsed >= SIGNUP_STALL_SECONDS:
+                    logger and logger.warning(
+                        f"[{profile_id}] Verification had already started, but no verification step is detectable. "
+                        "Leaving the account for manual verification recovery instead of refreshing signup."
+                    )
+                    await set_progress("verification_unresponsive")
+                    return "verification_unresponsive"
+            elif on_form:
                 stall_state["page_issue_since"] = None
                 # The page was (re)loaded and Snapchat cleared every field —
                 # usually a manual operator refresh. Re-enter the saved
@@ -2568,6 +2624,8 @@ async def _handle_optional_phone_sms_verification(
             result["final_username"] = await _read_success_username(signup_page)
             await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
             return result
+        if stage == "verification_unresponsive":
+            return await handle_failure("verification became unresponsive after phone submission")
         if stage == "otp":
             break
         if attempt + 1 < max_attempts and stage == "phone":
@@ -2689,6 +2747,8 @@ async def _handle_optional_phone_sms_verification(
         if final_stage == "welcome":
             result["final_username"] = await _read_success_username(signup_page)
             await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        elif final_stage == "verification_unresponsive":
+            return await handle_failure("verification became unresponsive after SMS OTP")
         if not str(result.get("final_username") or "").strip():
             result["final_username"] = await _wait_for_final_success_username(
                 signup_page,
@@ -2914,9 +2974,19 @@ async def _handle_verification(
         page = await _resolve_active_signup_page(signup_page, logger, profile_id)
         await _emit_signup_progress(progress_callback, "switching_to_phone", logger, profile_id)
         logger and logger.warning(f"[{profile_id}] {reason}; switching to phone verification.")
-        clicked = await _click_use_phone_instead(page, logger, profile_id)
-        if clicked:
-            await page.wait_for_timeout(900)
+        clicked, page = await _click_verification_method_switch(
+            page,
+            "phone",
+            logger,
+            profile_id,
+            progress_callback=progress_callback,
+        )
+        if not clicked:
+            logger and logger.warning(
+                f"[{profile_id}] Could not switch to phone verification after "
+                f"{EMAIL_SWITCH_MAX_ATTEMPTS} attempt(s)."
+            )
+            return result
         result["reached_verification"] = True
         return await run_phone_verification(page)
 
@@ -2928,15 +2998,21 @@ async def _handle_verification(
             f"[{profile_id}] Phone verification failed ({reason}); falling back to email verification."
         )
         await _emit_signup_progress(progress_callback, "switching_to_email", logger, profile_id)
-        clicked = await _click_use_email_instead(page, logger, profile_id)
+        clicked, page = await _click_verification_method_switch(
+            page,
+            "email",
+            logger,
+            profile_id,
+            progress_callback=progress_callback,
+        )
         if not clicked:
             logger and logger.warning(
-                f"[{profile_id}] Could not switch to email verification after phone failure."
+                f"[{profile_id}] Could not switch to email verification after "
+                f"{EMAIL_SWITCH_MAX_ATTEMPTS} attempt(s)."
             )
             if error is not None:
                 raise error
             return result
-        await page.wait_for_timeout(900)
         return await _handle_verification(
             page,
             str(result.get("email") or email or "").strip(),
@@ -3010,9 +3086,14 @@ async def _handle_verification(
     if stage == "phone" and verification_priority == "email":
         signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
         await _emit_signup_progress(progress_callback, "switching_to_email", logger, profile_id)
-        clicked_email = await _click_use_email_instead(signup_page, logger, profile_id)
+        clicked_email, signup_page = await _click_verification_method_switch(
+            signup_page,
+            "email",
+            logger,
+            profile_id,
+            progress_callback=progress_callback,
+        )
         if clicked_email:
-            await signup_page.wait_for_timeout(900)
             stage = await _wait_for_signup_progress(
                 signup_page,
                 logger,
@@ -3032,7 +3113,26 @@ async def _handle_verification(
             )
 
     if stage == "email" and verification_priority == "phone":
-        return await switch_to_phone("verification priority is Phone")
+        signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
+        await _emit_signup_progress(progress_callback, "switching_to_phone", logger, profile_id)
+        clicked_phone, signup_page = await _click_verification_method_switch(
+            signup_page,
+            "phone",
+            logger,
+            profile_id,
+            progress_callback=progress_callback,
+        )
+        if clicked_phone:
+            result["reached_verification"] = True
+            return await run_phone_verification(signup_page)
+        logger and logger.warning(
+            f"[{profile_id}] Phone verification was preferred, but Snapchat did not expose a usable "
+            "'Use Phone Number Instead' switch. Continuing with email verification."
+        )
+
+    if stage == "verification_unresponsive":
+        result["reached_verification"] = True
+        return result
 
     if stage == "welcome":
         result["reached_verification"] = True
@@ -3179,6 +3279,9 @@ async def _handle_verification(
             entry_transition_grace_ms=5000 if stage == "email" else 0,
             verification_priority=verification_priority,
         )
+    if stage == "verification_unresponsive":
+        result["reached_verification"] = True
+        return result
     if stage == "welcome":
         result["reached_verification"] = True
         result["final_username"] = await _read_success_username(signup_page)
@@ -3305,6 +3408,8 @@ async def _handle_verification(
         if final_stage == "welcome":
             result["final_username"] = await _read_success_username(signup_page)
             await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        elif final_stage == "verification_unresponsive":
+            return result
         elif final_stage == "phone":
             if verification_priority == "email" and not allow_priority_fallback:
                 return result

@@ -471,10 +471,10 @@ class SignupDetectorTests(unittest.IsolatedAsyncioTestCase):
                 return None
 
         page = FakeVerificationPage()
-        phone_fetcher = mock.AsyncMock(side_effect=["+15550000000", "+15551234567"])
+        phone_fetcher = mock.AsyncMock(side_effect=["+15550000000", "+15551234567", "+15557654321"])
 
         with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
-            mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(side_effect=["phone", "phone"])), \
+            mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(side_effect=["phone", "phone", "phone"])), \
             mock.patch.object(signup_flow, "_fill_and_submit_phone_number", mock.AsyncMock(return_value=True)):
             with self.assertRaisesRegex(RuntimeError, "phone_verification_rejected"):
                 await signup_flow._handle_optional_phone_sms_verification(
@@ -497,6 +497,7 @@ class SignupDetectorTests(unittest.IsolatedAsyncioTestCase):
             phone_fetcher.await_args_list,
             [
                 mock.call(force_new=False),
+                mock.call(force_new=True),
                 mock.call(force_new=True),
             ],
         )
