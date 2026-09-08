@@ -13,7 +13,8 @@ def _page():
 class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
     def test_retry_budgets_match_current_verification_rules(self):
         self.assertEqual(signup_flow.PHONE_VERIFICATION_MAX_ATTEMPTS, 3)
-        self.assertEqual(signup_flow.EMAIL_SWITCH_MAX_ATTEMPTS, 5)
+        self.assertEqual(signup_flow.EMAIL_SWITCH_MAX_ATTEMPTS, 1)
+        self.assertEqual(signup_flow.VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS, 5)
 
     async def test_phone_priority_switches_from_email_card(self):
         page = _page()
@@ -46,7 +47,7 @@ class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
         handle_phone.assert_awaited_once()
         self.assertTrue(output["phone_entered"])
 
-    async def test_phone_priority_retries_phone_switch_five_times_before_running_phone(self):
+    async def test_phone_priority_clicks_phone_switch_once_before_running_phone(self):
         page = _page()
         result = {
             "reached_verification": True,
@@ -56,7 +57,7 @@ class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
             "final_username": "phoneswitch",
             "email": "old@example.com",
         }
-        click_phone = mock.AsyncMock(side_effect=[False, False, False, False, True])
+        click_phone = mock.AsyncMock(return_value=True)
 
         with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
                 mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(return_value="email")), \
@@ -73,7 +74,7 @@ class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
                 verification_priority="phone",
             )
 
-        self.assertEqual(click_phone.await_count, 5)
+        self.assertEqual(click_phone.await_count, 1)
         handle_phone.assert_awaited_once()
         self.assertEqual(output["final_username"], "phoneswitch")
 
@@ -97,9 +98,9 @@ class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
         click_email.assert_awaited_once_with(page, None, "1")
         self.assertEqual(output["final_username"], "preferredemail")
 
-    async def test_email_priority_retries_email_switch_five_times_before_rewaiting(self):
+    async def test_email_priority_clicks_email_switch_once_before_rewaiting(self):
         page = _page()
-        click_email = mock.AsyncMock(side_effect=[False, False, False, False, True])
+        click_email = mock.AsyncMock(return_value=True)
 
         with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
                 mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(side_effect=["phone", "welcome"])), \
@@ -114,8 +115,86 @@ class VerificationPriorityTests(unittest.IsolatedAsyncioTestCase):
                 verification_priority="email",
             )
 
-        self.assertEqual(click_email.await_count, 5)
+        self.assertEqual(click_email.await_count, 1)
         self.assertEqual(output["final_username"], "emailswitch")
+
+    async def test_phone_priority_without_switch_tries_available_email_five_times(self):
+        page = _page()
+        page.bring_to_front = mock.AsyncMock()
+        otp_fetcher = mock.AsyncMock(side_effect=["100001", "100002", "100003", "100004", "100005"])
+        email_fetcher = mock.AsyncMock(side_effect=[
+            "fresh1@example.com",
+            "fresh2@example.com",
+            "fresh3@example.com",
+            "fresh4@example.com",
+        ])
+        click_phone = mock.AsyncMock(return_value=False)
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+                mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(side_effect=["email", "otp", "otp", "otp", "otp", "otp"])), \
+                mock.patch.object(signup_flow, "_click_use_phone_instead", click_phone), \
+                mock.patch.object(signup_flow, "_fill_and_submit_verification_email", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_is_email_already_verified_error_visible", mock.AsyncMock(return_value=False)), \
+                mock.patch.object(signup_flow, "_type_otp_code", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_click_visible_verification_submit", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_is_wrong_verification_code_error_visible", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_is_email_verification_step", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_emit_signup_progress", mock.AsyncMock()):
+            output = await signup_flow._handle_verification(
+                page,
+                "old@example.com",
+                otp_fetcher,
+                None,
+                "1",
+                email_fetcher=email_fetcher,
+                phone_fetcher=mock.Mock(),
+                sms_fetcher=mock.Mock(),
+                verification_priority="phone",
+            )
+
+        self.assertEqual(click_phone.await_count, 1)
+        self.assertEqual(otp_fetcher.await_count, 5)
+        self.assertEqual(email_fetcher.await_count, 4)
+        self.assertFalse(output["otp_entered"])
+
+    async def test_email_priority_without_switch_tries_available_phone_five_times(self):
+        page = _page()
+        phone_fetcher = mock.AsyncMock(side_effect=[
+            "+15550000001",
+            "+15550000002",
+            "+15550000003",
+            "+15550000004",
+            "+15550000005",
+        ])
+        click_email = mock.AsyncMock(return_value=False)
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+                mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(return_value="phone")), \
+                mock.patch.object(signup_flow, "_click_use_email_instead", click_email), \
+                mock.patch.object(signup_flow, "_fill_and_submit_phone_number", mock.AsyncMock(return_value=True)):
+            with self.assertRaisesRegex(RuntimeError, "5 phone number attempt"):
+                await signup_flow._handle_verification(
+                    page,
+                    "old@example.com",
+                    mock.AsyncMock(),
+                    None,
+                    "1",
+                    phone_fetcher=phone_fetcher,
+                    sms_fetcher=mock.AsyncMock(return_value="222222"),
+                    verification_priority="email",
+                )
+
+        self.assertEqual(click_email.await_count, 1)
+        self.assertEqual(
+            phone_fetcher.await_args_list,
+            [
+                mock.call(force_new=False),
+                mock.call(force_new=True),
+                mock.call(force_new=True),
+                mock.call(force_new=True),
+                mock.call(force_new=True),
+            ],
+        )
 
     async def test_auto_and_phone_priorities_use_phone_switch_card_as_is(self):
         page = _page()

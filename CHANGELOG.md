@@ -1,5 +1,16 @@
 # Changelog
 
+## 6.7.0 - Verification priority fallback correction
+
+### Snapchat verification
+- Priority mode now clicks the opposite-method switch only once when Snapchat
+  exposes a usable `Use email instead` or `Use Phone Number Instead` action.
+- When the opposite-method switch is absent, hidden, or not clickable, Nyxify
+  stays on the only available verification path and gives that available email
+  or phone flow five total attempts.
+- Added regression coverage for the clarified email-priority and phone-priority
+  no-switch fallback behavior.
+
 ## 6.6.9 - Verification retry hardening
 
 ### Snapchat verification

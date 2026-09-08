@@ -9,6 +9,17 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.7.0
+
+- Verification priority now attempts the opposite-method switch only once when
+  Snapchat exposes a clickable `Use email instead` or `Use Phone Number Instead`
+  action.
+- If Snapchat only exposes email or phone verification and no usable switch is
+  available, Nyxify continues on that available method and gives it five total
+  attempts before stopping or falling back according to the configured path.
+- Added regression coverage for email-priority and phone-priority no-switch
+  flows so the retry budget stays aligned with the clarified behavior.
+
 ### NyxSuite v6.6.9
 
 - Nyxify phone verification now makes three total phone-number attempts before

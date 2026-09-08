@@ -1,6 +1,6 @@
 # Nyx Suite v6
 
-Current release line (6.6.9) of the **no-API** Nyx Suite — it drives the AdsPower desktop
+Current release line (6.7.0) of the **no-API** Nyx Suite — it drives the AdsPower desktop
 app directly when the Local API is permission-gated, so it works on AdsPower
 Employee/sub-accounts. This is an **open build with no license/activation**.
 

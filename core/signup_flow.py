@@ -36,7 +36,10 @@ WRONG_CODE_MAX_RECOVERY_ATTEMPTS = int(os.getenv("NYXIFY_WRONG_CODE_MAX_RECOVERY
 # How many times to try "Use email instead" when a phone step appears during the
 # email/OTP path. If the switch is present but never clickable, fall back to the
 # phone verification path (get a number -> SMS OTP) instead of looping forever.
-EMAIL_SWITCH_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_SWITCH_MAX_ATTEMPTS", "5"))
+EMAIL_SWITCH_MAX_ATTEMPTS = int(os.getenv("NYXIFY_EMAIL_SWITCH_MAX_ATTEMPTS", "1"))
+VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS = int(
+    os.getenv("NYXIFY_VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS", "5")
+)
 # How many times email verification may fail (wrong code / already-verified)
 # before we click "Use Phone Number Instead" and switch to the phone -> SMS OTP
 # verification path.
@@ -2566,6 +2569,7 @@ async def _handle_optional_phone_sms_verification(
     resubmit_callback=None,
     stall_state=None,
     fallback_callback=None,
+    max_attempts: int | None = None,
 ) -> dict:
     async def handle_failure(reason: str, error=None) -> dict:
         if fallback_callback is not None:
@@ -2579,7 +2583,7 @@ async def _handle_optional_phone_sms_verification(
         return await handle_failure("phone verification provider is unavailable")
 
     stage = ""
-    max_attempts = max(1, int(PHONE_VERIFICATION_MAX_ATTEMPTS or 1))
+    max_attempts = max(1, int(max_attempts or PHONE_VERIFICATION_MAX_ATTEMPTS or 1))
     for attempt in range(max_attempts):
         force_new = attempt > 0
         await _emit_signup_progress(progress_callback, "fetching_phone_verification", logger, profile_id)
@@ -2957,6 +2961,7 @@ async def _handle_verification(
     if not _is_valid_email(email):
         email = ""
     priority_fallback_triggered = False
+    phone_switch_unavailable = False
     result = {
         "reached_verification": False,
         "otp_entered": False,
@@ -2965,6 +2970,7 @@ async def _handle_verification(
         "final_username": "",
         "email": email,
     }
+    email_verify_max_attempts = max(1, int(EMAIL_VERIFY_MAX_ATTEMPTS or 1))
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
     await signup_page.wait_for_timeout(2000)
 
@@ -2989,6 +2995,17 @@ async def _handle_verification(
             return result
         result["reached_verification"] = True
         return await run_phone_verification(page)
+
+    async def fail_email_path(reason: str) -> dict:
+        if phone_switch_unavailable:
+            logger and logger.warning(
+                f"[{profile_id}] {reason}; phone verification switch was already unavailable, "
+                "leaving the account on the available email verification path."
+            )
+            result["reached_verification"] = True
+            result["otp_entered"] = False
+            return result
+        return await switch_to_phone(reason)
 
     async def fallback_to_email(reason: str, error=None) -> dict:
         nonlocal priority_fallback_triggered
@@ -3038,7 +3055,7 @@ async def _handle_verification(
         else None
     )
 
-    async def run_phone_verification(page) -> dict:
+    async def run_phone_verification(page, max_attempts: int | None = None) -> dict:
         try:
             phone_result = await _handle_optional_phone_sms_verification(
                 page,
@@ -3054,6 +3071,7 @@ async def _handle_verification(
                 resubmit_callback=resubmit_callback,
                 stall_state=stall_state,
                 fallback_callback=phone_fallback_callback,
+                max_attempts=max_attempts,
             )
             if (
                 phone_fallback_callback is not None
@@ -3080,7 +3098,7 @@ async def _handle_verification(
         progress_callback=progress_callback,
         resubmit_callback=resubmit_callback,
         stall_state=stall_state,
-        verification_priority=verification_priority,
+        verification_priority="auto",
     )
 
     if stage == "phone" and verification_priority == "email":
@@ -3104,12 +3122,16 @@ async def _handle_verification(
                 progress_callback=progress_callback,
                 resubmit_callback=resubmit_callback,
                 stall_state=stall_state,
-                verification_priority=verification_priority,
+                verification_priority="auto",
             )
         else:
             logger and logger.warning(
                 f"[{profile_id}] Email verification was preferred, but Snapchat did not expose a usable "
-                "'Use email instead' switch. Continuing with phone verification."
+                "'Use email instead' switch. Continuing with the available phone verification path."
+            )
+            return await run_phone_verification(
+                signup_page,
+                max_attempts=VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS,
             )
 
     if stage == "email" and verification_priority == "phone":
@@ -3127,7 +3149,12 @@ async def _handle_verification(
             return await run_phone_verification(signup_page)
         logger and logger.warning(
             f"[{profile_id}] Phone verification was preferred, but Snapchat did not expose a usable "
-            "'Use Phone Number Instead' switch. Continuing with email verification."
+            "'Use Phone Number Instead' switch. Continuing with the available email verification path."
+        )
+        phone_switch_unavailable = True
+        email_verify_max_attempts = max(
+            email_verify_max_attempts,
+            int(VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS or 1),
         )
 
     if stage == "verification_unresponsive":
@@ -3178,14 +3205,14 @@ async def _handle_verification(
         result["email"] = email
         if not _is_valid_email(email):
             if verification_priority == "email" and allow_priority_fallback:
-                return await switch_to_phone("email verification email was unavailable")
+                return await fail_email_path("email verification email was unavailable")
             raise RuntimeError(
                 "email_order_unavailable: SnapBoard had no verification email to provide after "
                 f"{EMAIL_ORDER_MAX_ATTEMPTS} attempts."
             )
 
     if stage == "email" and not _is_valid_email(email) and verification_priority == "email" and allow_priority_fallback:
-        return await switch_to_phone("no email verification provider was available")
+        return await fail_email_path("no email verification provider was available")
 
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
     if stage == "email" and _is_valid_email(email):
@@ -3210,22 +3237,22 @@ async def _handle_verification(
         if not submitted_email:
             logger and logger.warning(f"[{profile_id}] Verification email could not be submitted.")
             if verification_priority == "email" and allow_priority_fallback:
-                return await switch_to_phone("verification email could not be submitted")
+                return await fail_email_path("verification email could not be submitted")
 
-        for replacement_attempt in range(1, EMAIL_VERIFY_MAX_ATTEMPTS + 1):
+        for replacement_attempt in range(1, email_verify_max_attempts + 1):
             signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
             if not await _is_email_already_verified_error_visible(signup_page):
                 break
             email_verify_failures += 1
-            if email_verify_failures >= EMAIL_VERIFY_MAX_ATTEMPTS:
+            if email_verify_failures >= email_verify_max_attempts:
                 if verification_priority == "email" and not allow_priority_fallback:
                     logger and logger.warning(
                         f"[{profile_id}] Email verification reached its retry limit, but Email is forced as the "
                         "verification priority; leaving the account on the email path."
                     )
                     break
-                return await switch_to_phone(
-                    f"email already verified after {EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)"
+                return await fail_email_path(
+                    f"email already verified after {email_verify_max_attempts} attempt(s)"
                 )
             if email_fetcher is None:
                 logger and logger.warning(
@@ -3236,7 +3263,7 @@ async def _handle_verification(
 
             logger and logger.warning(
                 f"[{profile_id}] Snapchat rejected verification email {email!r} as already verified; "
-                f"requesting replacement email ({replacement_attempt}/{EMAIL_VERIFY_MAX_ATTEMPTS})."
+                f"requesting replacement email ({replacement_attempt}/{email_verify_max_attempts})."
             )
             await _emit_signup_progress(progress_callback, "fetching_replacement_email", logger, profile_id)
             replacement_email = await _fetch_email_from_provider(
@@ -3277,7 +3304,7 @@ async def _handle_verification(
             resubmit_callback=resubmit_callback,
             stall_state=stall_state,
             entry_transition_grace_ms=5000 if stage == "email" else 0,
-            verification_priority=verification_priority,
+            verification_priority="auto",
         )
     if stage == "verification_unresponsive":
         result["reached_verification"] = True
@@ -3302,7 +3329,7 @@ async def _handle_verification(
     if stage != "otp":
         logger and logger.warning(f"[{profile_id}] OTP input did not appear. Manual verification needed.")
         if verification_priority == "email" and allow_priority_fallback:
-            return await switch_to_phone("email verification did not reach the OTP stage")
+            return await fail_email_path("email verification did not reach the OTP stage")
         return result
 
     result["reached_verification"] = True
@@ -3320,11 +3347,12 @@ async def _handle_verification(
             logger,
             profile_id,
             progress_callback=progress_callback,
+            max_attempts=max(1, email_verify_max_attempts - 1),
         )
     if not otp:
         logger and logger.warning(f"[{profile_id}] Could not retrieve OTP from SnapBoard.")
         if verification_priority == "email" and allow_priority_fallback:
-            return await switch_to_phone("email OTP was unavailable")
+            return await fail_email_path("email OTP was unavailable")
         return result
 
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
@@ -3344,27 +3372,27 @@ async def _handle_verification(
         logger and logger.warning(f"[{profile_id}] Could not verify the OTP was typed; not submitting.")
         result["otp_entered"] = False
         if verification_priority == "email" and allow_priority_fallback:
-            return await switch_to_phone("email OTP could not be submitted")
+            return await fail_email_path("email OTP could not be submitted")
 
     wrong_otp_attempts = 0
     while result.get("otp_entered") and await _is_wrong_verification_code_error_visible(signup_page):
         wrong_otp_attempts += 1
         email_verify_failures += 1
-        if email_verify_failures >= EMAIL_VERIFY_MAX_ATTEMPTS:
+        if email_verify_failures >= email_verify_max_attempts:
             logger and logger.warning(
                 f"[{profile_id}] Snapchat rejected email OTP codes after "
-                f"{EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)."
+                f"{email_verify_max_attempts} attempt(s)."
             )
             result["otp_entered"] = False
             if verification_priority == "email" and not allow_priority_fallback:
                 return result
-            return await switch_to_phone(
-                f"email OTP rejected after {EMAIL_VERIFY_MAX_ATTEMPTS} attempt(s)"
+            return await fail_email_path(
+                f"email OTP rejected after {email_verify_max_attempts} attempt(s)"
             )
 
         logger and logger.warning(
             f"[{profile_id}] Snapchat rejected the email OTP; ordering a fresh email "
-            f"({wrong_otp_attempts}/{EMAIL_VERIFY_MAX_ATTEMPTS})."
+            f"({wrong_otp_attempts}/{email_verify_max_attempts})."
         )
         await _emit_signup_progress(progress_callback, "retrying_otp", logger, profile_id)
         otp, signup_page = await _recover_otp_via_back_and_new_email(
@@ -3392,7 +3420,7 @@ async def _handle_verification(
             break
 
     if verification_priority == "email" and allow_priority_fallback and not result.get("otp_entered"):
-        return await switch_to_phone("email OTP recovery did not complete")
+        return await fail_email_path("email OTP recovery did not complete")
 
     if result["otp_entered"]:
         final_stage = await _wait_for_stage_after_otp(
