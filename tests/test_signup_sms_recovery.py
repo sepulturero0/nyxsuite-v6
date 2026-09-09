@@ -46,6 +46,32 @@ class RecoverSmsViaNewPhoneTests(unittest.IsolatedAsyncioTestCase):
         click_back.assert_awaited_once()
         self.assertEqual(fetch_email.await_count, 2)
 
+    async def test_email_recovery_stops_when_back_does_not_return_to_email_entry(self):
+        page = _async_page()
+        click_back = mock.AsyncMock(return_value=True)
+        is_email_step = mock.AsyncMock(return_value=False)
+        fetch_email = mock.AsyncMock(return_value="fresh@example.com")
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+             mock.patch.object(signup_flow, "_click_verification_back_button", click_back), \
+             mock.patch.object(signup_flow, "_is_email_verification_step", is_email_step), \
+             mock.patch.object(signup_flow, "_emit_signup_progress", mock.AsyncMock()), \
+             mock.patch.object(signup_flow, "_fetch_email_from_provider", fetch_email), \
+             mock.patch.object(signup_flow, "_fill_and_submit_verification_email", mock.AsyncMock(return_value=True)):
+            code, out_page = await signup_flow._recover_otp_via_back_and_new_email(
+                page,
+                otp_fetcher=mock.AsyncMock(return_value="123456"),
+                email_fetcher=mock.Mock(),
+                logger=None,
+                profile_id="1",
+                max_attempts=2,
+            )
+
+        self.assertEqual(code, "")
+        self.assertIs(out_page, page)
+        click_back.assert_awaited_once()
+        fetch_email.assert_not_awaited()
+
     async def test_returns_code_after_ordering_a_fresh_number(self):
         page = _async_page()
         sms_fetcher = mock.Mock(return_value="654321")
@@ -141,6 +167,32 @@ class RecoverSmsViaNewPhoneTests(unittest.IsolatedAsyncioTestCase):
         self.assertIs(out_page, page)
         click_back.assert_awaited_once()
         self.assertEqual(fetch_phone.await_count, 2)
+
+    async def test_sms_recovery_stops_when_back_does_not_return_to_phone_entry(self):
+        page = _async_page()
+        click_back = mock.AsyncMock(return_value=True)
+        is_phone_step = mock.AsyncMock(return_value=False)
+        fetch_phone = mock.AsyncMock(return_value="+15551230000")
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+             mock.patch.object(signup_flow, "_click_verification_back_button", click_back), \
+             mock.patch.object(signup_flow, "_is_phone_verification_step", is_phone_step), \
+             mock.patch.object(signup_flow, "_emit_signup_progress", mock.AsyncMock()), \
+             mock.patch.object(signup_flow, "_fetch_phone_from_provider", fetch_phone), \
+             mock.patch.object(signup_flow, "_fill_and_submit_phone_number", mock.AsyncMock(return_value=True)):
+            code, out_page = await signup_flow._recover_sms_via_new_phone(
+                page,
+                phone_fetcher=mock.Mock(),
+                sms_fetcher=mock.Mock(return_value="654321"),
+                logger=None,
+                profile_id="1",
+                max_attempts=2,
+            )
+
+        self.assertEqual(code, "")
+        self.assertIs(out_page, page)
+        click_back.assert_awaited_once()
+        fetch_phone.assert_not_awaited()
 
 
 class WrongCodeRecoveryTests(unittest.IsolatedAsyncioTestCase):

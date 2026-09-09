@@ -558,7 +558,12 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
             # Which helper wraps this action's bridge fetch.
             tail = background.split(action_marker)[0][-400:]
             call = tail.rsplit("await ", 1)[-1]
-            for name in ("snapboardFetchWithRefresh", "snapboardFetchWithRelogin", "sendMessageToSnapboardTab"):
+            for name in (
+                "snapboardFetchWithRefresh",
+                "runVerificationCodeFetch",
+                "snapboardFetchWithRelogin",
+                "sendMessageToSnapboardTab",
+            ):
                 if name + "(" in call:
                     return name
             return call
@@ -566,9 +571,55 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         # email/phone can be stale ("no pending order") -> full refresh+relogin.
         self.assertEqual(dispatcher_for('action: "email_fetch"'), "snapboardFetchWithRefresh")
         self.assertEqual(dispatcher_for('action: "phone_fetch"'), "snapboardFetchWithRefresh")
-        # otp/sms use the lighter relogin-only recovery (no disruptive reload).
-        self.assertEqual(dispatcher_for('action: "otp"'), "snapboardFetchWithRelogin")
-        self.assertEqual(dispatcher_for('action: "sms"'), "snapboardFetchWithRelogin")
+        # otp/sms use a protected verification helper: relogin first, then only a
+        # controlled refresh if the Check Code/SMS control itself is unresponsive.
+        self.assertEqual(dispatcher_for('action: "otp"'), "runVerificationCodeFetch")
+        self.assertEqual(dispatcher_for('action: "sms"'), "runVerificationCodeFetch")
+
+    def test_background_processes_verification_before_snapboard_refresh(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+
+        self.assertLess(bridge_loop.index('"/otp/pending"'), bridge_loop.index("await processSnapboardRefreshRequest();"))
+        self.assertLess(bridge_loop.index('"/sms/pending"'), bridge_loop.index("await processSnapboardRefreshRequest();"))
+
+    def test_background_detaches_slow_email_phone_fetches_from_bridge_loop(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+
+        self.assertIn("const emailFetchesInFlight = new Set();", background)
+        self.assertIn("const phoneFetchesInFlight = new Set();", background)
+        self.assertIn("startDetachedSnapboardFetch(", background)
+        self.assertNotIn("await Promise.all(emailRequests.map", bridge_loop)
+        self.assertNotIn("await Promise.all(phoneRequests.map", bridge_loop)
+
+    def test_background_skips_email_phone_refresh_while_verification_code_fetch_is_active(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        fetch_with_refresh = background.split("async function snapboardFetchWithRefresh", 1)[1].split(
+            "async function snapboardFetchWithRelogin", 1
+        )[0]
+        guard_index = fetch_with_refresh.index("if (verificationCodeFetchesInFlight.size)")
+        refresh_index = fetch_with_refresh.index("const refreshed = await refreshSnapboardTab();")
+
+        self.assertLess(guard_index, refresh_index)
+        self.assertIn("return response;", fetch_with_refresh[guard_index:refresh_index])
+
+    def test_background_passes_full_verification_timeout_to_snapboard(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        self.assertIn("const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;", background)
+
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+        otp_block = bridge_loop.split('action: "otp"', 1)[1].split("});", 1)[0]
+        sms_block = bridge_loop.split('action: "sms"', 1)[1].split("});", 1)[0]
+
+        self.assertIn("timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS", otp_block)
+        self.assertIn("timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS", sms_block)
 
     def test_background_does_not_drop_new_port_after_snapboard_reload(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
@@ -600,6 +651,31 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("var rowCode = getSmsTextForRow(rowId);", content)
         self.assertNotIn("Date.now() - startedAt) >= OTP_CLICK_RETRY_INTERVAL_MS", check_fn)
 
+    def test_content_protects_generic_refresh_during_verification_checks(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        poll_refresh = content.split("async function pollPendingSnapboardRefresh()", 1)[1].split(
+            "function waitForProxyChange", 1
+        )[0]
+        message_handler = content.split('if (message.action === "otp")', 1)[1].split(
+            'if (message.action === "username_update")', 1
+        )[0]
+
+        self.assertIn("var snapboardVerificationChecksInFlight = 0;", content)
+        self.assertIn("if (snapboardVerificationChecksInFlight > 0)", poll_refresh)
+        self.assertIn("return;", poll_refresh.split("window.location.reload();", 1)[0])
+        self.assertIn("await runSnapboardVerificationCheck(async function ()", message_handler)
+
+    def test_content_propagates_verification_refresh_required_and_timeout(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        message_handler = content.split('if (message.action === "otp")', 1)[1].split(
+            'if (message.action === "username_update")', 1
+        )[0]
+
+        self.assertIn("function normalizeOtpFetchTimeoutMs", content)
+        self.assertIn("normalizeOtpFetchTimeoutMs(message.timeout_ms)", message_handler)
+        self.assertIn("refresh_required: !!codeResult.refresh_required", message_handler)
+        self.assertIn("refresh_required: !!smsResult.refresh_required", message_handler)
+
     def test_snapboard_refresh_bridge_is_wired_in_background_and_content(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
@@ -608,10 +684,6 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('"/snapboard_refresh/pending"', background)
         self.assertIn('"/snapboard_refresh/result"', background)
         self.assertIn("await refreshSnapboardTab({ force: true })", background)
-        self.assertLess(
-            background.index("await processSnapboardRefreshRequest();"),
-            background.index("const emailRequests"),
-        )
         self.assertIn("chrome.tabs.query", background)
         self.assertIn("https://snapboard.onrender.com/*", background)
 

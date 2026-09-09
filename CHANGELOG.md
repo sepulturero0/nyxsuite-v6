@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.1 - SnapBoard verification wait protection
+
+### SnapBoard verification
+- OTP and SMS bridge checks now use the full 180-second verification window.
+- Generic SnapBoard refreshes and slower email/phone fetches no longer interrupt
+  an active Check Code or Check SMS request.
+- If a SnapBoard verification control is missing or unresponsive, the extension
+  reports a refresh-required result so recovery can refresh only when the
+  verification control itself is stuck.
+
+### Signup recovery
+- Fresh email and phone recovery now stops when Snapchat's verification Back
+  action does not return to the matching entry step, avoiding repeated back
+  clicks into the signup form.
+- Rejected email OTPs can fall back to phone when that switch is available.
+
 ## 6.7.0 - Verification priority fallback correction
 
 ### Snapchat verification

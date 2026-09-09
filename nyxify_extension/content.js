@@ -19,6 +19,7 @@
   var statusUpdatePollInFlight = false;
   var snapboardRefreshPollTimer = null;
   var snapboardRefreshPollInFlight = false;
+  var snapboardVerificationChecksInFlight = 0;
   var configCache = null;
   var configCacheAt = 0;
   var ROW_SCAN_DEBOUNCE_MS = 800;
@@ -51,6 +52,23 @@
   var AUTO_LOGIN_MIN_GAP_MS = 4000;
   var autoLoginAttempts = 0;
   var autoLoginLastAttemptAt = 0;
+
+  function normalizeOtpFetchTimeoutMs(timeoutMs) {
+    var parsed = Number(timeoutMs);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      return OTP_FETCH_MAX_TIMEOUT_MS;
+    }
+    return Math.max(1000, Math.min(parsed, OTP_FETCH_MAX_TIMEOUT_MS));
+  }
+
+  async function runSnapboardVerificationCheck(worker) {
+    snapboardVerificationChecksInFlight += 1;
+    try {
+      return await worker();
+    } finally {
+      snapboardVerificationChecksInFlight = Math.max(0, snapboardVerificationChecksInFlight - 1);
+    }
+  }
 
   // Redacted timing diagnostics (baseline). Inert unless the page sets
   // window.__NYX_TIMING__ = true (e.g. from the DevTools console). Logs only a
@@ -1924,6 +1942,9 @@
   }
 
   async function pollPendingSnapboardRefresh() {
+    if (snapboardVerificationChecksInFlight > 0) {
+      return;
+    }
     if (snapboardRefreshPollInFlight) {
       return;
     }
@@ -2172,6 +2193,7 @@
     var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);
     var lastClickState = { rowPresent: false, candidates: 0, clickable: 0 };
     var clickAttempts = 0;
+    var successfulClicks = 0;
     function observeCountdown(force) {
       var countdownMs = readAuthCheckCountdownMs(rowId, sms ? "sms" : "code");
       if (!countdownMs) {
@@ -2201,6 +2223,7 @@
       lastClickState = (clickResult && clickResult.state) || lastClickState;
       clickAttempts += 1;
       if (clicked) {
+        successfulClicks += 1;
         observeCountdown(true);
         diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
@@ -2251,10 +2274,16 @@
       }
       observeCountdown(false);
     }
+    var controlMissing = lastClickState.rowPresent && Number(lastClickState.candidates || 0) === 0;
+    var controlUnresponsive = lastClickState.rowPresent
+      && Number(lastClickState.candidates || 0) > 0
+      && successfulClicks === 0;
     return {
       ok: false,
+      refresh_required: controlMissing || controlUnresponsive,
       error: (sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.")
         + " [check_attempts=" + clickAttempts
+        + ", successful_clicks=" + successfulClicks
         + ", row_present=" + (lastClickState.rowPresent ? "1" : "0")
         + ", candidates=" + Number(lastClickState.candidates || 0)
         + ", clickable=" + Number(lastClickState.clickable || 0) + "]",
@@ -2342,7 +2371,9 @@
         return;
       }
 
-      var codeResult = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
+      var codeResult = await runSnapboardVerificationCheck(async function () {
+        return clickCheckCodeUntilOtp(rowId, normalizeOtpFetchTimeoutMs(payload.request.timeout_ms));
+      });
       if (!codeResult.ok || !codeResult.code) {
         headers["Content-Type"] = "application/json";
         await fetch(apiConfig.localApiUrl + "/otp/result", {
@@ -2719,24 +2750,27 @@
       }
 
       if (message.action === "otp") {
-        if (!normalizeComparableEmail(message.email || message.expected_email)) {
-          sendResponse({ ok: false, terminal: true, error: "Missing expected email for OTP check." });
-          return;
-        }
-        if (!await waitForExpectedRowValue(rowId, message.email || message.expected_email, "email", 8000)) {
-          sendResponse({ ok: false, error: "SnapBoard row email does not match pending OTP account." });
-          return;
-        }
-        var codeResult = await clickCheckCodeUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
-        if (!codeResult.ok || !codeResult.code) {
-          sendResponse({
-            ok: false,
-            terminal: !!codeResult.terminal,
-            error: codeResult.error || "OTP code not found on SnapBoard row.",
-          });
-          return;
-        }
-        sendResponse({ ok: true, code: codeResult.code });
+        await runSnapboardVerificationCheck(async function () {
+          if (!normalizeComparableEmail(message.email || message.expected_email)) {
+            sendResponse({ ok: false, terminal: true, error: "Missing expected email for OTP check." });
+            return;
+          }
+          if (!await waitForExpectedRowValue(rowId, message.email || message.expected_email, "email", 8000)) {
+            sendResponse({ ok: false, error: "SnapBoard row email does not match pending OTP account." });
+            return;
+          }
+          var codeResult = await clickCheckCodeUntilOtp(rowId, normalizeOtpFetchTimeoutMs(message.timeout_ms));
+          if (!codeResult.ok || !codeResult.code) {
+            sendResponse({
+              ok: false,
+              terminal: !!codeResult.terminal,
+              refresh_required: !!codeResult.refresh_required,
+              error: codeResult.error || "OTP code not found on SnapBoard row.",
+            });
+            return;
+          }
+          sendResponse({ ok: true, code: codeResult.code });
+        });
         return;
       }
 
@@ -2753,20 +2787,23 @@
       }
 
       if (message.action === "sms") {
-        if (!await waitForExpectedRowValue(rowId, message.phone || message.expected_phone, "phone", 8000)) {
-          sendResponse({ ok: false, error: "SnapBoard row phone does not match pending SMS account." });
-          return;
-        }
-        var smsResult = await clickCheckSmsUntilOtp(rowId, OTP_FETCH_TIMEOUT_MS);
-        if (!smsResult.ok || !smsResult.code) {
-          sendResponse({
-            ok: false,
-            terminal: !!smsResult.terminal,
-            error: smsResult.error || "SMS code not found on SnapBoard row.",
-          });
-          return;
-        }
-        sendResponse({ ok: true, code: smsResult.code });
+        await runSnapboardVerificationCheck(async function () {
+          if (!await waitForExpectedRowValue(rowId, message.phone || message.expected_phone, "phone", 8000)) {
+            sendResponse({ ok: false, error: "SnapBoard row phone does not match pending SMS account." });
+            return;
+          }
+          var smsResult = await clickCheckSmsUntilOtp(rowId, normalizeOtpFetchTimeoutMs(message.timeout_ms));
+          if (!smsResult.ok || !smsResult.code) {
+            sendResponse({
+              ok: false,
+              terminal: !!smsResult.terminal,
+              refresh_required: !!smsResult.refresh_required,
+              error: smsResult.error || "SMS code not found on SnapBoard row.",
+            });
+            return;
+          }
+          sendResponse({ ok: true, code: smsResult.code });
+        });
         return;
       }
 

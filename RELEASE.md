@@ -9,6 +9,22 @@ repo, and downloads the newest non-draft release asset matching
 
 ## Latest Release Notes
 
+### NyxSuite v6.7.1
+
+- SnapBoard OTP and SMS bridge checks now use the full 180-second verification
+  window, matching the on-page Check Code / Check SMS countdown behavior.
+- Generic SnapBoard refreshes and slower email/phone fetches no longer interrupt
+  an active OTP or SMS verification check.
+- SnapBoard verification now requests a controlled refresh only when the row's
+  Check Code / Check SMS control is missing or unresponsive.
+- Email and SMS recovery now stops if Snapchat's verification Back action does
+  not return to the matching entry step, avoiding repeated back clicks into the
+  signup form.
+- Rejected email OTPs can fall back to phone when that switch is available.
+- Added regression coverage for protected verification fetches, detached
+  email/phone bridge fetches, macOS Dock pytest collection safety, and recovery
+  stop conditions.
+
 ### NyxSuite v6.7.0
 
 - Verification priority now attempts the opposite-method switch only once when

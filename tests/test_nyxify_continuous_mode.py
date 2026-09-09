@@ -362,7 +362,7 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
             await self._run_task(True, signup_side_effect=signup_side_effect)
 
         self.assertEqual(sms_requests, [{
-            "timeout_seconds": 90,
+            "timeout_seconds": nyxify_runner.SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS,
             "expected_phone": "+15551234567",
         }])
 

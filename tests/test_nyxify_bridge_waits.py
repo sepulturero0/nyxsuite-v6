@@ -86,6 +86,12 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(nyxify_runner._snapboard_value_fetch_timeout(False), 75.0)
         self.assertEqual(nyxify_runner._snapboard_value_fetch_timeout(True), 180.0)
 
+    def test_verification_code_timeout_matches_snapboard_countdown_cap(self):
+        self.assertEqual(nyxify_runner.SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS, 180.0)
+
+    def test_otp_store_default_timeout_uses_verification_code_budget(self):
+        self.assertIsNone(nyxify_runner._request_snapboard_otp_from_store.__kwdefaults__["timeout_seconds"])
+
     async def test_email_terminal_bridge_error_returns_after_first_status_result(self):
         clock = FakeClock()
         status_calls = []
@@ -250,7 +256,7 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
             ["stale", "fresh"],
         )
 
-    async def test_otp_refreshes_snapboard_and_retries_after_timeout(self):
+    async def test_otp_timeout_does_not_request_generic_snapboard_refresh(self):
         class FakeOtpStore:
             def __init__(self):
                 self.requests = 0
@@ -282,10 +288,45 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
                 retry_timeout_seconds=2,
             )
 
-        self.assertEqual(code, "123456")
-        self.assertEqual(store.requests, 2)
+        self.assertEqual(code, "")
+        self.assertEqual(store.requests, 1)
         self.assertEqual(store.clears, 1)
-        refresh_mock.assert_awaited_once()
+        refresh_mock.assert_not_awaited()
+
+    async def test_otp_timeout_does_not_refresh_snapboard_during_verification(self):
+        class FakeOtpStore:
+            def __init__(self):
+                self.requests = 0
+                self.clears = 0
+
+            def request_otp_for_row(self, _row_key, email=""):
+                self.requests += 1
+
+            def consume_otp_result(self, _row_key):
+                return {"code": "", "error": ""}
+
+            def clear_otp_request(self, _row_key):
+                self.clears += 1
+
+        clock = FakeClock()
+        store = FakeOtpStore()
+        refresh_mock = mock.AsyncMock(return_value=True)
+
+        with mock.patch.object(nyxify_runner, "_request_snapboard_refresh", new=refresh_mock), \
+            mock.patch.object(nyxify_runner.time, "monotonic", side_effect=clock.monotonic), \
+            mock.patch.object(nyxify_runner.asyncio, "sleep", side_effect=clock.sleep):
+            code = await nyxify_runner._request_snapboard_otp_from_store(
+                store,
+                "snapboard:1",
+                task_id=42,
+                timeout_seconds=2,
+                poll_seconds=1,
+            )
+
+        self.assertEqual(code, "")
+        self.assertEqual(store.requests, 1)
+        self.assertEqual(store.clears, 1)
+        refresh_mock.assert_not_awaited()
 
     async def test_otp_request_uses_exact_submitted_email(self):
         class FakeOtpStore:

@@ -2832,7 +2832,11 @@ async def _recover_otp_via_back_and_new_email(
             await signup_page.wait_for_timeout(500)
             on_email_step = await _is_email_verification_step(signup_page)
         if not on_email_step:
-            continue
+            logger and logger.warning(
+                f"[{profile_id}] Verification back button did not return to the email entry step; "
+                "stopping email OTP recovery instead of clicking back again."
+            )
+            return "", signup_page
 
         logger and logger.info(
             f"[{profile_id}] OTP never arrived; ordering a fresh email and resubmitting "
@@ -2902,7 +2906,11 @@ async def _recover_sms_via_new_phone(
             await signup_page.wait_for_timeout(500)
             on_phone_step = await _is_phone_verification_step(signup_page)
         if not on_phone_step:
-            continue
+            logger and logger.warning(
+                f"[{profile_id}] Verification back button did not return to the phone entry step; "
+                "stopping SMS recovery instead of clicking back again."
+            )
+            return "", signup_page
 
         logger and logger.info(
             f"[{profile_id}] SMS code never arrived; ordering a fresh number and resubmitting "
@@ -3386,9 +3394,10 @@ async def _handle_verification(
             result["otp_entered"] = False
             if verification_priority == "email" and not allow_priority_fallback:
                 return result
-            return await fail_email_path(
-                f"email OTP rejected after {email_verify_max_attempts} attempt(s)"
-            )
+            reason = f"email OTP rejected after {email_verify_max_attempts} attempt(s)"
+            if phone_switch_unavailable:
+                return await fail_email_path(reason)
+            return await switch_to_phone(reason)
 
         logger and logger.warning(
             f"[{profile_id}] Snapchat rejected the email OTP; ordering a fresh email "

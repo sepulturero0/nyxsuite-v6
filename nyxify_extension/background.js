@@ -32,6 +32,7 @@ const LOCAL_API_TIMEOUT_MS = 4000;
 // Short-lived config cache so per-tick calls don't hit chrome.storage.sync each
 // request.
 const LOCAL_CONFIG_CACHE_TTL_MS = 3500;
+const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;
 let localConfigCache = null;
 let localConfigCacheAt = 0;
 
@@ -68,6 +69,9 @@ let flushInFlight = null;
 let activeScrapeRun = null;
 let scrapeHydrationInFlight = null;
 const snapboardPorts = new Map();
+const emailFetchesInFlight = new Set();
+const phoneFetchesInFlight = new Set();
+const verificationCodeFetchesInFlight = new Set();
 let bridgeLoopPromise = null;
 const popupPorts = new Set();
 let popupStatusTimer = null;
@@ -1853,6 +1857,9 @@ async function snapboardFetchWithRefresh(message) {
       return afterLogin;
     }
   }
+  if (verificationCodeFetchesInFlight.size) {
+    return response;
+  }
   const refreshed = await refreshSnapboardTab();
   if (refreshed) {
     const retry = await sendMessageToSnapboardTab(message);
@@ -1880,6 +1887,32 @@ async function snapboardFetchWithRelogin(message) {
     }
   }
   return response;
+}
+
+async function snapboardFetchVerificationCode(message) {
+  const response = await snapboardFetchWithRelogin(message);
+  if (response && response.ok) {
+    return response;
+  }
+  if (!response || !response.refresh_required || isTerminalSnapboardFetchResponse(response)) {
+    return response;
+  }
+  const refreshed = await refreshSnapboardTab({ force: true });
+  if (!refreshed) {
+    return response;
+  }
+  const retry = await snapboardFetchWithRelogin(message);
+  return retry || response;
+}
+
+async function runVerificationCodeFetch(message) {
+  const key = `${message && message.action || "code"}:${message && message.row_key || ""}`;
+  verificationCodeFetchesInFlight.add(key);
+  try {
+    return await snapboardFetchVerificationCode(message);
+  } finally {
+    verificationCodeFetchesInFlight.delete(key);
+  }
 }
 
 async function reserveAutoFillClickInternal() {
@@ -1987,7 +2020,26 @@ async function collectPendingBridgeRequests(path, maxRequests) {
   return requests;
 }
 
+function startDetachedSnapboardFetch(inFlightSet, rowKey, label, worker) {
+  const normalizedRowKey = String(rowKey || "").trim();
+  if (!normalizedRowKey || inFlightSet.has(normalizedRowKey)) {
+    return false;
+  }
+  inFlightSet.add(normalizedRowKey);
+  worker()
+    .catch(async (error) => {
+      await appendEventLog(`Nyxify ${label} bridge error for ${normalizedRowKey}: ${error.message}`);
+    })
+    .finally(() => {
+      inFlightSet.delete(normalizedRowKey);
+    });
+  return true;
+}
+
 async function processSnapboardRefreshRequest() {
+  if (verificationCodeFetchesInFlight.size) {
+    return false;
+  }
   const payload = await callLocalNyxify("GET", "/snapboard_refresh/pending");
   const request = payload && payload.request ? payload.request : null;
   if (!request || !request.request_id) {
@@ -2004,12 +2056,6 @@ async function processSnapboardRefreshRequest() {
 }
 
 async function processBridgeActionsOnce() {
-  try {
-    await processSnapboardRefreshRequest();
-  } catch (error) {
-    await appendEventLog(`Nyxify SnapBoard refresh bridge error: ${error.message}`);
-  }
-
   if (!snapboardPorts.size) {
     return;
   }
@@ -2021,11 +2067,12 @@ async function processBridgeActionsOnce() {
     const otpPayload = await callLocalNyxify("GET", "/otp/pending");
     const otpRequest = otpPayload && otpPayload.request ? otpPayload.request : null;
     if (otpRequest && otpRequest.row_key) {
-      const otpResponse = await snapboardFetchWithRelogin({
+      const otpResponse = await runVerificationCodeFetch({
         type: "NYXIFY_SNAPBOARD_ACTION",
         action: "otp",
         row_key: otpRequest.row_key,
         email: otpRequest.email || "",
+        timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
       });
       if (otpResponse.ok && otpResponse.code) {
         await callLocalNyxify("POST", "/otp/result", {
@@ -2048,11 +2095,12 @@ async function processBridgeActionsOnce() {
     const smsPayload = await callLocalNyxify("GET", "/sms/pending");
     const smsRequest = smsPayload && smsPayload.request ? smsPayload.request : null;
     if (smsRequest && smsRequest.row_key) {
-      const smsResponse = await snapboardFetchWithRelogin({
+      const smsResponse = await runVerificationCodeFetch({
         type: "NYXIFY_SNAPBOARD_ACTION",
         action: "sms",
         row_key: smsRequest.row_key,
         phone: smsRequest.phone || "",
+        timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
       });
       await callLocalNyxify("POST", "/sms/result", {
         row_key: smsRequest.row_key,
@@ -2065,10 +2113,16 @@ async function processBridgeActionsOnce() {
   }
 
   try {
+    await processSnapboardRefreshRequest();
+  } catch (error) {
+    await appendEventLog(`Nyxify SnapBoard refresh bridge error: ${error.message}`);
+  }
+
+  try {
     const emailRequests = await collectPendingBridgeRequests("/email/pending", MAX_EMAIL_BRIDGE_BATCH);
     if (emailRequests.length) {
-      await Promise.all(emailRequests.map(async (emailRequest) => {
-        try {
+      emailRequests.forEach((emailRequest) => {
+        startDetachedSnapboardFetch(emailFetchesInFlight, emailRequest.row_key, "email", async () => {
           const emailResponse = await snapboardFetchWithRefresh({
             type: "NYXIFY_SNAPBOARD_ACTION",
             action: "email_fetch",
@@ -2080,10 +2134,8 @@ async function processBridgeActionsOnce() {
             email: emailResponse.ok ? (emailResponse.email || "") : "",
             error: emailResponse.ok ? "" : (emailResponse.error || "SnapBoard email fetch failed."),
           });
-        } catch (error) {
-          await appendEventLog(`Nyxify email bridge error for ${emailRequest.row_key}: ${error.message}`);
-        }
-      }));
+        });
+      });
     }
   } catch (error) {
     await appendEventLog(`Nyxify email bridge error: ${error.message}`);
@@ -2092,8 +2144,8 @@ async function processBridgeActionsOnce() {
   try {
     const phoneRequests = await collectPendingBridgeRequests("/phone/pending", MAX_EMAIL_BRIDGE_BATCH);
     if (phoneRequests.length) {
-      await Promise.all(phoneRequests.map(async (phoneRequest) => {
-        try {
+      phoneRequests.forEach((phoneRequest) => {
+        startDetachedSnapboardFetch(phoneFetchesInFlight, phoneRequest.row_key, "phone", async () => {
           const phoneResponse = await snapboardFetchWithRefresh({
             type: "NYXIFY_SNAPBOARD_ACTION",
             action: "phone_fetch",
@@ -2105,10 +2157,8 @@ async function processBridgeActionsOnce() {
             phone: phoneResponse.ok ? (phoneResponse.phone || "") : "",
             error: phoneResponse.ok ? "" : (phoneResponse.error || "SnapBoard phone fetch failed."),
           });
-        } catch (error) {
-          await appendEventLog(`Nyxify phone bridge error for ${phoneRequest.row_key}: ${error.message}`);
-        }
-      }));
+        });
+      });
     }
   } catch (error) {
     await appendEventLog(`Nyxify phone bridge error: ${error.message}`);

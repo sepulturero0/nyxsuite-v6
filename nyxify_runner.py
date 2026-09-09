@@ -52,6 +52,9 @@ SNAPBOARD_VALUE_FETCH_TIMEOUT_SECONDS = float(
 SNAPBOARD_REPLACEMENT_FETCH_TIMEOUT_SECONDS = float(
     os.getenv("NYXIFY_SNAPBOARD_REPLACEMENT_FETCH_TIMEOUT_SECONDS", "180")
 )
+SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS = float(
+    os.getenv("NYXIFY_SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS", "180")
+)
 SNAPBOARD_OTP_INITIAL_WAIT_SECONDS = float(os.getenv("NYXIFY_SNAPBOARD_OTP_INITIAL_WAIT_SECONDS", "35"))
 SNAPBOARD_OTP_REFRESH_RETRY_SECONDS = float(os.getenv("NYXIFY_SNAPBOARD_OTP_REFRESH_RETRY_SECONDS", "75"))
 PLAYWRIGHT_RELEASE_TIMEOUT_SECONDS = float(os.getenv("NYXIFY_PLAYWRIGHT_RELEASE_TIMEOUT_SECONDS", "2"))
@@ -937,6 +940,7 @@ async def _request_snapboard_value(
     timeout_seconds,
     force_new=None,
     extra_payload=None,
+    allow_dispatch_refresh=True,
 ):
     normalized_row_key = str(row_key or "").strip()
     if not normalized_row_key:
@@ -974,6 +978,7 @@ async def _request_snapboard_value(
     poll_delay = max(0.1, float(SNAPBOARD_BRIDGE_POLL_SECONDS or 0.5))
     dispatch_timeout = max(1.0, float(SNAPBOARD_BRIDGE_DISPATCH_TIMEOUT_SECONDS or 8))
     refresh_attempted = False
+    dispatch_wait_logged = False
     while time.monotonic() < deadline:
         await asyncio.sleep(poll_delay)
         poll_count += 1
@@ -1011,11 +1016,19 @@ async def _request_snapboard_value(
                     request_age = 0.0
                 request_age = max(request_age, time.monotonic() - current_request_started_at)
                 if request_age >= dispatch_timeout:
-                    logger.warning(
-                        f"[SNAPBOARD_TIMING] SnapBoard {label} fetch for {normalized_row_key} "
-                        f"was not picked up by the SnapBoard bridge after {request_age:.1f}s; "
-                        "refreshing SnapBoard before retrying."
-                    )
+                    if not dispatch_wait_logged:
+                        dispatch_wait_logged = True
+                        logger.warning(
+                            f"[SNAPBOARD_TIMING] SnapBoard {label} fetch for {normalized_row_key} "
+                            f"was not picked up by the SnapBoard bridge after {request_age:.1f}s; "
+                            + (
+                                "refreshing SnapBoard before retrying."
+                                if allow_dispatch_refresh
+                                else "leaving the in-flight verification request intact."
+                            )
+                        )
+                    if not allow_dispatch_refresh:
+                        continue
                     if refresh_attempted:
                         return ""
                     refresh_attempted = True
@@ -1028,6 +1041,7 @@ async def _request_snapboard_value(
                     queued, current_request_started_at, request_elapsed = queue_request()
                     if not queued:
                         return ""
+                    dispatch_wait_logged = False
                     last_error = ""
                     continue
         except Exception as exc:
@@ -1072,16 +1086,17 @@ def _snapboard_value_fetch_timeout(force_new=False):
     return max(1.0, float(SNAPBOARD_VALUE_FETCH_TIMEOUT_SECONDS or 75))
 
 
-async def _request_snapboard_sms(row_key, timeout_seconds=150, expected_phone=""):
+async def _request_snapboard_sms(row_key, timeout_seconds=None, expected_phone=""):
     return await _request_snapboard_value(
         row_key,
         request_path="/sms/request",
         status_path="/sms/status",
         value_key="code",
         label="SMS",
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=timeout_seconds or SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS,
         force_new=None,
         extra_payload={"phone": str(expected_phone or "").strip()},
+        allow_dispatch_refresh=False,
     )
 
 
@@ -1097,7 +1112,7 @@ async def _consume_snapboard_otp_from_store(
     row_key,
     task_id,
     *,
-    timeout_seconds=90,
+    timeout_seconds=None,
     poll_seconds=1,
     deadline=None,
     return_error=False,
@@ -1150,7 +1165,7 @@ async def _request_snapboard_otp_from_store(
     row_key,
     *,
     task_id,
-    timeout_seconds=90,
+    timeout_seconds=None,
     poll_seconds=1,
     retry_timeout_seconds=None,
     expected_email="",
@@ -1160,19 +1175,8 @@ async def _request_snapboard_otp_from_store(
         logger.warning(f"Task {task_id} is missing row_key for OTP retrieval.")
         return ""
 
-    timeout_seconds = max(1.0, float(timeout_seconds or 90))
+    timeout_seconds = max(1.0, float(timeout_seconds or SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS))
     deadline = time.monotonic() + timeout_seconds
-    if retry_timeout_seconds is not None:
-        try:
-            retry_budget = max(0.1, float(retry_timeout_seconds))
-        except Exception:
-            retry_budget = 0.1
-        first_deadline = min(deadline, time.monotonic() + max(0.1, timeout_seconds - retry_budget))
-    else:
-        first_deadline = min(
-            deadline,
-            time.monotonic() + max(1.0, float(SNAPBOARD_OTP_INITIAL_WAIT_SECONDS or 35)),
-        )
     logger.info(f"Task {task_id} requesting OTP from SnapBoard bridge.")
     _request_store_otp_for_row(store, normalized_row_key, expected_email)
     code, error = await _consume_snapboard_otp_from_store(
@@ -1180,52 +1184,16 @@ async def _request_snapboard_otp_from_store(
         normalized_row_key,
         task_id,
         poll_seconds=poll_seconds,
-        deadline=first_deadline,
+        deadline=deadline,
         return_error=True,
     )
     if code:
         return code
 
     store.clear_otp_request(normalized_row_key)
-    if error and not _otp_error_allows_refresh(error):
-        return ""
-    remaining_after_first = deadline - time.monotonic()
-    if remaining_after_first <= max(0.1, float(poll_seconds or 1)):
-        logger.warning(f"Timed out waiting for OTP for task {task_id}.")
-        return ""
-
-    logger.warning(f"Timed out waiting for OTP for task {task_id}; refreshing SnapBoard before retrying.")
-    refreshed = await _request_snapboard_refresh(
-        "otp_timeout",
-        timeout_seconds=min(float(SNAPBOARD_REFRESH_TIMEOUT_SECONDS or 45), max(1.0, remaining_after_first)),
-    )
-    if not refreshed:
-        return ""
-    remaining_after_refresh = deadline - time.monotonic()
-    if remaining_after_refresh <= 0:
-        return ""
-
-    logger.info(f"Task {task_id} retrying OTP after SnapBoard refresh.")
-    _request_store_otp_for_row(store, normalized_row_key, expected_email)
-    retry_timeout = retry_timeout_seconds
-    if retry_timeout is None:
-        retry_timeout = min(
-            max(0.1, remaining_after_refresh),
-            float(SNAPBOARD_OTP_REFRESH_RETRY_SECONDS or 75),
-        )
-    retry_deadline = min(deadline, time.monotonic() + max(0.1, float(retry_timeout or 0.1)))
-    code = await _consume_snapboard_otp_from_store(
-        store,
-        normalized_row_key,
-        task_id,
-        poll_seconds=poll_seconds,
-        deadline=retry_deadline,
-    )
-    if code:
-        return code
-
-    store.clear_otp_request(normalized_row_key)
-    logger.warning(f"Timed out waiting for OTP for task {task_id} after SnapBoard refresh.")
+    if error:
+        logger.warning(f"SnapBoard OTP bridge returned no code for task {task_id}: {error}")
+    logger.warning(f"Timed out waiting for OTP for task {task_id}.")
     return ""
 
 
@@ -1464,7 +1432,7 @@ async def process_task(task, store, adspower):
             logger.info(f"Task {task_id} requesting SMS OTP from SnapBoard bridge.")
             code = await _request_snapboard_sms(
                 task_row_key,
-                timeout_seconds=90,
+                timeout_seconds=SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS,
                 expected_phone=expected_phone,
             )
             if code:

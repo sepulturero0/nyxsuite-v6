@@ -4,6 +4,20 @@ import sys
 from typing import Callable, List, Optional
 
 
+def _module_is_test_double(name: str) -> bool:
+    module = sys.modules.get(name)
+    return module is not None and not hasattr(module, "__file__")
+
+
+def _pytest_collection_without_mocked_dock_modules() -> bool:
+    if "pytest" not in sys.modules:
+        return False
+    return not (
+        _module_is_test_double("ApplicationServices")
+        and _module_is_test_double("AppKit")
+    )
+
+
 def hide_macos_dock_icon(log: Optional[Callable[[str], None]] = None) -> List[str]:
     """Best-effort hide of Python.app from the Dock on macOS.
 
@@ -12,6 +26,8 @@ def hide_macos_dock_icon(log: Optional[Callable[[str], None]] = None) -> List[st
     both should be accessory/UI-element apps instead of regular Dock apps.
     """
     if sys.platform != "darwin":
+        return []
+    if _pytest_collection_without_mocked_dock_modules():
         return []
 
     errors: List[str] = []
