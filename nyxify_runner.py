@@ -69,6 +69,7 @@ NYXIFY_COMPLETION_SOUND_ENABLED = str(os.getenv("NYXIFY_COMPLETION_SOUND", "1"))
     "off",
 }
 MAX_PROXY_ROTATION_ATTEMPTS = 30
+PRIORITY_PREFETCH_MAX_ROWS = 5
 
 _LOCAL_API_TOKEN_CACHED = False
 
@@ -205,6 +206,33 @@ def _is_proxy_banned(proxy_value, banned_proxies):
         if normalized_banned in normalized_proxy:
             return True
     return False
+
+
+def _normalize_proxy_priority_patterns(priority_patterns):
+    if isinstance(priority_patterns, str):
+        raw_items = priority_patterns.splitlines()
+    elif isinstance(priority_patterns, (list, tuple)):
+        raw_items = priority_patterns
+    else:
+        raw_items = []
+    return [str(item or "").strip().lower() for item in raw_items if str(item or "").strip()]
+
+
+def _is_proxy_priority_match(proxy_value, priority_patterns):
+    normalized_proxy = str(proxy_value or "").strip().lower()
+    if not normalized_proxy:
+        return False
+    proxy_host = normalized_proxy.split(":", 1)[0]
+    for pattern in _normalize_proxy_priority_patterns(priority_patterns):
+        if proxy_host == pattern or proxy_host.startswith(pattern + "."):
+            return True
+    return False
+
+
+def _priority_patterns_from_config(config):
+    if not (config or {}).get("proxy_priority_enabled", False):
+        return []
+    return _normalize_proxy_priority_patterns((config or {}).get("proxy_priority_patterns"))
 
 
 _proxy_ranking_store = None
@@ -507,15 +535,32 @@ def _build_waiting_step(missing_fields):
     return "waiting_for_" + "_and_".join(missing_fields)
 
 
-def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=None):
-    """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
+def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None):
     payload = {"row_key": row_key}
     if max_clicks is not None:
         payload["max_clicks"] = max_clicks
+    normalized_priority_patterns = _normalize_proxy_priority_patterns(priority_patterns)
+    if normalized_priority_patterns:
+        payload["priority_patterns"] = normalized_priority_patterns
+    normalized_blocked_patterns = _normalize_proxy_priority_patterns(blocked_patterns)
+    if normalized_blocked_patterns:
+        payload["blocked_patterns"] = normalized_blocked_patterns
     try:
         _post_local_api_response("/proxy/rotate_request", payload, timeout=5)
+        return True
     except Exception as exc:
         logger.warning(f"Could not send proxy rotate request to local API: {exc}")
+        return False
+
+
+def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+    """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
+    if not _queue_snapboard_rotation_request(
+        row_key,
+        max_clicks=max_clicks,
+        priority_patterns=priority_patterns,
+        blocked_patterns=blocked_patterns,
+    ):
         return None
 
     for _ in range(timeout_seconds):
@@ -540,12 +585,92 @@ def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=Non
     return None
 
 
-async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=None):
+async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None):
     return await asyncio.to_thread(
         _request_snapboard_rotation_sync,
         row_key,
         timeout_seconds,
         max_clicks,
+        priority_patterns,
+        blocked_patterns,
+    )
+
+
+def _prefetch_proxy_prep_for_pending_rows(
+    store,
+    priority_patterns=None,
+    blocked_patterns=None,
+    max_rows=PRIORITY_PREFETCH_MAX_ROWS,
+):
+    normalized_patterns = _normalize_proxy_priority_patterns(priority_patterns)
+    normalized_blocked = _normalize_proxy_priority_patterns(blocked_patterns)
+    if not normalized_patterns and not normalized_blocked:
+        return 0
+
+    requested = 0
+    try:
+        pending_rows = store.get_pending_tasks()
+    except Exception as exc:
+        logger.warning(f"Could not inspect pending Nyxify rows for proxy priority prefetch: {exc}")
+        return 0
+
+    for row in pending_rows:
+        if requested >= max_rows:
+            break
+        row_key = str((row or {}).get("row_key") or "").strip()
+        if not row_key:
+            continue
+        username = str((row or {}).get("username") or "").strip()
+        if not username or username.lower().startswith("temp"):
+            continue
+        proxy_value = str(
+            (row or {}).get("proxy_address")
+            or (row or {}).get("ip_address")
+            or ""
+        ).strip()
+        priority_mismatch = bool(
+            normalized_patterns
+            and not _is_proxy_priority_match(proxy_value, normalized_patterns)
+        )
+        blocked_match = bool(
+            normalized_blocked
+            and _is_proxy_banned(proxy_value, normalized_blocked)
+        )
+        if not priority_mismatch and not blocked_match:
+            if str((row or {}).get("last_step") or "").strip() == "waiting_for_priority_proxy":
+                try:
+                    store.update_task_last_step_by_row_key(row_key, "priority_proxy_ready")
+                except Exception:
+                    pass
+            continue
+
+        try:
+            store.update_task_last_step_by_row_key(
+                row_key,
+                "waiting_for_priority_proxy" if priority_mismatch else "refreshing_blocked_proxy",
+            )
+        except Exception:
+            pass
+
+        try:
+            queued = _queue_snapboard_rotation_request(
+                row_key,
+                max_clicks=3,
+                priority_patterns=normalized_patterns if priority_mismatch else None,
+                blocked_patterns=normalized_blocked if blocked_match else None,
+            )
+            if queued:
+                requested += 1
+        except Exception as exc:
+            logger.debug(f"Could not queue priority proxy prefetch for {row_key}: {exc}")
+    return requested
+
+
+def _prefetch_priority_proxies_for_pending_rows(store, priority_patterns, max_rows=PRIORITY_PREFETCH_MAX_ROWS):
+    return _prefetch_proxy_prep_for_pending_rows(
+        store,
+        priority_patterns=priority_patterns,
+        max_rows=max_rows,
     )
 
 
@@ -1231,6 +1356,7 @@ async def _rotate_proxy_until_usable(
 
     while True:
         runtime_config = load_nyxify_config()
+        active_priority_patterns = _priority_patterns_from_config(runtime_config)
         active_blocked_proxies = (
             runtime_config.get("blocked_proxies", blocked_proxies)
             if runtime_config.get("proxy_blocker_enabled", True)
@@ -1239,7 +1365,18 @@ async def _rotate_proxy_until_usable(
         active_proxy_checker_enabled = runtime_config.get("proxy_checker_enabled", proxy_checker_enabled)
 
         is_blocked = bool(active_blocked_proxies and _is_proxy_banned(proxy_value, active_blocked_proxies))
-        if not is_blocked:
+        priority_mismatch = bool(
+            active_priority_patterns
+            and not _is_proxy_priority_match(proxy_value, active_priority_patterns)
+        )
+        if priority_mismatch:
+            reason = "priority_mismatch"
+            last_message = "Proxy does not match a priority prefix."
+            logger.info(
+                f"Task {task_id}: proxy {proxy_value[:60]!r} does not match priority "
+                f"{active_priority_patterns!r}, rotating proxy"
+            )
+        elif not is_blocked:
             proxy_check = await _run_proxy_check(
                 adspower,
                 proxy_value,
@@ -1269,7 +1406,13 @@ async def _rotate_proxy_until_usable(
         # Ask SnapBoard to click rotate a few times: escaping a blocked subnet or
         # a dead proxy often needs more than one swap, and a single click that
         # lands on another bad proxy would otherwise burn an attempt.
-        new_proxy = await _request_snapboard_rotation(task_row_key, timeout_seconds=55, max_clicks=3)
+        new_proxy = await _request_snapboard_rotation(
+            task_row_key,
+            timeout_seconds=55,
+            max_clicks=3,
+            priority_patterns=active_priority_patterns if priority_mismatch else None,
+            blocked_patterns=active_blocked_proxies if is_blocked else None,
+        )
         if new_proxy:
             store.update_task_proxy(task_id, new_proxy)
             proxy_value = new_proxy
@@ -2165,6 +2308,18 @@ async def main():
                 configured_max_parallel = max(1, int(config.get("max_parallel_profiles") or 1))
                 max_parallel = 1 if continuous_mode_enabled else configured_max_parallel
                 open_slots = max_parallel - len(active_tasks)
+                priority_patterns = _priority_patterns_from_config(config)
+                blocked_patterns = (
+                    config.get("blocked_proxies", [])
+                    if config.get("proxy_blocker_enabled", True)
+                    else []
+                )
+                if priority_patterns or blocked_patterns:
+                    _prefetch_proxy_prep_for_pending_rows(
+                        store,
+                        priority_patterns=priority_patterns,
+                        blocked_patterns=blocked_patterns,
+                    )
 
                 if open_slots > 0:
                     if continuous_mode_enabled and _continuous_nyx_handoff_active():
@@ -2177,7 +2332,10 @@ async def main():
                         await asyncio.sleep(2)
                         continue
 
-                    new_tasks = store.claim_pending_tasks(limit=open_slots)
+                    new_tasks = store.claim_pending_tasks(
+                        limit=open_slots,
+                        proxy_priority_patterns=priority_patterns,
+                    )
                     for task in new_tasks:
                         t = asyncio.create_task(process_task(task, store, adspower))
                         active_tasks.add(t)

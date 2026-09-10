@@ -70,6 +70,34 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
             row = store.list_tasks()[0]
             self.assertEqual(row["password"], "NewPassword2!")
 
+    def test_task_store_priority_claim_only_starts_matching_proxy_rows(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+
+            store.upsert_task(
+                row_key="snapboard:1",
+                model="Clea",
+                ip_address="45.10.1.1",
+                proxy_address="45.10.1.1:9000:user:pass",
+                username="cleaone",
+                password="Password1!",
+            )
+            store.upsert_task(
+                row_key="snapboard:2",
+                model="Clea",
+                ip_address="23.54.1.2",
+                proxy_address="23.54.1.2:9000:user:pass",
+                username="cleatwo",
+                password="Password2!",
+            )
+
+            claimed = store.claim_pending_tasks(limit=2, proxy_priority_patterns=["23.54"])
+            rows = {row["row_key"]: row for row in store.list_tasks()}
+
+            self.assertEqual([row["row_key"] for row in claimed], ["snapboard:2"])
+            self.assertEqual(rows["snapboard:1"]["status"], "PENDING")
+            self.assertEqual(rows["snapboard:2"]["status"], "RUNNING")
+
     def test_task_store_pending_otp_uses_submitted_email(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = NyxifyTaskStore(Path(tmp) / "tasks.db")
@@ -273,7 +301,7 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
 
         self.assertIn("force=True", api)
         self.assertIn('"force": bool(request.get("force"))', api)
-        self.assertIn("if (!payload.force && config.proxyBlockerEnabled === false && config.proxyCheckerEnabled === false) return;", content)
+        self.assertIn("&& !priorityPatterns.length", content)
 
     def test_popup_remove_banned_clears_all_adspower_ids_before_proxy_rotation(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")

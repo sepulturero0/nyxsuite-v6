@@ -33,8 +33,14 @@ const LOCAL_API_TIMEOUT_MS = 4000;
 // request.
 const LOCAL_CONFIG_CACHE_TTL_MS = 3500;
 const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;
+const PROXY_PREP_ROTATE_CLICK_ATTEMPTS = 10;
+const REMOTE_CONFIG_SYNC_INTERVAL_MS = 2000;
+const PROXY_PREP_RETRY_INTERVAL_MS = 5000;
 let localConfigCache = null;
 let localConfigCacheAt = 0;
+let remoteConfigSyncAt = 0;
+let remoteConfigSyncInFlight = null;
+let proxyPrepRetryAt = 0;
 
 function fetchWithTimeout(url, options, timeoutMs) {
   // AbortController may not be available in every sandbox (e.g. tests); degrade
@@ -79,6 +85,7 @@ let popupStatusSignature = "";
 let popupStatusRequest = null;
 let autoFillReserveInFlight = Promise.resolve();
 const fullAutoRowsInFlight = new Set();
+const proxyPrepInFlight = new Set();
 let runnerStatusRequest = null;
 let runnerStatusCache = {
   at: 0,
@@ -94,6 +101,40 @@ function normalizePositiveInteger(value, fallback = 0) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function normalizeStringList(value) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : String(value || "").split(/\r?\n/);
+  return rawItems.map((item) => String(item || "").trim()).filter(Boolean);
+}
+
+function proxyMatchesPriority(proxyValue, priorityPatterns) {
+  const normalizedProxy = String(proxyValue || "").trim().toLowerCase();
+  const patterns = normalizeStringList(priorityPatterns).map((item) => item.toLowerCase());
+  if (!normalizedProxy || !patterns.length) {
+    return false;
+  }
+  const proxyHost = normalizedProxy.split(":", 1)[0];
+  return patterns.some((pattern) => proxyHost === pattern || proxyHost.startsWith(`${pattern}.`));
+}
+
+function proxyMatchesBlockedPattern(proxyValue, blockedPatterns) {
+  const normalizedProxy = String(proxyValue || "").trim().toLowerCase();
+  if (!normalizedProxy) {
+    return false;
+  }
+  const proxyHost = normalizedProxy.split(":")[0];
+  return normalizeStringList(blockedPatterns).some((item) => {
+    const pattern = item.toLowerCase();
+    if (!pattern) {
+      return false;
+    }
+    return proxyHost.startsWith(pattern)
+      || normalizedProxy.startsWith(pattern)
+      || normalizedProxy.includes(pattern);
+  });
+}
+
 function normalizeConfig(config) {
   const safeConfig = config || {};
   const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
@@ -107,6 +148,7 @@ function normalizeConfig(config) {
   const bannedProxies = Array.isArray(rawBlocked)
     ? rawBlocked
     : String(rawBlocked).split(/\r?\n/);
+  const proxyPriorityPatterns = normalizeStringList(safeConfig.proxyPriorityPatterns);
 
   return {
     localApiUrl: String(safeConfig.localApiUrl || "http://127.0.0.1:8866").trim(),
@@ -124,6 +166,8 @@ function normalizeConfig(config) {
     blockedProxies: bannedProxies.map((item) => String(item || "").trim()).filter(Boolean),
     proxyBlockerEnabled: safeConfig.proxyBlockerEnabled !== false,
     proxyCheckerEnabled: safeConfig.proxyCheckerEnabled !== false,
+    proxyPriorityEnabled: safeConfig.proxyPriorityEnabled === true,
+    proxyPriorityPatterns,
     pushAdspowerIdEnabled: safeConfig.pushAdspowerIdEnabled !== false,
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
@@ -155,6 +199,10 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
     bannedProxies: blocked,
     proxyBlockerEnabled: runner.proxy_blocker_enabled !== false,
     proxyCheckerEnabled: runner.proxy_checker_enabled !== false,
+    proxyPriorityEnabled: runner.proxy_priority_enabled === true,
+    proxyPriorityPatterns: Array.isArray(runner.proxy_priority_patterns)
+      ? runner.proxy_priority_patterns
+      : base.proxyPriorityPatterns,
     pushAdspowerIdEnabled: runner.push_adspower_id_enabled !== false,
     fullAutoModeEnabled: runner.full_auto_mode_enabled === true,
     continuousModeEnabled: runner.continuous_mode_enabled === true,
@@ -176,6 +224,8 @@ function runnerConfigPayloadFromExtensionConfig(config, replaceBlocked = false) 
     blocked_proxies: safe.blockedProxies || safe.bannedProxies,
     proxy_blocker_enabled: safe.proxyBlockerEnabled,
     proxy_checker_enabled: safe.proxyCheckerEnabled,
+    proxy_priority_enabled: safe.proxyPriorityEnabled,
+    proxy_priority_patterns: safe.proxyPriorityPatterns,
     push_adspower_id_enabled: safe.pushAdspowerIdEnabled,
     full_auto_mode_enabled: safe.fullAutoModeEnabled,
     continuous_mode_enabled: safe.continuousModeEnabled,
@@ -1149,6 +1199,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     await maybeFetchBridgeToken().catch(() => null);
     await processSnapboardRefreshRequest().catch(() => null);
     await flushPendingEntries();
+    await prepareStoredProxyRows().catch(() => null);
     await hydrateScrapeRunFromStorage().catch(() => null);
     // Settle hung/closed worker tabs (hibernation-safe) before re-driving so a
     // single stuck tab can't wedge the run, then keep the queue moving.
@@ -1262,22 +1313,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message && message.type === "NYXIFY_DETECTED_ROWS") {
-    chrome.storage.sync.get(STORAGE_KEYS.config)
-      .then(async (syncData) => {
-        const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
-        if (!config.enabled) {
-          sendResponse({ ok: true, count: 0, skipped: true });
-          return;
-        }
-
-        const count = await mergeDetectedEntries(message.rows || [], sender && sender.tab ? sender.tab.url : "");
-        await flushPendingEntries();
-        await maybeRunFullAutoForRows(message.rows || [], config);
-        if (count > 0) {
-          await appendEventLog(`Detected ${count} new Nyxify row(s).`);
-        }
-        sendResponse({ ok: true, count });
-      })
+    handleDetectedRows(message, sender)
+      .then((payload) => sendResponse(payload))
       .catch((error) => sendResponse({ ok: false, error: error.message }));
     return true;
   }
@@ -2056,6 +2093,11 @@ async function processSnapboardRefreshRequest() {
 }
 
 async function processBridgeActionsOnce() {
+  await syncExtensionConfigFromRunner();
+  if ((Date.now() - proxyPrepRetryAt) >= PROXY_PREP_RETRY_INTERVAL_MS) {
+    proxyPrepRetryAt = Date.now();
+    await prepareStoredProxyRows().catch(() => null);
+  }
   if (!snapboardPorts.size) {
     return;
   }
@@ -2193,6 +2235,8 @@ async function processBridgeActionsOnce() {
         row_key: proxyPayload.row_key,
         max_clicks: proxyPayload.max_clicks,
         force: !!proxyPayload.force,
+        priority_patterns: proxyPayload.priority_patterns || [],
+        blocked_patterns: proxyPayload.blocked_patterns || [],
       });
       await callLocalNyxify("POST", "/proxy/rotate_result", {
         row_key: proxyPayload.row_key,
@@ -2427,6 +2471,8 @@ async function mergeDetectedEntries(rows, sourceUrl) {
   const lastSeenMap = new Map(lastSeenEntries.map((entry) => [entry.row_key, entry]));
   let runnerQueueMap = null;
   let addedCount = 0;
+  const normalizedDetectedRows = [];
+  const syncConfig = normalizeConfig((await chrome.storage.sync.get(STORAGE_KEYS.config))[STORAGE_KEYS.config] || {});
 
   try {
     const payload = await callLocalNyxify("GET", "/queue");
@@ -2440,27 +2486,49 @@ async function mergeDetectedEntries(rows, sourceUrl) {
     const pendingRow = mergedMap.get(row.row_key);
     const previousRow = lastSeenMap.get(row.row_key);
     const runnerRow = runnerQueueMap ? runnerQueueMap.get(row.row_key) : null;
+    const existingProxy = String(
+      (pendingRow && (pendingRow.proxy_address || pendingRow.ip_address))
+      || (previousRow && (previousRow.proxy_address || previousRow.ip_address))
+      || (runnerRow && (runnerRow.proxy_address || runnerRow.ip_address))
+      || ""
+    ).trim();
+    const incomingProxy = String(row.proxy_address || row.ip_address || "").trim();
+    const keepExistingPriorityProxy = (
+      syncConfig.proxyPriorityEnabled === true
+      && syncConfig.proxyPriorityPatterns.length
+      && existingProxy
+      && proxyMatchesPriority(existingProxy, syncConfig.proxyPriorityPatterns)
+      && !proxyMatchesPriority(incomingProxy, syncConfig.proxyPriorityPatterns)
+    );
+    const rowForMerge = keepExistingPriorityProxy
+      ? {
+        ...row,
+        proxy_address: existingProxy,
+        ip_address: existingProxy.split(":")[0] || row.ip_address,
+      }
+      : row;
+    normalizedDetectedRows.push(rowForMerge);
     const sameAsPrevious = previousRow
-      && previousRow.model === row.model
-      && previousRow.ip_address === row.ip_address
-      && previousRow.proxy_address === row.proxy_address
-      && String(previousRow.username || "").trim() === row.username
-      && String(previousRow.email || "").trim() === row.email
-      && String(previousRow.password || "").trim() === row.password;
+      && previousRow.model === rowForMerge.model
+      && previousRow.ip_address === rowForMerge.ip_address
+      && previousRow.proxy_address === rowForMerge.proxy_address
+      && String(previousRow.username || "").trim() === rowForMerge.username
+      && String(previousRow.email || "").trim() === rowForMerge.email
+      && String(previousRow.password || "").trim() === rowForMerge.password;
     const sameAsPending = pendingRow
-      && pendingRow.model === row.model
-      && pendingRow.ip_address === row.ip_address
-      && pendingRow.proxy_address === row.proxy_address
-      && String(pendingRow.username || "").trim() === row.username
-      && String(pendingRow.email || "").trim() === row.email
-      && String(pendingRow.password || "").trim() === row.password;
+      && pendingRow.model === rowForMerge.model
+      && pendingRow.ip_address === rowForMerge.ip_address
+      && pendingRow.proxy_address === rowForMerge.proxy_address
+      && String(pendingRow.username || "").trim() === rowForMerge.username
+      && String(pendingRow.email || "").trim() === rowForMerge.email
+      && String(pendingRow.password || "").trim() === rowForMerge.password;
     const sameAsRunner = runnerRow
-      && String(runnerRow.model || "").trim() === row.model
-      && String(runnerRow.ip_address || "").trim() === row.ip_address
-      && String(runnerRow.proxy_address || "").trim() === row.proxy_address
-      && String(runnerRow.username || "").trim() === row.username
-      && String(runnerRow.email || "").trim() === row.email
-      && String(runnerRow.password || "").trim() === row.password;
+      && String(runnerRow.model || "").trim() === rowForMerge.model
+      && String(runnerRow.ip_address || "").trim() === rowForMerge.ip_address
+      && String(runnerRow.proxy_address || "").trim() === rowForMerge.proxy_address
+      && String(runnerRow.username || "").trim() === rowForMerge.username
+      && String(runnerRow.email || "").trim() === rowForMerge.email
+      && String(runnerRow.password || "").trim() === rowForMerge.password;
 
     if (sameAsPending || (sameAsPrevious && sameAsRunner)) {
       continue;
@@ -2468,7 +2536,7 @@ async function mergeDetectedEntries(rows, sourceUrl) {
 
     mergedMap.set(row.row_key, {
       ...(pendingRow || {}),
-      ...row,
+      ...rowForMerge,
       source: "nyxify-extension",
       source_url: sourceUrl || "",
       queued_at: new Date().toISOString(),
@@ -2478,10 +2546,188 @@ async function mergeDetectedEntries(rows, sourceUrl) {
 
   await chrome.storage.local.set({
     [STORAGE_KEYS.pending]: Array.from(mergedMap.values()),
-    [STORAGE_KEYS.lastSeen]: sanitizedRows,
+    [STORAGE_KEYS.lastSeen]: normalizedDetectedRows,
   });
   await updateBadge();
   return addedCount;
+}
+
+function sendMessageToTab(tabId, message) {
+  return new Promise((resolve) => {
+    if (tabId == null) {
+      resolve({ ok: false, error: "No SnapBoard tab available." });
+      return;
+    }
+    chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (chrome.runtime.lastError) {
+        resolve({ ok: false, error: chrome.runtime.lastError.message || "SnapBoard messaging failed." });
+        return;
+      }
+      resolve(response || { ok: false, error: "Empty SnapBoard response." });
+    });
+  });
+}
+
+async function updateLocalDetectedProxy(rowKey, proxy) {
+  const normalizedRowKey = String(rowKey || "").trim();
+  const normalizedProxy = String(proxy || "").trim();
+  if (!normalizedRowKey || !normalizedProxy) {
+    return false;
+  }
+  const localData = await chrome.storage.local.get([STORAGE_KEYS.pending, STORAGE_KEYS.lastSeen]);
+  let changed = false;
+  const pendingEntries = (localData[STORAGE_KEYS.pending] || []).map((entry) => {
+    if (String(entry && entry.row_key || "").trim() !== normalizedRowKey) {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      proxy_address: normalizedProxy,
+      ip_address: String(normalizedProxy).split(":")[0] || entry.ip_address || "",
+    };
+  });
+  const lastSeenEntries = (localData[STORAGE_KEYS.lastSeen] || []).map((entry) => {
+    if (String(entry && entry.row_key || "").trim() !== normalizedRowKey) {
+      return entry;
+    }
+    changed = true;
+    return {
+      ...entry,
+      proxy_address: normalizedProxy,
+      ip_address: String(normalizedProxy).split(":")[0] || entry.ip_address || "",
+    };
+  });
+  if (!changed) {
+    return false;
+  }
+  await chrome.storage.local.set({
+    [STORAGE_KEYS.pending]: pendingEntries,
+    [STORAGE_KEYS.lastSeen]: lastSeenEntries,
+  });
+  await updateBadge();
+  return true;
+}
+
+async function prepareProxyRows(rows, config, tabId) {
+  const priorityPatterns = normalizeStringList(config && config.proxyPriorityPatterns);
+  const priorityEnabled = !!(config && config.proxyPriorityEnabled === true && priorityPatterns.length);
+  const blockedPatterns = normalizeStringList(
+    config && config.proxyBlockerEnabled !== false
+      ? (config.blockedProxies || config.bannedProxies)
+      : []
+  );
+  const blockerEnabled = !!blockedPatterns.length;
+  if (!config || (!priorityEnabled && !blockerEnabled)) {
+    return { priorityPrepared: 0, blockedPrepared: 0 };
+  }
+  const sanitizedRows = sanitizeEntries(rows);
+  let priorityPrepared = 0;
+  let blockedPrepared = 0;
+  let priorityAttempted = 0;
+  let blockedAttempted = 0;
+  for (const row of sanitizedRows) {
+    if (!row.row_key || !row.username || String(row.username).trim().toLowerCase().startsWith("temp")) {
+      continue;
+    }
+    const proxyValue = row.proxy_address || row.ip_address;
+    const priorityMismatch = priorityEnabled && !proxyMatchesPriority(proxyValue, priorityPatterns);
+    const blockedMatch = blockerEnabled && proxyMatchesBlockedPattern(proxyValue, blockedPatterns);
+    if (!priorityMismatch && !blockedMatch) {
+      continue;
+    }
+    if (proxyPrepInFlight.has(row.row_key)) {
+      continue;
+    }
+    proxyPrepInFlight.add(row.row_key);
+    if (priorityMismatch) {
+      priorityAttempted += 1;
+    } else if (blockedMatch) {
+      blockedAttempted += 1;
+    }
+    try {
+      const response = await sendMessageToTab(tabId, {
+        type: "NYXIFY_SNAPBOARD_ACTION",
+        action: "proxy_rotate",
+        row_key: row.row_key,
+        max_clicks: PROXY_PREP_ROTATE_CLICK_ATTEMPTS,
+        priority_patterns: priorityEnabled ? priorityPatterns : [],
+        blocked_patterns: blockerEnabled ? blockedPatterns : [],
+      });
+      if (response && response.ok && response.proxy) {
+        await updateLocalDetectedProxy(row.row_key, response.proxy);
+        if (priorityMismatch) {
+          priorityPrepared += 1;
+        } else if (blockedMatch) {
+          blockedPrepared += 1;
+        }
+      }
+    } finally {
+      proxyPrepInFlight.delete(row.row_key);
+    }
+  }
+  return { priorityPrepared, blockedPrepared, priorityAttempted, blockedAttempted };
+}
+
+async function prepareStoredProxyRows() {
+  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+  const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  const shouldPrepareProxy = (
+    (config.proxyPriorityEnabled === true && config.proxyPriorityPatterns.length)
+    || (config.proxyBlockerEnabled !== false && config.blockedProxies.length)
+  );
+  if (!shouldPrepareProxy) {
+    return { priorityPrepared: 0, blockedPrepared: 0, priorityAttempted: 0, blockedAttempted: 0 };
+  }
+  const localData = await chrome.storage.local.get(STORAGE_KEYS.pending);
+  const rows = localData[STORAGE_KEYS.pending] || [];
+  if (!rows.length) {
+    return { priorityPrepared: 0, blockedPrepared: 0, priorityAttempted: 0, blockedAttempted: 0 };
+  }
+  const tabId = await findSnapboardTabId();
+  const prep = await prepareProxyRows(rows, config, tabId);
+  return prep;
+}
+
+async function handleDetectedRows(message, sender) {
+  const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+  const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
+  const rows = message && message.rows ? message.rows : [];
+  const sourceUrl = sender && sender.tab ? sender.tab.url : "";
+  const tabId = sender && sender.tab ? sender.tab.id : null;
+
+  if (!config.enabled) {
+    const shouldPrepareProxy = (
+      (config.proxyPriorityEnabled === true && config.proxyPriorityPatterns.length)
+      || (config.proxyBlockerEnabled !== false && config.blockedProxies.length)
+    );
+    if (shouldPrepareProxy) {
+      const count = await mergeDetectedEntries(rows, sourceUrl);
+      const prep = await prepareProxyRows(rows, config, tabId);
+      if (count > 0 || prep.priorityPrepared > 0 || prep.blockedPrepared > 0) {
+        await appendEventLog(
+          `Prepared ${prep.priorityPrepared} priority and ${prep.blockedPrepared} blocked proxy row(s) while Nyxify is off.`
+        );
+      }
+      return {
+        ok: true,
+        count,
+        skippedQueue: true,
+        priorityPrepared: prep.priorityPrepared,
+        blockedPrepared: prep.blockedPrepared,
+      };
+    }
+    return { ok: true, count: 0, skipped: true };
+  }
+
+  const count = await mergeDetectedEntries(rows, sourceUrl);
+  await prepareProxyRows(rows, config, tabId);
+  await flushPendingEntries();
+  await maybeRunFullAutoForRows(rows, config);
+  if (count > 0) {
+    await appendEventLog(`Detected ${count} new Nyxify row(s).`);
+  }
+  return { ok: true, count };
 }
 
 function sanitizeEntries(rows) {
@@ -2646,6 +2892,40 @@ async function callLocalNyxify(method, path, payload) {
     throw new Error(result.error || `Request failed with status ${response.status}`);
   }
   return result;
+}
+
+async function syncExtensionConfigFromRunner(force = false) {
+  const now = Date.now();
+  if (!force && (now - remoteConfigSyncAt) < REMOTE_CONFIG_SYNC_INTERVAL_MS) {
+    return false;
+  }
+  if (remoteConfigSyncInFlight) {
+    return remoteConfigSyncInFlight;
+  }
+  remoteConfigSyncAt = now;
+  remoteConfigSyncInFlight = (async () => {
+    try {
+      const remotePayload = await callLocalNyxify("GET", "/config");
+      if (!remotePayload || !remotePayload.config) {
+        return false;
+      }
+      const currentData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+      const current = normalizeConfig(currentData[STORAGE_KEYS.config] || {});
+      const next = extensionConfigFromRunnerConfig(remotePayload.config, current);
+      if (JSON.stringify(current) === JSON.stringify(next)) {
+        return false;
+      }
+      await chrome.storage.sync.set({ [STORAGE_KEYS.config]: next });
+      localConfigCache = next;
+      localConfigCacheAt = Date.now();
+      return true;
+    } catch (_error) {
+      return false;
+    } finally {
+      remoteConfigSyncInFlight = null;
+    }
+  })();
+  return remoteConfigSyncInFlight;
 }
 
 async function updateBadge() {

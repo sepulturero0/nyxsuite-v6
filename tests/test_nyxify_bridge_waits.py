@@ -47,6 +47,7 @@ sys.modules.setdefault("playwright", _playwright_pkg)
 sys.modules.setdefault("playwright.async_api", _playwright_async_api)
 
 import nyxify_runner
+from core.nyxify_local_api import _ProxyRotateStore
 
 
 class Response:
@@ -91,6 +92,131 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
 
     def test_otp_store_default_timeout_uses_verification_code_budget(self):
         self.assertIsNone(nyxify_runner._request_snapboard_otp_from_store.__kwdefaults__["timeout_seconds"])
+
+    async def test_proxy_rotation_rejects_non_priority_proxy_until_match(self):
+        class FakeStore:
+            def __init__(self):
+                self.updated = []
+
+            def update_task_proxy(self, task_id, proxy):
+                self.updated.append((task_id, proxy))
+
+        class FakeAdsPower:
+            def __init__(self):
+                self.checked = []
+
+            def test_proxy_connection(self, proxy):
+                self.checked.append(proxy)
+                return {"ok": True, "message": "socket ok", "proxy": {"host": proxy}}
+
+        rotations = ["45.10.1.1:9000:u:p", "23.54.1.2:9000:u:p"]
+
+        async def fake_rotation(*_args, **_kwargs):
+            return rotations.pop(0)
+
+        with mock.patch.object(nyxify_runner, "load_nyxify_config", return_value={
+            "proxy_priority_enabled": True,
+            "proxy_priority_patterns": ["23.54"],
+            "proxy_blocker_enabled": True,
+            "blocked_proxies": [],
+            "proxy_checker_enabled": False,
+        }), mock.patch.object(nyxify_runner, "_request_snapboard_rotation", side_effect=fake_rotation):
+            store = FakeStore()
+            adspower = FakeAdsPower()
+            proxy, check = await nyxify_runner._rotate_proxy_until_usable(
+                task_id=7,
+                task_row_key="snapboard:7",
+                store=store,
+                adspower=adspower,
+                proxy_value="198.51.100.1:9000:u:p",
+                blocked_proxies=[],
+                proxy_checker_enabled=False,
+                max_rotation_attempts=4,
+            )
+
+        self.assertEqual(proxy, "23.54.1.2:9000:u:p")
+        self.assertEqual(check["ok"], True)
+        self.assertEqual(store.updated, [
+            (7, "45.10.1.1:9000:u:p"),
+            (7, "23.54.1.2:9000:u:p"),
+        ])
+        self.assertEqual(adspower.checked, ["23.54.1.2:9000:u:p"])
+
+    def test_prefetch_marks_non_priority_pending_row_and_requests_rotation(self):
+        class FakeStore:
+            def __init__(self):
+                self.steps = []
+
+            def get_pending_tasks(self):
+                return [{
+                    "id": 10,
+                    "row_key": "snapboard:10",
+                    "proxy_address": "45.10.1.1:9000:u:p",
+                    "username": "readyuser",
+                }]
+
+            def update_task_last_step_by_row_key(self, row_key, last_step):
+                self.steps.append((row_key, last_step))
+                return 1
+
+        requested = []
+
+        def fake_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+            requested.append((row_key, max_clicks, priority_patterns))
+            return True
+
+        with mock.patch.object(nyxify_runner, "_queue_snapboard_rotation_request", side_effect=fake_request):
+            count = nyxify_runner._prefetch_priority_proxies_for_pending_rows(
+                FakeStore(),
+                ["23"],
+                max_rows=3,
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(requested, [("snapboard:10", 3, ["23"])])
+
+    def test_prefetch_marks_blocked_pending_row_and_requests_rotation(self):
+        class FakeStore:
+            def get_pending_tasks(self):
+                return [{
+                    "id": 10,
+                    "row_key": "snapboard:10",
+                    "proxy_address": "45.10.1.1:9000:u:p",
+                    "username": "readyuser",
+                }]
+
+            def update_task_last_step_by_row_key(self, row_key, last_step):
+                self.last_step = (row_key, last_step)
+                return 1
+
+        requested = []
+
+        def fake_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+            requested.append((row_key, max_clicks, priority_patterns, blocked_patterns))
+            return True
+
+        store = FakeStore()
+        with mock.patch.object(nyxify_runner, "_queue_snapboard_rotation_request", side_effect=fake_request):
+            count = nyxify_runner._prefetch_proxy_prep_for_pending_rows(
+                store,
+                priority_patterns=[],
+                blocked_patterns=["45.10"],
+                max_rows=3,
+            )
+
+        self.assertEqual(count, 1)
+        self.assertEqual(store.last_step, ("snapboard:10", "refreshing_blocked_proxy"))
+        self.assertEqual(requested, [("snapboard:10", 3, None, ["45.10"])])
+
+    def test_proxy_rotation_request_does_not_requeue_while_same_row_is_in_flight(self):
+        store = _ProxyRotateStore()
+
+        store.request("snapboard:10", max_clicks=3, priority_patterns=["23"])
+        first = store.pop_pending()
+        store.request("snapboard:10", max_clicks=3, priority_patterns=["23"])
+
+        self.assertEqual(first["row_key"], "snapboard:10")
+        self.assertIsNone(store.pop_pending())
 
     async def test_email_terminal_bridge_error_returns_after_first_status_result(self):
         clock = FakeClock()

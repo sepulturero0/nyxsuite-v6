@@ -39,6 +39,16 @@ def _normalize_email(email):
     return normalized if _is_valid_email(normalized) else ""
 
 
+def _normalize_proxy_priority_patterns(priority_patterns):
+    if isinstance(priority_patterns, str):
+        raw_items = priority_patterns.splitlines()
+    elif isinstance(priority_patterns, (list, tuple)):
+        raw_items = priority_patterns
+    else:
+        raw_items = []
+    return [str(item or "").strip() for item in raw_items if str(item or "").strip()]
+
+
 def _task_waiting_step(username="", full_auto_mode_enabled=False):
     missing = []
     if not _normalize_text(username):
@@ -238,24 +248,35 @@ class NyxifyTaskStore:
             ).fetchall()
         return [self._row_to_dict(row) for row in rows]
 
-    def claim_pending_tasks(self, limit=1):
+    def claim_pending_tasks(self, limit=1, proxy_priority_patterns=None):
         safe_limit = max(1, int(limit or 1))
+        priority_patterns = _normalize_proxy_priority_patterns(proxy_priority_patterns)
         now = utc_now_iso()
+        priority_clause = ""
+        priority_values = []
+        if priority_patterns:
+            like_clauses = []
+            for pattern in priority_patterns:
+                proxy_host = "CASE WHEN instr(LOWER(TRIM(COALESCE(NULLIF(proxy_address, ''), ip_address, ''))), ':') > 0 THEN substr(LOWER(TRIM(COALESCE(NULLIF(proxy_address, ''), ip_address, ''))), 1, instr(LOWER(TRIM(COALESCE(NULLIF(proxy_address, ''), ip_address, ''))), ':') - 1) ELSE LOWER(TRIM(COALESCE(NULLIF(proxy_address, ''), ip_address, ''))) END"
+                like_clauses.append(f"({proxy_host} = LOWER(?) OR {proxy_host} LIKE LOWER(?))")
+                priority_values.extend([pattern, f"{pattern}.%"])
+            priority_clause = " AND (" + " OR ".join(like_clauses) + ")"
 
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, row_key, model, ip_address, proxy_address, username, email, password, adspower_id, adspower_profile_id, adspower_name,
                        adspower_group, tags_json, status, last_step, error, otp_request_status, otp_code, source, created_at, updated_at
                 FROM tasks
                 WHERE status = 'PENDING'
                   AND TRIM(COALESCE(username, '')) <> ''
                   AND LOWER(TRIM(COALESCE(username, ''))) NOT LIKE 'temp%'
+                  {priority_clause}
                 ORDER BY created_at ASC, id ASC
                 LIMIT ?
                 """,
-                (safe_limit,)
+                (*priority_values, safe_limit)
             ).fetchall()
 
             if not rows:

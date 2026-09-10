@@ -38,5 +38,25 @@ class IsProxyBannedTests(unittest.TestCase):
         )
 
 
+class ProxyPriorityTests(unittest.TestCase):
+    def test_priority_matches_first_octet_prefix(self):
+        self.assertTrue(nyxify_runner._is_proxy_priority_match("23.10.1.5:9000:user:pass", ["23"]))
+
+    def test_priority_matches_dotted_prefix(self):
+        self.assertTrue(nyxify_runner._is_proxy_priority_match("23.54.8.9:9000:user:pass", ["23.54"]))
+
+    def test_priority_does_not_match_later_digits(self):
+        self.assertFalse(nyxify_runner._is_proxy_priority_match("123.54.8.9:9000:user:pass", ["23.54"]))
+
+    def test_single_octet_priority_does_not_match_longer_octet(self):
+        self.assertFalse(nyxify_runner._is_proxy_priority_match("95.134.176.130:49108:u:p", ["9"]))
+
+    def test_priority_accepts_any_pattern(self):
+        self.assertTrue(nyxify_runner._is_proxy_priority_match("130.24.5.7:8080", ["23", "130.24"]))
+
+    def test_blank_priority_patterns_are_ignored(self):
+        self.assertFalse(nyxify_runner._is_proxy_priority_match("23.10.1.5:9000", ["", "   "]))
+
+
 if __name__ == "__main__":
     unittest.main()

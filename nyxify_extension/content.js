@@ -436,6 +436,19 @@
     debounceTimer = window.setTimeout(sendRows, ROW_SCAN_DEBOUNCE_MS);
   }
 
+  function queueScanFromInteraction(event) {
+    var target = event && event.target;
+    while (target && target !== document) {
+      if (buttonMatchesRotateIntent(target)) {
+        // Get New Proxy causes its own asynchronous row mutations. Scanning
+        // the pre-request snapshot here starts a competing rotation.
+        return;
+      }
+      target = target.parentElement;
+    }
+    queueScan();
+  }
+
   function reattachScanObserver() {
     if (typeof MutationObserver === "undefined") {
       return;
@@ -1828,6 +1841,36 @@
     return readValueFromAliases(row, headerMap, ["proxy", "proxy address", "ip address", "ip"]);
   }
 
+  function normalizeProxyPriorityPatterns(priorityPatterns) {
+    var rawItems = Array.isArray(priorityPatterns)
+      ? priorityPatterns
+      : String(priorityPatterns || "").split(/\r?\n/);
+    return rawItems.map(function (item) {
+      return normalizeText(item).toLowerCase();
+    }).filter(Boolean);
+  }
+
+  function proxyMatchesPriority(proxyValue, priorityPatterns) {
+    var normalizedProxy = normalizeText(proxyValue).toLowerCase();
+    var patterns = normalizeProxyPriorityPatterns(priorityPatterns);
+    if (!normalizedProxy || !patterns.length) return true;
+    var proxyHost = normalizedProxy.split(":", 1)[0];
+    return patterns.some(function (pattern) {
+      return proxyHost === pattern || proxyHost.indexOf(pattern + ".") === 0;
+    });
+  }
+
+  function proxyMatchesBlockedPattern(proxyValue, blockedPatterns) {
+    var normalizedProxy = normalizeText(proxyValue).toLowerCase();
+    if (!normalizedProxy) return false;
+    var proxyHost = normalizedProxy.split(":")[0];
+    return normalizeProxyPriorityPatterns(blockedPatterns).some(function (pattern) {
+      return proxyHost.indexOf(pattern) === 0
+        || normalizedProxy.indexOf(pattern) === 0
+        || normalizedProxy.indexOf(pattern) >= 0;
+    });
+  }
+
   async function pollPendingProxyRotation() {
     if (proxyRotatePollInFlight) return;
     proxyRotatePollInFlight = true;
@@ -1843,7 +1886,13 @@
       });
       var payload = await response.json();
       if (!response.ok || !payload.ok || !payload.row_key) return;
-      if (!payload.force && config.proxyBlockerEnabled === false && config.proxyCheckerEnabled === false) return;
+      var priorityPatterns = normalizeProxyPriorityPatterns(payload.priority_patterns || []);
+      if (
+        !payload.force
+        && config.proxyBlockerEnabled === false
+        && config.proxyCheckerEnabled === false
+        && !priorityPatterns.length
+      ) return;
 
       var rowKey = normalizeText(payload.row_key);
       var rowId = extractRowId(rowKey);
@@ -1857,7 +1906,13 @@
       var maxClicks = parseInt(payload.max_clicks, 10);
       if (!(maxClicks >= 1)) maxClicks = 3;
 
-      var result = await rotateProxyUntilChanged(rowId, PROXY_ROTATE_WAIT_MS, maxClicks);
+      var result = await rotateProxyUntilChanged(
+        rowId,
+        PROXY_ROTATE_WAIT_MS,
+        maxClicks,
+        priorityPatterns,
+        payload.blocked_patterns || []
+      );
 
       headers["Content-Type"] = "application/json";
       if (result && result.ok && result.proxy) {
@@ -2290,9 +2345,16 @@
     };
   }
 
-  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks) {
+  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns) {
     var oldProxy = readProxyFromRow(rowId);
     var attempt = 0;
+    var patterns = normalizeProxyPriorityPatterns(priorityPatterns);
+    var blocked = normalizeProxyPriorityPatterns(blockedPatterns);
+    var initialPriorityOk = !patterns.length || proxyMatchesPriority(oldProxy, patterns);
+    var initialBlockerOk = !blocked.length || !proxyMatchesBlockedPattern(oldProxy, blocked);
+    if (oldProxy && initialPriorityOk && initialBlockerOk) {
+      return { ok: true, proxy: oldProxy };
+    }
     while (attempt < maxClicks) {
       attempt += 1;
       var clicked = clickRotateButton(rowId);
@@ -2305,9 +2367,20 @@
       }
       var newProxy = await waitForProxyChange(rowId, oldProxy, timeoutMs);
       if (newProxy && newProxy !== oldProxy) {
-        return { ok: true, proxy: newProxy };
+        var priorityOk = !patterns.length || proxyMatchesPriority(newProxy, patterns);
+        var blockerOk = !blocked.length || !proxyMatchesBlockedPattern(newProxy, blocked);
+        if (priorityOk && blockerOk) {
+          return { ok: true, proxy: newProxy };
+        }
+        oldProxy = newProxy;
       }
       await sleep(600);
+    }
+    if (patterns.length) {
+      return { ok: false, error: "Proxy did not match priority after rotation." };
+    }
+    if (blocked.length) {
+      return { ok: false, error: "Proxy still matched blocked pattern after rotation." };
     }
     return { ok: false, error: "Proxy did not change after rotation." };
   }
@@ -2848,7 +2921,13 @@
         var maxClicks = Number.isFinite(requestedMaxClicks) && requestedMaxClicks > 0
           ? requestedMaxClicks
           : PROXY_ROTATE_CLICK_ATTEMPTS;
-        var proxyResult = await rotateProxyUntilChanged(rowId, PROXY_ROTATE_WAIT_MS, maxClicks);
+        var proxyResult = await rotateProxyUntilChanged(
+          rowId,
+          PROXY_ROTATE_WAIT_MS,
+          maxClicks,
+          message.priority_patterns || [],
+          message.blocked_patterns || []
+        );
         if (!proxyResult.ok) {
           sendResponse({ ok: false, error: proxyResult.error });
           return;
@@ -2865,7 +2944,7 @@
 
   document.addEventListener("input", queueScan, true);
   document.addEventListener("change", queueScan, true);
-  document.addEventListener("click", queueScan, true);
+  document.addEventListener("click", queueScanFromInteraction, true);
   chrome.storage.onChanged.addListener(function (changes, areaName) {
     if (areaName !== "sync" || !changes[CONFIG_KEY]) {
       return;

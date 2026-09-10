@@ -69,6 +69,8 @@ DEFAULTS = {
     "blocked_proxies": [],
     "proxy_blocker_enabled": True,
     "proxy_checker_enabled": True,
+    "proxy_priority_enabled": False,
+    "proxy_priority_patterns": [],
     "push_adspower_id_enabled": True,
     "full_auto_mode_enabled": False,
     "continuous_mode_enabled": False,
@@ -193,6 +195,11 @@ def load_nyxify_config():
         "blocked_proxies": _safe_proxy_patterns(raw.get("blocked_proxies") or raw.get("banned_proxies")),
         "proxy_blocker_enabled": _safe_bool(raw.get("proxy_blocker_enabled"), DEFAULTS["proxy_blocker_enabled"]),
         "proxy_checker_enabled": _safe_bool(raw.get("proxy_checker_enabled"), DEFAULTS["proxy_checker_enabled"]),
+        "proxy_priority_enabled": _safe_bool(
+            raw.get("proxy_priority_enabled"),
+            DEFAULTS["proxy_priority_enabled"],
+        ),
+        "proxy_priority_patterns": _safe_proxy_patterns(raw.get("proxy_priority_patterns")),
         "push_adspower_id_enabled": _safe_bool(
             raw.get("push_adspower_id_enabled"),
             DEFAULTS["push_adspower_id_enabled"],
@@ -280,6 +287,15 @@ def save_nyxify_config(updates):
         "proxy_checker_enabled": _safe_bool(
             updates.get("proxy_checker_enabled"),
             current["proxy_checker_enabled"],
+        ),
+        "proxy_priority_enabled": _safe_bool(
+            updates.get("proxy_priority_enabled"),
+            current["proxy_priority_enabled"],
+        ),
+        "proxy_priority_patterns": (
+            _safe_proxy_patterns(updates.get("proxy_priority_patterns"))
+            if "proxy_priority_patterns" in updates
+            else current["proxy_priority_patterns"]
         ),
         "push_adspower_id_enabled": _safe_bool(
             updates.get("push_adspower_id_enabled"),

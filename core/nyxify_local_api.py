@@ -15,7 +15,7 @@ class _ProxyRotateStore:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._pending = {}   # row_key -> {"dispatched": bool, "created_at": float, "max_clicks": int|None, "force": bool}
+        self._pending = {}   # row_key -> {"dispatched": bool, "created_at": float, "max_clicks": int|None, "force": bool, "priority_patterns": list[str], "blocked_patterns": list[str]}
         self._results = {}   # row_key -> {"proxy": str|None, "error": str|None, "done_at": float}
 
     def _normalize_max_clicks(self, max_clicks):
@@ -27,13 +27,31 @@ class _ProxyRotateStore:
             return None
         return max(1, min(10, parsed))
 
-    def request(self, row_key, max_clicks=None, force=False):
+    def _normalize_priority_patterns(self, priority_patterns):
+        if isinstance(priority_patterns, str):
+            raw_items = priority_patterns.splitlines()
+        elif isinstance(priority_patterns, (list, tuple)):
+            raw_items = priority_patterns
+        else:
+            raw_items = []
+        return [str(item or "").strip() for item in raw_items if str(item or "").strip()]
+
+    def request(self, row_key, max_clicks=None, force=False, priority_patterns=None, blocked_patterns=None):
         with self._lock:
+            existing = self._pending.get(row_key)
+            # A runner tick can observe the same stale proxy while the browser
+            # is still rotating. Do not reset dispatched here, or the bridge
+            # will dispatch another click for the same row before the result
+            # updates the task proxy.
+            if existing and existing.get("dispatched"):
+                return
             self._pending[row_key] = {
                 "dispatched": False,
                 "created_at": time.monotonic(),
                 "max_clicks": self._normalize_max_clicks(max_clicks),
                 "force": bool(force),
+                "priority_patterns": self._normalize_priority_patterns(priority_patterns),
+                "blocked_patterns": self._normalize_priority_patterns(blocked_patterns),
             }
             self._results.pop(row_key, None)
 
@@ -46,6 +64,8 @@ class _ProxyRotateStore:
                         "row_key": key,
                         "max_clicks": val.get("max_clicks"),
                         "force": bool(val.get("force")),
+                        "priority_patterns": list(val.get("priority_patterns") or []),
+                        "blocked_patterns": list(val.get("blocked_patterns") or []),
                     }
             return None
 
@@ -1343,6 +1363,8 @@ class NyxifyLocalApiServer:
                                 "row_key": request.get("row_key"),
                                 "max_clicks": request.get("max_clicks"),
                                 "force": bool(request.get("force")),
+                                "priority_patterns": request.get("priority_patterns") or [],
+                                "blocked_patterns": request.get("blocked_patterns") or [],
                             },
                         )
                     else:
@@ -1518,10 +1540,17 @@ class NyxifyLocalApiServer:
                 if self.path == "/proxy/rotate_request":
                     row_key = str(payload.get("row_key", "")).strip()
                     max_clicks = payload.get("max_clicks")
+                    priority_patterns = payload.get("priority_patterns")
+                    blocked_patterns = payload.get("blocked_patterns")
                     if not row_key:
                         self._write_json(400, {"ok": False, "error": "Row key is required."})
                         return
-                    outer.proxy_rotate_store.request(row_key, max_clicks=max_clicks)
+                    outer.proxy_rotate_store.request(
+                        row_key,
+                        max_clicks=max_clicks,
+                        priority_patterns=priority_patterns,
+                        blocked_patterns=blocked_patterns,
+                    )
                     self._write_json(200, {"ok": True, "message": "Proxy rotation requested."})
                     return
 
@@ -1533,6 +1562,15 @@ class NyxifyLocalApiServer:
                         self._write_json(400, {"ok": False, "error": "Row key is required."})
                         return
                     outer.proxy_rotate_store.store_result(row_key, proxy=proxy, error=error)
+                    if proxy:
+                        try:
+                            tasks = outer.store.list_tasks(limit=500)
+                            for task in tasks:
+                                if str(task.get("row_key") or "").strip() == row_key:
+                                    outer.store.update_task_proxy(task.get("id"), proxy)
+                                    break
+                        except Exception:
+                            pass
                     self._write_json(200, {"ok": True, "message": "Proxy rotation result stored."})
                     return
 
@@ -1805,6 +1843,8 @@ class NyxifyLocalApiServer:
                         "adspower_tags_enabled",
                         "proxy_blocker_enabled",
                         "proxy_checker_enabled",
+                        "proxy_priority_enabled",
+                        "proxy_priority_patterns",
                         "push_adspower_id_enabled",
                         "full_auto_mode_enabled",
                         "continuous_mode_enabled",

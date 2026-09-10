@@ -20,6 +20,8 @@ def test_nyxify_defaults_keep_tags_blank_and_disabled():
     # Extension turn-off during account creation is OFF by default now.
     assert config["disable_extensions_enabled"] is False
     assert config["keep_profile_open_after_signup"] is False
+    assert config["proxy_priority_enabled"] is False
+    assert config["proxy_priority_patterns"] == []
 
 
 def test_disable_extensions_flag_round_trips_through_save():
@@ -68,3 +70,20 @@ def test_verification_priority_defaults_to_auto_and_round_trips():
 
             nrc.save_nyxify_config({"verification_priority": "not-a-mode"})
             assert nrc.load_nyxify_config()["verification_priority"] == "phone"
+
+
+def test_proxy_priority_round_trips_enabled_and_patterns():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            nrc.save_nyxify_config({
+                "proxy_priority_enabled": True,
+                "proxy_priority_patterns": "23\n\n23.54\n 130.24 ",
+            })
+            reloaded = nrc.load_nyxify_config()
+
+    assert reloaded["proxy_priority_enabled"] is True
+    assert reloaded["proxy_priority_patterns"] == ["23", "23.54", "130.24"]

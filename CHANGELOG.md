@@ -1,5 +1,29 @@
 # Changelog
 
+## 6.7.2 - Nyxify proxy priority and SnapBoard rotation hardening
+
+### Proxy selection
+- Added optional Proxy Priority configuration with multiple prefixes, including
+  dotted prefixes such as `23.54`; it is disabled by default.
+- Priority matching is IP-octet aware, so priority `9` matches `9.x.x.x` but
+  does not match `95.x.x.x` or `79.x.x.x`.
+- Proxy Priority and Proxy Blocker preparation continue while Nyxify is off,
+  and pending rows are retried automatically without requiring a page click or
+  refresh.
+
+### SnapBoard bridge
+- Prevented duplicate in-flight rotation requests for the same row.
+- SnapBoard `Get New Proxy` clicks no longer trigger a competing detection scan.
+- Stale row snapshots no longer overwrite a valid priority proxy.
+- Rotation returns immediately when the current proxy already satisfies the
+  priority and blocker rules.
+- Dashboard config saves synchronize to the extension while SnapBoard is
+  connected, without requiring a manual reload.
+
+### Verification
+- Added regression coverage for priority matching, config persistence, stale
+  SnapBoard rows, in-flight rotation deduplication, and event-free retries.
+
 ## 6.7.1 - SnapBoard verification wait protection
 
 ### SnapBoard verification

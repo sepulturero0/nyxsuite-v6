@@ -7,6 +7,19 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.2
+
+- Added optional multi-prefix Proxy Priority selection, including dotted IP
+  prefixes, with octet-aware matching.
+- Proxy Priority and Proxy Blocker rotation now continue for pending SnapBoard
+  rows while Nyxify is off, with automatic retries that do not require page
+  interaction.
+- Hardened SnapBoard rotation against duplicate requests, stale row snapshots,
+  manual `Get New Proxy` click races, and already-valid proxies.
+- Dashboard Nyxify config saves now synchronize to the extension while the
+  SnapBoard connection is active.
+- Added focused regression coverage for proxy selection and bridge retry paths.
+
 ## Latest Release Notes
 
 ### NyxSuite v6.7.1
