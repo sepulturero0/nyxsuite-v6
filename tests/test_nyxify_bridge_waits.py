@@ -241,6 +241,25 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(first["row_key"], "snapboard:10")
         self.assertIsNone(store.pop_pending())
 
+    def test_queue_proxy_rotation_request_forwards_force_and_proxy_type(self):
+        payloads = []
+
+        def fake_post(_path, payload, **_kwargs):
+            payloads.append(dict(payload))
+            return {}
+
+        with mock.patch.object(nyxify_runner, "_post_local_api_response", side_effect=fake_post):
+            queued = nyxify_runner._queue_snapboard_rotation_request(
+                "snapboard:force",
+                max_clicks=3,
+                force=True,
+                proxy_type="socks5",
+            )
+
+        self.assertTrue(queued)
+        self.assertEqual(payloads[0]["force"], True)
+        self.assertEqual(payloads[0]["proxy_type"], "socks5")
+
     async def test_email_terminal_bridge_error_returns_after_first_status_result(self):
         clock = FakeClock()
         status_calls = []

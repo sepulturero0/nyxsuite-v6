@@ -1543,6 +1543,7 @@ class NyxifyLocalApiServer:
                 if self.path == "/proxy/rotate_request":
                     row_key = str(payload.get("row_key", "")).strip()
                     max_clicks = payload.get("max_clicks")
+                    force = bool(payload.get("force"))
                     priority_patterns = payload.get("priority_patterns")
                     blocked_patterns = payload.get("blocked_patterns")
                     proxy_type = payload.get("proxy_type", "off")
@@ -1552,6 +1553,7 @@ class NyxifyLocalApiServer:
                     outer.proxy_rotate_store.request(
                         row_key,
                         max_clicks=max_clicks,
+                        force=force,
                         priority_patterns=priority_patterns,
                         blocked_patterns=blocked_patterns,
                         proxy_type=proxy_type,

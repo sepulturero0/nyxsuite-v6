@@ -245,7 +245,7 @@ def test_proxy_rotation_returns_without_click_when_current_proxy_is_already_vali
     content_js = (ROOT / "nyxify_extension" / "content.js").read_text()
 
     assert "var initialPriorityOk = !patterns.length || proxyMatchesPriority(oldProxy, patterns);" in content_js
-    assert "if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType))" in content_js
+    assert "if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType) && !force)" in content_js
 
 
 def test_extension_refreshes_runner_config_while_snapboard_bridge_is_connected():

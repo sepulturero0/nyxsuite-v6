@@ -31,6 +31,9 @@ class FakeStore:
     def update_task_proxy(self, task_id, proxy_address):
         self.proxy_updates.append((task_id, proxy_address))
 
+    def clear_otp_request(self, _row_key):
+        pass
+
 
 class FakeAdsPower:
     def __init__(self, delete_error=None):
@@ -185,6 +188,7 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(adspower.deleted, ["k1del"])
         self.assertEqual(rotation_calls[0].get("priority_patterns"), ["23.54"])
         self.assertEqual(rotation_calls[0].get("blocked_patterns"), ["45.10"])
+        self.assertEqual(rotation_calls[0].get("force"), True)
 
     def test_cleanup_requeues_to_normal_retry_when_proxy_rotation_fails(self):
         # A failed SnapBoard rotation must not allow the replacement account to
@@ -212,6 +216,32 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(store.state["adspower_profile_id"], "")
         self.assertEqual(adspower.deleted, ["k1del2"])
 
+    def test_cleanup_compares_rotation_against_actual_failed_proxy(self):
+        store = FakeStore()
+        adspower = FakeAdsPower()
+
+        async def rotation_returns_actual_failed_proxy(*_args, **_kwargs):
+            return "2.2.2.2:2:u:p"
+
+        with mock.patch.object(nyxify_runner, "_request_snapboard_adspower_id_update", return_value=False), \
+             mock.patch.object(nyxify_runner, "_request_snapboard_rotation", rotation_returns_actual_failed_proxy):
+            asyncio.run(
+                nyxify_runner._cleanup_failed_created_profile(
+                    1116,
+                    {"row_key": "row-actual", "proxy_address": "1.1.1.1:1:u:p"},
+                    store,
+                    adspower,
+                    {"profile_id": "k1del3", "name": "Snapchat: test"},
+                    "account_creation_blocked",
+                    "account_creation_blocked",
+                    failed_proxy_value="2.2.2.2:2:u:p",
+                )
+            )
+
+        self.assertEqual(store.state["status"], "PENDING")
+        self.assertEqual(store.state["last_step"], "retry_pending_after_account_creation_blocked")
+        self.assertEqual(store.proxy_updates, [])
+
     def test_forced_proxy_rotation_rejects_same_proxy_before_create(self):
         store = FakeStore()
         store.state["status"] = "RUNNING"
@@ -237,6 +267,64 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(store.state["status"], "PENDING")
         self.assertEqual(store.state["last_step"], nyxify_runner.WAITING_FOR_FORCED_PROXY_ROTATION_STEP)
         self.assertEqual(store.proxy_updates, [])
+
+    def test_forced_proxy_rotation_requests_force_and_proxy_type(self):
+        store = FakeStore()
+        calls = []
+
+        async def rotation_empty(*_args, **kwargs):
+            calls.append(kwargs)
+            return ""
+
+        with mock.patch.object(nyxify_runner, "_request_snapboard_rotation", rotation_empty), \
+             mock.patch.object(nyxify_runner, "load_nyxify_config", return_value={
+                 "proxy_type": "http",
+                 "proxy_blocker_enabled": False,
+             }):
+            ok, proxy = asyncio.run(
+                nyxify_runner._force_proxy_rotation_before_create(
+                    task_id=2112,
+                    task_row_key="row-force-type",
+                    store=store,
+                    proxy_value="1.2.3.4:1:u:p",
+                    blocked_proxies=[],
+                    max_rotation_attempts=1,
+                )
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(proxy, "1.2.3.4:1:u:p")
+        self.assertEqual(calls[0].get("force"), True)
+        self.assertEqual(calls[0].get("proxy_type"), "http")
+
+    def test_retry_pending_task_forces_proxy_rotation_before_create(self):
+        store = FakeStore()
+        adspower = FakeAdsPower()
+
+        async def forced_rotation_blocks_create(*_args, **_kwargs):
+            return False, "1.2.3.4:1:u:p"
+
+        with mock.patch.object(nyxify_runner, "_cleanup_stale_pending_profile", mock.AsyncMock(return_value=False)), \
+             mock.patch.object(nyxify_runner, "_force_proxy_rotation_before_create", mock.AsyncMock(side_effect=forced_rotation_blocks_create)) as forced, \
+             mock.patch.object(nyxify_runner, "_rotate_proxy_until_usable", mock.AsyncMock(side_effect=AssertionError("normal rotation must wait"))), \
+             mock.patch.object(nyxify_runner, "load_nyxify_config", return_value={}):
+            asyncio.run(
+                nyxify_runner.process_task(
+                    {
+                        "id": 3111,
+                        "row_key": "row-retry",
+                        "username": "readyuser",
+                        "model": "Snapchat",
+                        "proxy_address": "1.2.3.4:1:u:p",
+                        "last_step": "retry_pending_after_account_creation_blocked",
+                    },
+                    store,
+                    adspower,
+                )
+            )
+
+        forced.assert_awaited_once()
+        self.assertEqual(adspower.deleted, [])
 
     def test_cleanup_does_not_crash_without_row_key(self):
         # Latent UnboundLocalError guard: refreshed_proxy must be defined even when

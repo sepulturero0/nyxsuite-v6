@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.6 - Forced proxy rotation after failed account creation
+
+- Failed account/profile cleanup now forces an actual SnapBoard proxy rotation
+  regardless of Proxy Blocker, Proxy Priority, Proxy Checker, or Proxy Type
+  toggle state.
+- Replacement account creation now waits for a different usable proxy after a
+  failed cleanup rotation, preventing same-proxy retries after Snapchat account
+  creation blockers.
+- Forced rotation now preserves proxy type, priority, and blocker constraints
+  across the runner, local API, extension background bridge, and SnapBoard
+  content automation.
+- Cleanup compares the rotated proxy against the actual proxy used by the
+  failed AdsPower profile instead of a stale task snapshot.
+- Added regression coverage for forced rotation payloads, filter-off rotation,
+  cleanup retry gates, and extension bridge forwarding.
+
 ## 6.7.5 - SnapBoard provider and proxy-type controls
 
 - Added Nyxify SnapBoard email provider lock support for AM, G5, and 5M in

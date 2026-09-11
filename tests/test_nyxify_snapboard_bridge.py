@@ -303,6 +303,20 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('"force": bool(request.get("force"))', api)
         self.assertIn("&& !priorityPatterns.length", content)
 
+    def test_forced_runner_proxy_rotation_reaches_snapboard_even_without_filters(self):
+        api = (ROOT / "core" / "nyxify_local_api.py").read_text(encoding="utf-8")
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn('force = bool(payload.get("force"))', api)
+        self.assertIn("force=force", api)
+        self.assertIn("proxy_type: proxyPayload.proxy_type", background)
+        self.assertIn(
+            "function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns, proxyType, force)",
+            content,
+        )
+        self.assertIn("&& !force", content)
+
     def test_popup_remove_banned_clears_all_adspower_ids_before_proxy_rotation(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         api = (ROOT / "core" / "nyxify_local_api.py").read_text(encoding="utf-8")

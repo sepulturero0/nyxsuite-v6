@@ -537,10 +537,19 @@ def _build_waiting_step(missing_fields):
     return "waiting_for_" + "_and_".join(missing_fields)
 
 
-def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
+def _queue_snapboard_rotation_request(
+    row_key,
+    max_clicks=None,
+    priority_patterns=None,
+    blocked_patterns=None,
+    proxy_type="off",
+    force=False,
+):
     payload = {"row_key": row_key}
     if max_clicks is not None:
         payload["max_clicks"] = max_clicks
+    if force:
+        payload["force"] = True
     normalized_priority_patterns = _normalize_proxy_priority_patterns(priority_patterns)
     if normalized_priority_patterns:
         payload["priority_patterns"] = normalized_priority_patterns
@@ -558,7 +567,15 @@ def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_pattern
         return False
 
 
-def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
+def _request_snapboard_rotation_sync(
+    row_key,
+    timeout_seconds=40,
+    max_clicks=None,
+    priority_patterns=None,
+    blocked_patterns=None,
+    proxy_type="off",
+    force=False,
+):
     """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
     if not _queue_snapboard_rotation_request(
         row_key,
@@ -566,6 +583,7 @@ def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=Non
         priority_patterns=priority_patterns,
         blocked_patterns=blocked_patterns,
         proxy_type=proxy_type,
+        force=force,
     ):
         return None
 
@@ -591,7 +609,15 @@ def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=Non
     return None
 
 
-async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
+async def _request_snapboard_rotation(
+    row_key,
+    timeout_seconds=40,
+    max_clicks=None,
+    priority_patterns=None,
+    blocked_patterns=None,
+    proxy_type="off",
+    force=False,
+):
     return await asyncio.to_thread(
         _request_snapboard_rotation_sync,
         row_key,
@@ -600,6 +626,7 @@ async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=No
         priority_patterns,
         blocked_patterns,
         proxy_type,
+        force,
     )
 
 
@@ -845,12 +872,26 @@ async def _wait_for_snapboard_update(path, row_key, label, timeout_seconds=30):
     return False
 
 
-async def _cleanup_failed_created_profile(task_id, task, store, adspower, created, failure_last_step, cleanup_reason):
+async def _cleanup_failed_created_profile(
+    task_id,
+    task,
+    store,
+    adspower,
+    created,
+    failure_last_step,
+    cleanup_reason,
+    failed_proxy_value=None,
+):
     profile_id = str((created or {}).get("profile_id") or "").strip()
     row_key = str((task or {}).get("row_key") or "").strip()
     normalized_reason = str(cleanup_reason or failure_last_step or "failed signup").strip()
     normalized_failure_step = str(failure_last_step or "profile_creation_failed").strip()
-    old_proxy = str((task or {}).get("proxy_address") or (task or {}).get("ip_address") or "").strip()
+    old_proxy = str(
+        failed_proxy_value
+        or (task or {}).get("proxy_address")
+        or (task or {}).get("ip_address")
+        or ""
+    ).strip()
     delete_confirmed = not profile_id
     cleanup_result = None
 
@@ -913,6 +954,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
             priority_patterns=priority_patterns or None,
             blocked_patterns=blocked_patterns or None,
             proxy_type=proxy_type,
+            force=True,
         ) or ""
         if refreshed_proxy and refreshed_proxy != old_proxy:
             store.update_task_proxy(task_id, refreshed_proxy)
@@ -1383,6 +1425,7 @@ async def _force_proxy_rotation_before_create(
 
     runtime_config = load_nyxify_config()
     priority_patterns = _priority_patterns_from_config(runtime_config)
+    proxy_type = str(runtime_config.get("proxy_type") or "off").strip().lower()
     blocked_patterns = (
         runtime_config.get("blocked_proxies", blocked_proxies)
         if runtime_config.get("proxy_blocker_enabled", True)
@@ -1397,6 +1440,8 @@ async def _force_proxy_rotation_before_create(
             max_clicks=3,
             priority_patterns=priority_patterns or None,
             blocked_patterns=blocked_patterns or None,
+            proxy_type=proxy_type,
+            force=True,
         ) or ""
         normalized_new_proxy = str(new_proxy or "").strip()
         if (
@@ -1597,6 +1642,18 @@ async def process_task(task, store, adspower):
         if stale_cleanup_state == "failed":
             return
         if stale_cleanup_state == "cleaned":
+            task_adspower_id = ""
+
+        if _task_requires_forced_proxy_rotation(task):
+            forced_ok, proxy_value = await _force_proxy_rotation_before_create(
+                task_id=task_id,
+                task_row_key=task_row_key,
+                store=store,
+                proxy_value=proxy_value,
+                blocked_proxies=blocked_proxies if proxy_blocker_enabled else [],
+            )
+            if not forced_ok:
+                return
             task_adspower_id = ""
 
         async def email_fetcher(force_new=False):
@@ -2256,6 +2313,7 @@ async def process_task(task, store, adspower):
                 created,
                 failure_last_step,
                 error_message,
+                failed_proxy_value=proxy_value,
             )
             logger.info(
                 f"Task {task_id}: cleanup+retry after post-creation failure ({failure_last_step}): {error_message[:120]}"

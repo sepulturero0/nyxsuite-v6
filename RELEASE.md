@@ -7,6 +7,24 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.6
+
+- Account/profile failure cleanup now forces a real SnapBoard proxy rotation
+  even when Proxy Blocker, Proxy Priority, Proxy Checker, and Proxy Type filters
+  are all off.
+- Forced replacement-account rotation now still honors enabled Proxy Blocker,
+  Proxy Priority, and Proxy Type constraints before creating another AdsPower
+  profile.
+- Retry rows marked after failed account creation now run the forced rotation
+  gate before any replacement AdsPower profile is created.
+- The runner, local API, extension background bridge, and SnapBoard content
+  script now preserve the `force` flag and proxy type through the rotation
+  request path.
+- Cleanup compares rotation results against the actual failed-profile proxy,
+  not a stale task snapshot, so same-proxy results are rejected correctly.
+- Added focused regression coverage for forced rotation after failed cleanup,
+  filter-off rotation, bridge payload forwarding, and version sync.
+
 ## NyxSuite v6.7.5
 
 - Nyxify SnapBoard provider lock now supports AM, G5, and 5M across the

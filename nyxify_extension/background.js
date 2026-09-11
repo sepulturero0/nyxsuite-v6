@@ -2296,6 +2296,7 @@ async function processBridgeActionsOnce() {
         force: !!proxyPayload.force,
         priority_patterns: proxyPayload.priority_patterns || [],
         blocked_patterns: proxyPayload.blocked_patterns || [],
+        proxy_type: proxyPayload.proxy_type,
       });
       await callLocalNyxify("POST", "/proxy/rotate_result", {
         row_key: proxyPayload.row_key,

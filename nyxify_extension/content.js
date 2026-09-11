@@ -2126,7 +2126,8 @@
         maxClicks,
         priorityPatterns,
         payload.blocked_patterns || [],
-        proxyType
+        proxyType,
+        !!payload.force
       );
 
       headers["Content-Type"] = "application/json";
@@ -2620,7 +2621,7 @@
     };
   }
 
-  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns, proxyType) {
+  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns, proxyType, force) {
     var oldProxy = readProxyFromRow(rowId);
     var attempt = 0;
     var patterns = normalizeProxyPriorityPatterns(priorityPatterns);
@@ -2628,7 +2629,7 @@
     var desiredType = normalizeProxyType(proxyType);
     var initialPriorityOk = !patterns.length || proxyMatchesPriority(oldProxy, patterns);
     var initialBlockerOk = !blocked.length || !proxyMatchesBlockedPattern(oldProxy, blocked);
-    if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType)) {
+    if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType) && !force) {
       return { ok: true, proxy: formatProxyForType(oldProxy, desiredType) };
     }
     while (attempt < maxClicks) {
@@ -3211,7 +3212,8 @@
           maxClicks,
           message.priority_patterns || [],
           message.blocked_patterns || [],
-          message.proxy_type
+          message.proxy_type,
+          !!message.force
         );
         if (!proxyResult.ok) {
           sendResponse({ ok: false, error: proxyResult.error });
