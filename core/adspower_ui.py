@@ -541,6 +541,16 @@ class AdsPowerUIController:
         self._prev_fg = getattr(self, "_prev_fg", None)
         return self._win
 
+    def _refresh_window(self) -> bool:
+        backend = getattr(self, "_backend", None)
+        refresh = getattr(backend, "refresh_window", None)
+        if callable(refresh):
+            try:
+                return bool(refresh())
+            except Exception as exc:
+                logger.debug(f"AdsPower window refresh failed: {exc}")
+        return False
+
     def _refresh_dashboard(self):
         """Recover an unresponsive AdsPower dashboard by triggering Window >
         Refresh / the OS hard-refresh shortcut, then reconnecting. Returns True
@@ -3073,6 +3083,10 @@ class AdsPowerUIController:
         if rect is None:
             for attempt in range(2):
                 if attempt:
+                    self._refresh_window()
+                    self._connect()
+                    if not self._ensure_row_visible(profile_id):
+                        self._recover_presearch_row_for_rename(profile_id)
                     if not self._open_rename_dialog(profile_id):
                         raise AdsPowerUIError(
                             f"Could not reopen the rename dialog for {profile_id} after a bad rename.")

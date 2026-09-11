@@ -36,6 +36,8 @@ const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;
 const PROXY_PREP_ROTATE_CLICK_ATTEMPTS = 10;
 const REMOTE_CONFIG_SYNC_INTERVAL_MS = 2000;
 const PROXY_PREP_RETRY_INTERVAL_MS = 5000;
+const BRIDGE_RECOVERY_COOLDOWN_MS = 20000;
+const BRIDGE_WAITING_LOG_COOLDOWN_MS = 30000;
 let localConfigCache = null;
 let localConfigCacheAt = 0;
 let remoteConfigSyncAt = 0;
@@ -1185,6 +1187,7 @@ chrome.runtime.onInstalled.addListener(async () => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
   await maybeFetchBridgeToken().catch(() => null);
   await updateBadge();
+  ensureBridgeLoop().catch(() => null);
 });
 
 chrome.runtime.onStartup.addListener(async () => {
@@ -1192,6 +1195,7 @@ chrome.runtime.onStartup.addListener(async () => {
   await maybeFetchBridgeToken().catch(() => null);
   await hydrateScrapeRunFromStorage().catch(() => null);
   await maybeProcessScrapeQueue().catch(() => null);
+  ensureBridgeLoop().catch(() => null);
 });
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
@@ -1205,6 +1209,7 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
     // single stuck tab can't wedge the run, then keep the queue moving.
     await settleOverdueScrapeWorkers().catch(() => null);
     await maybeProcessScrapeQueue().catch(() => null);
+    ensureBridgeLoop().catch(() => null);
   }
 });
 
@@ -1684,13 +1689,12 @@ async function findSnapboardTabId() {
   }
 }
 
-function sendMessageToSnapboardTab(message) {
+async function sendMessageToSnapboardTab(message) {
+  const tabId = getAvailableSnapboardTabId() ?? await findSnapboardTabId();
+  if (tabId == null) {
+    return { ok: false, error: "Waiting for SnapBoard tab." };
+  }
   return new Promise((resolve) => {
-    const tabId = getAvailableSnapboardTabId();
-    if (tabId == null) {
-      resolve({ ok: false, error: "No SnapBoard tab bridge connected." });
-      return;
-    }
     chrome.tabs.sendMessage(tabId, message, (response) => {
       if (chrome.runtime.lastError) {
         resolve({ ok: false, error: chrome.runtime.lastError.message || "SnapBoard messaging failed." });
@@ -1851,6 +1855,41 @@ async function refreshSnapboardTab(options) {
     await delay(300);
   }
   return false;
+}
+
+let lastBridgeRecoveryAt = 0;
+let lastBridgeWaitingLogAt = 0;
+
+async function ensureSnapboardBridgeConnected() {
+  if (snapboardPorts.size) {
+    return true;
+  }
+
+  const tabId = await findSnapboardTabId();
+  if (tabId == null) {
+    const now = Date.now();
+    if (now - lastBridgeWaitingLogAt >= BRIDGE_WAITING_LOG_COOLDOWN_MS) {
+      lastBridgeWaitingLogAt = now;
+      await appendEventLog("Waiting for SnapBoard tab; bridge actions remain queued.");
+    }
+    return false;
+  }
+
+  const ping = await sendMessageToSnapboardTab({
+    type: "NYXIFY_SNAPBOARD_ACTION",
+    action: "bridge_ping",
+  });
+  if (ping && ping.ok) {
+    return true;
+  }
+
+  const now = Date.now();
+  if (now - lastBridgeRecoveryAt < BRIDGE_RECOVERY_COOLDOWN_MS) {
+    return false;
+  }
+  lastBridgeRecoveryAt = now;
+  const refreshed = await refreshSnapboardTab({ force: true });
+  return !!(refreshed || snapboardPorts.size);
 }
 
 function isTerminalSnapboardFetchResponse(response) {
@@ -2098,7 +2137,7 @@ async function processBridgeActionsOnce() {
     proxyPrepRetryAt = Date.now();
     await prepareStoredProxyRows().catch(() => null);
   }
-  if (!snapboardPorts.size) {
+  if (!await ensureSnapboardBridgeConnected()) {
     return;
   }
 
@@ -2295,9 +2334,12 @@ function ensureBridgeLoop() {
   }
   bridgeLoopPromise = (async () => {
     try {
-      while (snapboardPorts.size) {
+      while (true) {
         await processBridgeActionsOnce();
-        await delay(700);
+        if (await findSnapboardTabId() == null) {
+          break;
+        }
+        await delay(snapboardPorts.size ? 700 : 1500);
       }
     } finally {
       bridgeLoopPromise = null;
@@ -2386,8 +2428,8 @@ async function replaceTempUsernameViaFullAuto(row, reason) {
   if (fullAutoRowsInFlight.has(rowKey)) {
     return { ok: false, skipped: true };
   }
-  if (!snapboardPorts.size) {
-    return { ok: false, error: "No SnapBoard bridge connected." };
+  if (!await ensureSnapboardBridgeConnected()) {
+    return { ok: false, error: "Waiting for SnapBoard tab bridge." };
   }
 
   fullAutoRowsInFlight.add(rowKey);

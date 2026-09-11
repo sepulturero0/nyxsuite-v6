@@ -1,5 +1,13 @@
 # Changelog
 
+## 6.7.3 - Bridge, OTP retry, and platform update repairs
+
+- SnapBoard Check Code / Check SMS uses at most three dispatch attempts at 0, 10, and 20 seconds, stopping immediately when a fresh code appears.
+- SnapBoard bridge recovery can wake an existing tab without requiring the extension popup to be opened first.
+- Failed profile cleanup preserves Proxy Priority and Proxy Blocker filtering during proxy rotation.
+- macOS AdsPower rename recovery rejects stale Accessibility references after an app restart and refreshes before retrying.
+- Windows source installs use the portable launcher for Start Bridge, and updates refresh native messaging registration.
+
 ## 6.7.2 - Nyxify proxy priority and SnapBoard rotation hardening
 
 ### Proxy selection

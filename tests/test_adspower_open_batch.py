@@ -509,6 +509,23 @@ class RenameDialogFallbackTests(unittest.TestCase):
         ])
         self.assertEqual(ctrl._click_ok.call_count, 2)
 
+    def test_rename_refreshes_dashboard_before_final_failure(self):
+        ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
+        ctrl._connect = mock.Mock()
+        ctrl._ensure_row_visible = mock.Mock(return_value=True)
+        ctrl._recover_presearch_row_for_rename = mock.Mock(return_value=False)
+        ctrl._open_rename_dialog = mock.Mock(return_value=True)
+        ctrl._rect = mock.Mock(return_value=None)
+        ctrl._fill_name = mock.Mock()
+        ctrl._click_ok = mock.Mock()
+        ctrl._rename_confirmed_or_absent = mock.Mock(return_value=False)
+        ctrl._refresh_window = mock.Mock(return_value=True)
+
+        with self.assertRaises(AdsPowerUIError):
+            ctrl.rename_profile_by_id("k1target", "Snapchat: fixeduser")
+
+        ctrl._refresh_window.assert_called_once_with()
+
     def test_rename_profile_pastes_inline_name_after_clearing_existing_text(self):
         ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
         name_rect = _Rect(520, 230, 760, 266)

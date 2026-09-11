@@ -216,6 +216,7 @@ class MacOSAdsPowerBackend:
         self._app = None
         self._app_ref = None
         self._window = None
+        self._app_pid = None
         self.window_id = None
         self._attr_cache = {}
         self._foreground_settle_seconds = self._env_float(
@@ -293,7 +294,8 @@ class MacOSAdsPowerBackend:
                 "AdsPower Global is not running. Launch AdsPower and sign in."
             )
         self._app = app
-        self._app_ref = self._as.AXUIElementCreateApplication(app.processIdentifier())
+        self._app_pid = int(app.processIdentifier())
+        self._app_ref = self._as.AXUIElementCreateApplication(self._app_pid)
         self.set_attr(self._app_ref, "AXManualAccessibility", True)
         self.foreground()
         time.sleep(0.2)
@@ -376,6 +378,11 @@ class MacOSAdsPowerBackend:
         if self._window is None or self._app is None or self._app_ref is None:
             return False
         try:
+            stored_pid = getattr(self, "_app_pid", None)
+            if stored_pid is not None:
+                current_pid = int(self._app.processIdentifier())
+                if stored_pid != current_pid:
+                    return False
             if bool(self.attr(self._window, "AXHidden")) or bool(
                 self.attr(self._window, "AXMinimized")
             ):

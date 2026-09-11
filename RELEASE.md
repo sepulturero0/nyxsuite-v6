@@ -7,8 +7,23 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
-## NyxSuite v6.7.2
+## NyxSuite v6.7.3
 
+- SnapBoard Check Code / Check SMS now uses at most three clicks spaced 10
+  seconds apart while waiting for a code, and stops immediately when a code is
+  found.
+- OTP pending requests expose dispatch count and age diagnostics for stalled
+  bridge investigations.
+- Failed profile cleanup retries now pass proxy-priority and blocked-proxy
+  patterns into the rotation request.
+- macOS AdsPower GUI rename invalidates cached Accessibility references after
+  an AdsPower process restart and refreshes the dashboard before a final rename
+  retry.
+- Windows source installs start the bridge through the portable setup launcher,
+  and updates refresh native messaging registration after file replacement.
+- SnapBoard bridge actions can recover an existing tab with a direct ping or
+  one controlled reload, so Full Auto and queue actions do not depend on
+  opening the extension popup first.
 - Added optional multi-prefix Proxy Priority selection, including dotted IP
   prefixes, with octet-aware matching.
 - Proxy Priority and Proxy Blocker rotation now continue for pending SnapBoard

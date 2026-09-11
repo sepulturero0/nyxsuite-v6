@@ -613,6 +613,22 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertLess(bridge_loop.index('"/otp/pending"'), bridge_loop.index("await processSnapboardRefreshRequest();"))
         self.assertLess(bridge_loop.index('"/sms/pending"'), bridge_loop.index("await processSnapboardRefreshRequest();"))
 
+    def test_background_wakes_existing_snapboard_tab_when_bridge_port_is_missing(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function ensureSnapboardBridgeConnected()", background)
+        self.assertIn('action: "bridge_ping"', background)
+        self.assertIn("Waiting for SnapBoard tab", background)
+        self.assertIn("const tabId = await findSnapboardTabId();", background)
+        self.assertIn("await ensureSnapboardBridgeConnected()", background)
+        self.assertIn("while (true)", background[background.index("function ensureBridgeLoop()"):])
+
+    def test_content_answers_snapboard_bridge_ping(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn('message.action === "bridge_ping"', content)
+        self.assertIn('sendResponse({ ok: true, bridge_ready: true })', content)
+
     def test_background_detaches_slow_email_phone_fetches_from_bridge_loop(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(

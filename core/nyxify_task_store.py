@@ -1,5 +1,6 @@
 import json
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +104,8 @@ class NyxifyTaskStore:
                     error TEXT NOT NULL DEFAULT '',
                     otp_request_status TEXT NOT NULL DEFAULT '',
                     otp_code TEXT NOT NULL DEFAULT '',
+                    otp_dispatch_count INTEGER NOT NULL DEFAULT 0,
+                    otp_dispatched_at REAL NOT NULL DEFAULT 0,
                     source TEXT NOT NULL DEFAULT 'nyxify-extension',
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -127,6 +130,14 @@ class NyxifyTaskStore:
                 pass
             try:
                 conn.execute("ALTER TABLE tasks ADD COLUMN otp_code TEXT NOT NULL DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE tasks ADD COLUMN otp_dispatch_count INTEGER NOT NULL DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                conn.execute("ALTER TABLE tasks ADD COLUMN otp_dispatched_at REAL NOT NULL DEFAULT 0")
             except Exception:
                 pass
             try:
@@ -675,6 +686,8 @@ class NyxifyTaskStore:
                     SET email = ?,
                         otp_request_status = 'PENDING',
                         otp_code = '',
+                        otp_dispatch_count = 0,
+                        otp_dispatched_at = 0,
                         updated_at = ?
                     WHERE row_key = ?
                     """,
@@ -686,6 +699,8 @@ class NyxifyTaskStore:
                     UPDATE tasks
                     SET otp_request_status = 'PENDING',
                         otp_code = '',
+                        otp_dispatch_count = 0,
+                        otp_dispatched_at = 0,
                         updated_at = ?
                     WHERE row_key = ?
                     """,
@@ -697,14 +712,43 @@ class NyxifyTaskStore:
         with self._connect() as conn:
             row = conn.execute(
                 """
-                SELECT row_key, email, username, otp_request_status
+                SELECT id, row_key, email, username, otp_request_status,
+                       otp_dispatch_count, otp_dispatched_at, updated_at
                 FROM tasks
                 WHERE otp_request_status = 'PENDING'
                 ORDER BY updated_at ASC, id ASC
                 LIMIT 1
                 """
             ).fetchone()
-        return dict(row) if row else None
+            if not row:
+                return None
+
+            dispatched_at = time.time()
+            conn.execute(
+                """
+                UPDATE tasks
+                SET otp_dispatch_count = COALESCE(otp_dispatch_count, 0) + 1,
+                    otp_dispatched_at = ?
+                WHERE id = ?
+                """,
+                (dispatched_at, row["id"]),
+            )
+
+            payload = dict(row)
+            payload["dispatch_count"] = int(payload.get("otp_dispatch_count") or 0) + 1
+            payload["dispatched_at"] = dispatched_at
+            payload["age_seconds"] = self._otp_age_seconds(payload.get("updated_at"), dispatched_at)
+            payload["dispatched_age_seconds"] = 0.0
+            payload.pop("id", None)
+            return payload
+
+    @staticmethod
+    def _otp_age_seconds(updated_at, now):
+        try:
+            requested_at = datetime.fromisoformat(str(updated_at)).timestamp()
+        except Exception:
+            return 0.0
+        return max(0.0, float(now) - requested_at)
 
     def store_otp_code(self, row_key, code, error=""):
         normalized_row_key = _normalize_text(row_key)

@@ -306,6 +306,20 @@ class MacBackendFocusTests(unittest.TestCase):
 
         self.assertFalse(backend._cached_window_is_usable())
 
+    def test_cached_window_is_not_reused_when_process_identifier_changes(self):
+        from core.adspower_ui_backend_macos import MacOSAdsPowerBackend, Rect
+
+        backend = MacOSAdsPowerBackend.__new__(MacOSAdsPowerBackend)
+        backend._app = mock.Mock()
+        backend._app.processIdentifier.return_value = 111
+        backend._app_ref = object()
+        backend._window = object()
+        backend._app_pid = 222
+        backend.attr = mock.Mock(return_value=False)
+        backend.element_rect = mock.Mock(return_value=Rect(0, 0, 1200, 800))
+
+        self.assertFalse(backend._cached_window_is_usable())
+
 
 if __name__ == "__main__":
     unittest.main()

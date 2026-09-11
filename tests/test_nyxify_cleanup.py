@@ -154,12 +154,24 @@ class NyxifyCleanupTests(unittest.TestCase):
     def test_cleanup_requeues_pending_when_proxy_rotation_succeeds(self):
         store = FakeStore()
         adspower = FakeAdsPower()
+        rotation_calls = []
 
-        async def rotation_ok(*_args, **_kwargs):
+        async def rotation_ok(*_args, **kwargs):
+            rotation_calls.append(kwargs)
             return "9.9.9.9:1:u:p"
 
         with mock.patch.object(nyxify_runner, "_request_snapboard_adspower_id_update", return_value=False), \
-             mock.patch.object(nyxify_runner, "_request_snapboard_rotation", rotation_ok):
+             mock.patch.object(nyxify_runner, "_request_snapboard_rotation", rotation_ok), \
+             mock.patch.object(
+                 nyxify_runner,
+                 "load_nyxify_config",
+                 return_value={
+                     "proxy_priority_enabled": True,
+                     "proxy_priority_patterns": ["23.54"],
+                     "proxy_blocker_enabled": True,
+                     "blocked_proxies": ["45.10"],
+                 },
+             ):
             asyncio.run(
                 nyxify_runner._cleanup_failed_created_profile(
                     1113, {"row_key": "row-3"}, store, adspower,
@@ -171,6 +183,8 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(store.state["status"], "PENDING")
         self.assertEqual(store.proxy_updates, [(1113, "9.9.9.9:1:u:p")])
         self.assertEqual(adspower.deleted, ["k1del"])
+        self.assertEqual(rotation_calls[0].get("priority_patterns"), ["23.54"])
+        self.assertEqual(rotation_calls[0].get("blocked_patterns"), ["45.10"])
 
     def test_cleanup_requeues_pending_even_when_proxy_rotation_fails(self):
         # A failed SnapBoard rotation must NOT strand the row in RUNNING — the row

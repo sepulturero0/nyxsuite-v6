@@ -890,7 +890,20 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
     refreshed_proxy = ""
     if row_key:
         store.update_task_state(task_id, last_step=f"refreshing_proxy_after_{normalized_failure_step}")
-        refreshed_proxy = await _request_snapboard_rotation(row_key, timeout_seconds=55, max_clicks=1) or ""
+        runtime_config = load_nyxify_config()
+        priority_patterns = _priority_patterns_from_config(runtime_config)
+        blocked_patterns = (
+            runtime_config.get("blocked_proxies", [])
+            if runtime_config.get("proxy_blocker_enabled", True)
+            else []
+        )
+        refreshed_proxy = await _request_snapboard_rotation(
+            row_key,
+            timeout_seconds=55,
+            max_clicks=1,
+            priority_patterns=priority_patterns or None,
+            blocked_patterns=blocked_patterns or None,
+        ) or ""
         if refreshed_proxy:
             store.update_task_proxy(task_id, refreshed_proxy)
             logger.info(

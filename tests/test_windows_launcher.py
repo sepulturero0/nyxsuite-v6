@@ -56,3 +56,12 @@ def test_host_main_bat_prefers_and_falls_back_to_nyxsuite_venvs():
     assert '"%LOCALAPPDATA%\\NyxSuite\\venv\\Scripts\\python.exe" "%HD%host_main.py"' in launcher
     # Output stays clean (host protocol) — no text-echo statements.
     assert "@echo off" in launcher
+
+
+def test_windows_native_host_start_agent_uses_portable_launcher_for_source_installs():
+    host = (ROOT / "agent_host" / "host_main.py").read_text(encoding="utf-8")
+
+    assert "portable_launch_nyx.ps1" in host
+    assert "-EntryScript" in host
+    assert "bridge_app.py" in host
+    assert 'sys.platform == "win32"' in host

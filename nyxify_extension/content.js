@@ -39,6 +39,8 @@
   // after each order. Wait a little past that so a reorder click isn't a no-op.
   var REDO_COOLDOWN_MAX_WAIT_MS = 72000;
   var OTP_CLICK_RETRY_INTERVAL_MS = 2500;
+  var VERIFICATION_RECLICK_INTERVAL_MS = 10000;
+  var VERIFICATION_RECLICK_LIMIT = 3;
   var PROXY_ROTATE_WAIT_MS = 22000;
   var PROXY_ROTATE_CLICK_ATTEMPTS = 4;
   var bridgePort = null;
@@ -2249,6 +2251,7 @@
     var lastClickState = { rowPresent: false, candidates: 0, clickable: 0 };
     var clickAttempts = 0;
     var successfulClicks = 0;
+    var nextAllowedClickAt = startedAt;
     function observeCountdown(force) {
       var countdownMs = readAuthCheckCountdownMs(rowId, sms ? "sms" : "code");
       if (!countdownMs) {
@@ -2273,35 +2276,21 @@
 
     observeCountdown(false);
     while (Date.now() < deadline) {
-      var clickResult = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
-      var clicked = !!(clickResult && clickResult.clicked);
-      lastClickState = (clickResult && clickResult.state) || lastClickState;
-      clickAttempts += 1;
-      if (clicked) {
-        successfulClicks += 1;
-        observeCountdown(true);
-        diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
-        var latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
-          rowId,
-          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
-          popupSnapshot,
-          previousCode
-        );
-        if (latestCode) {
-          diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
-          return { ok: true, code: latestCode };
+      var shouldClick = clickAttempts < VERIFICATION_RECLICK_LIMIT
+        && successfulClicks < VERIFICATION_RECLICK_LIMIT
+        && Date.now() >= nextAllowedClickAt;
+      var latestCode = "";
+      if (shouldClick) {
+        var clickResult = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
+        var clicked = !!(clickResult && clickResult.clicked);
+        lastClickState = (clickResult && clickResult.state) || lastClickState;
+        clickAttempts += 1;
+        nextAllowedClickAt = Date.now() + VERIFICATION_RECLICK_INTERVAL_MS;
+        if (clicked) {
+          successfulClicks += 1;
+          observeCountdown(true);
+          diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         }
-        if (hasNoPendingOrderToast(sms ? "phone" : "email")) {
-          return {
-            ok: false,
-            terminal: true,
-            error: sms
-              ? "No pending phone order for this account. Request a number first."
-              : "No pending email order for this account. Get email first.",
-          };
-        }
-        observeCountdown(false);
-        await sleep(300);
       } else if (
         lastClickState.rowPresent
         && Number(lastClickState.candidates || 0) > 0
@@ -2311,21 +2300,41 @@
         // not invoke a disabled control again: it can be the completed row
         // from the previous task, and HTMLElement.click() still reports a
         // synthetic click even though SnapBoard ignores it.
-        var pendingCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+        latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
           rowId,
           Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
           popupSnapshot,
           previousCode
         );
-        if (pendingCode) {
-          diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
-          return { ok: true, code: pendingCode };
-        }
       } else {
         // The row can be re-rendering after a replacement email/number request.
         // Keep looking for the control during the same fetch window instead of
         // turning that transient absence into a permanent verification failure.
-        await sleep(500);
+        await sleep(Math.min(
+          OTP_CLICK_RETRY_INTERVAL_MS,
+          Math.max(250, deadline - Date.now())
+        ));
+      }
+      if (!latestCode) {
+        latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+          rowId,
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
+          popupSnapshot,
+          previousCode
+        );
+      }
+      if (latestCode) {
+        diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
+        return { ok: true, code: latestCode };
+      }
+      if (hasNoPendingOrderToast(sms ? "phone" : "email")) {
+        return {
+          ok: false,
+          terminal: true,
+          error: sms
+            ? "No pending phone order for this account. Request a number first."
+            : "No pending email order for this account. Get email first.",
+        };
       }
       observeCountdown(false);
     }
@@ -2812,6 +2821,11 @@
         var wasLoggedOut = isLoginScreenVisible();
         var loggedIn = await ensureSnapboardLoggedIn(message.timeout_ms);
         sendResponse({ ok: loggedIn, logged_in: loggedIn, was_logged_out: wasLoggedOut });
+        return;
+      }
+
+      if (message.action === "bridge_ping") {
+        sendResponse({ ok: true, bridge_ready: true });
         return;
       }
 

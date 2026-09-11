@@ -39,6 +39,15 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("function rowMatchesExpectedPhone", content)
         self.assertIn("expected.slice(-10)", content)
 
+    def test_check_code_and_sms_use_bounded_twenty_second_reclicks(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("VERIFICATION_RECLICK_INTERVAL_MS = 10000", content)
+        self.assertIn("VERIFICATION_RECLICK_LIMIT = 3", content)
+        self.assertIn("nextAllowedClickAt", content)
+        self.assertIn("successfulClicks < VERIFICATION_RECLICK_LIMIT", content)
+        self.assertIn("Date.now() >= nextAllowedClickAt", content)
+
     def test_check_controls_do_not_reactivate_disabled_rows(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
 

@@ -1,4 +1,9 @@
+from pathlib import Path
+
 from core import release_updater
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_empty_staged_agent_host_does_not_wipe_installed_bridge_files(tmp_path):
@@ -14,3 +19,11 @@ def test_empty_staged_agent_host_does_not_wipe_installed_bridge_files(tmp_path):
 
     assert synced == 0
     assert installed_host.read_text(encoding="utf-8") == "installed bridge host\n"
+
+
+def test_updater_refreshes_native_host_registration_after_update():
+    updater = (ROOT / "packaging" / "updater.py").read_text(encoding="utf-8")
+
+    assert "install_host" in updater
+    assert "register()" in updater
+    assert "native messaging" in updater.lower()

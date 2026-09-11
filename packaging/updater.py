@@ -223,6 +223,23 @@ def _write_version(install_root: Path, staged_version: str | None) -> None:
         print(f"[updater] could not write VERSION: {exc}")
 
 
+def _refresh_native_host_registration(install_root: Path) -> None:
+    """Point Windows native messaging registrations at the updated install."""
+    if sys.platform != "win32":
+        return
+    previous_path = list(sys.path)
+    try:
+        sys.path.insert(0, str(install_root))
+        from agent_host.install_host import register
+
+        ok = register()
+        print(f"[updater] native messaging registration refreshed={bool(ok)}")
+    except Exception as exc:
+        print(f"[updater] native messaging registration refresh skipped: {exc}")
+    finally:
+        sys.path[:] = previous_path
+
+
 def _read_staged_version(staging_root: Path) -> str | None:
     version_file = staging_root / "VERSION"
     if not version_file.exists():
@@ -376,6 +393,7 @@ def main() -> int:
 
     staged_version = _read_staged_version(staging_root)
     _write_version(install_root, staged_version)
+    _refresh_native_host_registration(install_root)
 
     # Arm the post-update launch watchdog: if the new build crash-loops on
     # startup, the app rolls back to prev_version (see core.update_backup).

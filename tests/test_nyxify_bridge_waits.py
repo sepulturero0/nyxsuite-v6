@@ -1,8 +1,10 @@
 import sys
+import tempfile
 import types
 import unittest
 from urllib.parse import urlparse
 from unittest import mock
+from pathlib import Path
 
 
 class _RequestsResponse:
@@ -92,6 +94,27 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
 
     def test_otp_store_default_timeout_uses_verification_code_budget(self):
         self.assertIsNone(nyxify_runner._request_snapboard_otp_from_store.__kwdefaults__["timeout_seconds"])
+
+    def test_otp_pending_request_includes_dispatch_diagnostics(self):
+        from core.nyxify_task_store import NyxifyTaskStore
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+            store.upsert_task(
+                "snapboard:42",
+                model="Olivia",
+                ip_address="1.2.3.4",
+                username="readyuser",
+                email="submitted@example.com",
+            )
+            store.request_otp_for_row("snapboard:42", email="submitted@example.com")
+
+            pending = store.get_pending_otp_request()
+
+        self.assertEqual(pending["row_key"], "snapboard:42")
+        self.assertEqual(pending["email"], "submitted@example.com")
+        self.assertIn("dispatch_count", pending)
+        self.assertIn("age_seconds", pending)
 
     async def test_proxy_rotation_rejects_non_priority_proxy_until_match(self):
         class FakeStore:

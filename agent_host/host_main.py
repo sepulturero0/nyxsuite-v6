@@ -151,17 +151,37 @@ def _start_agent():
             return {"ok": False, "error": "bridge_app executable not found"}
         cmd = [exe]
     else:
-        # Launch the bridge with the project's venv Python, NOT the interpreter
-        # running this host. On macOS the host is started by Chrome via the
-        # system python3 (manifest shebang), which lacks the bridge's deps
-        # (pystray, playwright, requests). resolve_python_executable() finds the
-        # .venv/venv interpreter the portable launcher created on first setup.
-        try:
-            from core.process_utils import resolve_python_executable
-            python = str(resolve_python_executable(gui=False))
-        except Exception:
-            python = sys.executable
-        cmd = [python, str(root / "bridge_app.py")]
+        if sys.platform == "win32":
+            system_root = os.environ.get("SystemRoot", "")
+            powershell_exe = (
+                str(Path(system_root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+                if system_root
+                else "powershell.exe"
+            )
+            cmd = [
+                powershell_exe,
+                "-NoLogo",
+                "-NoProfile",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(root / "portable_launch_nyx.ps1"),
+                "-EntryScript",
+                "bridge_app.py",
+                "-Quiet",
+            ]
+        else:
+            # Launch the bridge with the project's venv Python, NOT the interpreter
+            # running this host. On macOS the host is started by Chrome via the
+            # system python3 (manifest shebang), which lacks the bridge's deps
+            # (pystray, playwright, requests). resolve_python_executable() finds the
+            # .venv/venv interpreter the portable launcher created on first setup.
+            try:
+                from core.process_utils import resolve_python_executable
+                python = str(resolve_python_executable(gui=False))
+            except Exception:
+                python = sys.executable
+            cmd = [python, str(root / "bridge_app.py")]
     try:
         if sys.platform == "darwin":
             launchd_result = _start_agent_via_launchd(cmd, env, root)
