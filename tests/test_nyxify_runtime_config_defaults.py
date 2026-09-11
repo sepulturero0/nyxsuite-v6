@@ -22,6 +22,7 @@ def test_nyxify_defaults_keep_tags_blank_and_disabled():
     assert config["keep_profile_open_after_signup"] is False
     assert config["proxy_priority_enabled"] is False
     assert config["proxy_priority_patterns"] == []
+    assert config["proxy_type"] == "off"
 
 
 def test_disable_extensions_flag_round_trips_through_save():
@@ -87,3 +88,17 @@ def test_proxy_priority_round_trips_enabled_and_patterns():
 
     assert reloaded["proxy_priority_enabled"] is True
     assert reloaded["proxy_priority_patterns"] == ["23", "23.54", "130.24"]
+
+
+def test_proxy_type_accepts_only_off_socks5_or_http():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            nrc.save_nyxify_config({"proxy_type": "SOCKS5"})
+            assert nrc.load_nyxify_config()["proxy_type"] == "socks5"
+
+            nrc.save_nyxify_config({"proxy_type": "not-a-proxy"})
+            assert nrc.load_nyxify_config()["proxy_type"] == "socks5"

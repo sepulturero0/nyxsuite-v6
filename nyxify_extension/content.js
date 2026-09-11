@@ -720,6 +720,29 @@
     return clickElement(button);
   }
 
+  function find5MProviderButton() {
+    return document.querySelector('button.provider-option[data-provider="5mail"]')
+      || document.querySelector('[data-provider="5mail"]')
+      || document.querySelector('button.provider-option[data-provider="5m"]')
+      || document.querySelector('[data-provider="5m"]')
+      || toArray(document.querySelectorAll("button")).find(function (node) {
+        var onclickText = normalizeText(node.getAttribute("onclick") || "").toLowerCase();
+        var text = normalizeText(node.innerText || node.textContent || "").toLowerCase();
+        return onclickText.indexOf("setemailprovider('5mail')") >= 0
+          || onclickText.indexOf('setemailprovider("5mail")') >= 0
+          || onclickText.indexOf("setemailprovider('5m')") >= 0
+          || onclickText.indexOf('setemailprovider("5m")') >= 0
+          || text === "5m";
+      }) || null;
+  }
+
+  function lockProviderTo5M() {
+    var button = find5MProviderButton();
+    if (!button) return false;
+    if (isProviderOptionActive(button)) return true;
+    return clickElement(button);
+  }
+
   function findSPProviderButton() {
     return document.querySelector('button.provider-option[data-provider="smspool"]')
       || document.querySelector('[data-provider="smspool"]')
@@ -776,7 +799,10 @@
 
   async function checkProviderLock() {
     var config = await getStoredConfig();
-    if (config.lockG5) {
+    var emailProviderLock = config.emailProviderLock || (config.lockG5 ? "g5" : "am");
+    if (emailProviderLock === "5m") {
+      lockProviderTo5M();
+    } else if (emailProviderLock === "g5") {
       lockProviderToG5();
     } else {
       lockProviderToAM();
@@ -2000,6 +2026,33 @@
     return readValueFromAliases(row, headerMap, ["proxy", "proxy address", "ip address", "ip"]);
   }
 
+  function readProxyTypeFromRow(rowId) {
+    var row = document.querySelector('tr[data-id="' + rowId + '"]');
+    if (!row) return "";
+    var headerMap = getTableHeaderMap(row);
+    var index = findHeaderIndex(headerMap, ["proxy", "proxy address", "ip address", "ip"]);
+    var cells = getRowCells(row);
+    var text = index >= 0 && cells[index] ? normalizeText(cells[index].textContent || "") : "";
+    var match = text.match(/\b(SOCKS5|HTTP)\b/i);
+    return match ? match[1].toLowerCase() : "";
+  }
+
+  function normalizeProxyType(proxyType) {
+    var normalized = normalizeText(proxyType).toLowerCase();
+    return ["off", "socks5", "http"].includes(normalized) ? normalized : "off";
+  }
+
+  function proxyMatchesType(rowId, proxyType) {
+    var desired = normalizeProxyType(proxyType);
+    return desired === "off" || readProxyTypeFromRow(rowId) === desired;
+  }
+
+  function formatProxyForType(proxyValue, proxyType) {
+    var desired = normalizeProxyType(proxyType);
+    if (desired === "off" || !proxyValue || /^\w+:\/\//.test(proxyValue)) return proxyValue;
+    return desired + "://" + proxyValue;
+  }
+
   function normalizeProxyPriorityPatterns(priorityPatterns) {
     var rawItems = Array.isArray(priorityPatterns)
       ? priorityPatterns
@@ -2046,11 +2099,13 @@
       var payload = await response.json();
       if (!response.ok || !payload.ok || !payload.row_key) return;
       var priorityPatterns = normalizeProxyPriorityPatterns(payload.priority_patterns || []);
+      var proxyType = normalizeProxyType(payload.proxy_type);
       if (
         !payload.force
         && config.proxyBlockerEnabled === false
         && config.proxyCheckerEnabled === false
         && !priorityPatterns.length
+        && proxyType === "off"
       ) return;
 
       var rowKey = normalizeText(payload.row_key);
@@ -2070,7 +2125,8 @@
         PROXY_ROTATE_WAIT_MS,
         maxClicks,
         priorityPatterns,
-        payload.blocked_patterns || []
+        payload.blocked_patterns || [],
+        proxyType
       );
 
       headers["Content-Type"] = "application/json";
@@ -2564,15 +2620,16 @@
     };
   }
 
-  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns) {
+  async function rotateProxyUntilChanged(rowId, timeoutMs, maxClicks, priorityPatterns, blockedPatterns, proxyType) {
     var oldProxy = readProxyFromRow(rowId);
     var attempt = 0;
     var patterns = normalizeProxyPriorityPatterns(priorityPatterns);
     var blocked = normalizeProxyPriorityPatterns(blockedPatterns);
+    var desiredType = normalizeProxyType(proxyType);
     var initialPriorityOk = !patterns.length || proxyMatchesPriority(oldProxy, patterns);
     var initialBlockerOk = !blocked.length || !proxyMatchesBlockedPattern(oldProxy, blocked);
-    if (oldProxy && initialPriorityOk && initialBlockerOk) {
-      return { ok: true, proxy: oldProxy };
+    if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType)) {
+      return { ok: true, proxy: formatProxyForType(oldProxy, desiredType) };
     }
     while (attempt < maxClicks) {
       attempt += 1;
@@ -2588,8 +2645,8 @@
       if (newProxy && newProxy !== oldProxy) {
         var priorityOk = !patterns.length || proxyMatchesPriority(newProxy, patterns);
         var blockerOk = !blocked.length || !proxyMatchesBlockedPattern(newProxy, blocked);
-        if (priorityOk && blockerOk) {
-          return { ok: true, proxy: newProxy };
+        if (priorityOk && blockerOk && proxyMatchesType(rowId, desiredType)) {
+          return { ok: true, proxy: formatProxyForType(newProxy, desiredType) };
         }
         oldProxy = newProxy;
       }
@@ -2600,6 +2657,9 @@
     }
     if (blocked.length) {
       return { ok: false, error: "Proxy still matched blocked pattern after rotation." };
+    }
+    if (desiredType !== "off") {
+      return { ok: false, error: "Proxy did not match requested type after rotation." };
     }
     return { ok: false, error: "Proxy did not change after rotation." };
   }
@@ -3150,7 +3210,8 @@
           PROXY_ROTATE_WAIT_MS,
           maxClicks,
           message.priority_patterns || [],
-          message.blocked_patterns || []
+          message.blocked_patterns || [],
+          message.proxy_type
         );
         if (!proxyResult.ok) {
           sendResponse({ ok: false, error: proxyResult.error });

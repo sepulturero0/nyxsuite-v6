@@ -1158,6 +1158,7 @@ function renderNyxAdvanced() {
   const mode = currentAdsPowerControlMode();
   const modeOpt = (val, label) => `<option value="${val}" ${mode === val ? "selected" : ""}>${label}</option>`;
   body.innerHTML = `
+    <div class="adv-section-label">Automation and appearance</div>
     <div class="adv-grid">
       <label class="adv-field"><span>Pending threshold</span><input id="cfg-pending_threshold" class="input" value="${escapeAttr(v.pending_threshold || 1)}"></label>
       <label class="adv-field"><span>Max parallel</span><input id="cfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 5)}"></label>
@@ -1202,7 +1203,9 @@ function renderNyxifyAdvanced() {
     ? v.verification_priority
     : "auto";
   const proxyPriorityPatterns = Array.isArray(v.proxy_priority_patterns) ? v.proxy_priority_patterns : [];
+  const proxyType = ["off", "socks5", "http"].includes(v.proxy_type) ? v.proxy_type : "off";
   body.innerHTML = `
+    <div class="adv-section-label">Profile and SnapBoard</div>
     <div class="adv-grid">
       <label class="adv-field"><span>Max parallel</span><input id="ncfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 1)}"></label>
       <label class="adv-field"><span>Temporary name</span><input id="ncfg-temporary_profile_name" class="input" value="${escapeAttr(v.temporary_profile_name || "")}"></label>
@@ -1215,6 +1218,11 @@ function renderNyxifyAdvanced() {
       <div class="adv-field toggle-row"><span class="toggle-text">Proxy Blocker</span><label class="toggle-switch"><input id="ncfg-proxy_blocker_enabled" type="checkbox" ${v.proxy_blocker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Proxy Checker <span class="muted">(uses AdsPower check)</span></span><label class="toggle-switch"><input id="ncfg-proxy_checker_enabled" type="checkbox" ${v.proxy_checker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Proxy Priority <span class="muted">(only use matching prefixes)</span></span><label class="toggle-switch"><input id="ncfg-proxy_priority_enabled" type="checkbox" ${v.proxy_priority_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+      <label class="adv-field"><span>Proxy type <span class="muted">(Off keeps any type)</span></span><select id="ncfg-proxy_type" class="input">
+        <option value="off" ${proxyType === "off" ? "selected" : ""}>Off</option>
+        <option value="socks5" ${proxyType === "socks5" ? "selected" : ""}>SOCKS5</option>
+        <option value="http" ${proxyType === "http" ? "selected" : ""}>HTTP</option>
+      </select></label>
       <div class="adv-field toggle-row"><span class="toggle-text">Full Auto Mode</span><label class="toggle-switch"><input id="ncfg-full_auto_mode_enabled" type="checkbox" ${v.full_auto_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Continuous Mode <span class="muted">(send completed signups to Nyx)</span></span><label class="toggle-switch"><input id="ncfg-continuous_mode_enabled" type="checkbox" ${v.continuous_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <label class="adv-field"><span>Verification priority</span><select id="ncfg-verification_priority" class="input">
@@ -1228,6 +1236,7 @@ function renderNyxifyAdvanced() {
       <label class="adv-field"><span>whox min trust score <span class="muted">(below = delete + recreate)</span></span><input id="ncfg-whox_min_trust_score" class="input" type="number" min="1" max="100" value="${escapeAttr(v.whox_min_trust_score || 70)}"></label>
       <label class="adv-field"><span>whox URL</span><input id="ncfg-whox_url" class="input" value="${escapeAttr(v.whox_url || "https://whox.com/")}"></label>
     </div>
+    <div class="adv-section-label">Proxy and warm-up lists</div>
     <label class="adv-field adv-field-wide"><span>Priority proxy prefixes (one per line)</span><textarea id="ncfg-proxy_priority_patterns" class="input textarea-full" placeholder="23&#10;23.54">${escapeHtml(proxyPriorityPatterns.join("\n"))}</textarea></label>
     <label class="adv-field adv-field-wide"><span>Cookie warm-up sites (one per line — edit or remove; clear all to restore the built-in list)</span><textarea id="ncfg-cookie_warmup_sites" class="input textarea-full" placeholder="https://wikipedia.org/&#10;https://cnn.com/">${escapeHtml(warmupSites.join("\n"))}</textarea></label>
     <label class="adv-field adv-field-wide"><span>Banned proxies (one per line)</span><textarea id="ncfg-banned_proxies" class="input textarea-full">${escapeHtml(banned.join("\n"))}</textarea></label>
@@ -1475,6 +1484,7 @@ document.addEventListener("click", async (e) => {
       proxy_blocker_enabled: el("ncfg-proxy_blocker_enabled").checked,
       proxy_checker_enabled: el("ncfg-proxy_checker_enabled").checked,
       proxy_priority_enabled: el("ncfg-proxy_priority_enabled").checked,
+      proxy_type: el("ncfg-proxy_type").value,
       proxy_priority_patterns: el("ncfg-proxy_priority_patterns").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
       full_auto_mode_enabled: el("ncfg-full_auto_mode_enabled").checked,
       continuous_mode_enabled: el("ncfg-continuous_mode_enabled").checked,

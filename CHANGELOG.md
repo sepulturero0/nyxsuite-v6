@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.5 - SnapBoard provider and proxy-type controls
+
+- Added Nyxify SnapBoard email provider lock support for AM, G5, and 5M in
+  the extension popup, options page, and SnapBoard content automation.
+- Added Nyxify Proxy Type selection with Off, SOCKS5, and HTTP modes. Off keeps
+  the previous any-proxy behavior; SOCKS5 and HTTP keep rotating SnapBoard rows
+  until the selected proxy type is present.
+- Account-creation blocker cleanup now deletes the failed AdsPower profile,
+  clears the SnapBoard AdsPower ID, and requests the normal SnapBoard proxy
+  rotation flow before requeueing the row.
+- Nyxify config controls in the web UI and extension UI are grouped more
+  clearly, and popup provider changes avoid stale runner config overwrites after
+  SnapBoard refreshes.
+- Added focused regression coverage for provider locking, proxy-type config
+  sync, SnapBoard rotation payloads, and failed-profile cleanup retry behavior.
+
 ## 6.7.3 - Bridge, OTP retry, and platform update repairs
 
 - SnapBoard Check Code / Check SMS uses at most three dispatch attempts at 0, 10, and 20 seconds, stopping immediately when a fresh code appears.

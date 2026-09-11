@@ -154,6 +154,10 @@ function normalizeConfig(config) {
     ? rawBlocked
     : String(rawBlocked).split(/\r?\n/);
   const proxyPriorityPatterns = normalizeStringList(safeConfig.proxyPriorityPatterns);
+  const proxyType = String(safeConfig.proxyType || "off").trim().toLowerCase();
+  const emailProviderLock = String(
+    safeConfig.emailProviderLock || (safeConfig.lockG5 === true ? "g5" : "am")
+  ).trim().toLowerCase();
 
   return {
     localApiUrl: String(safeConfig.localApiUrl || "http://127.0.0.1:8866").trim(),
@@ -173,6 +177,7 @@ function normalizeConfig(config) {
     proxyCheckerEnabled: safeConfig.proxyCheckerEnabled !== false,
     proxyPriorityEnabled: safeConfig.proxyPriorityEnabled === true,
     proxyPriorityPatterns,
+    proxyType: ["off", "socks5", "http"].includes(proxyType) ? proxyType : "off",
     pushAdspowerIdEnabled: safeConfig.pushAdspowerIdEnabled !== false,
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
@@ -181,6 +186,7 @@ function normalizeConfig(config) {
     autoFillRow: safeConfig.autoFillRow === true,
     autoFillAccountTarget: normalizePositiveInteger(safeConfig.autoFillAccountTarget, 0),
     lockG5: safeConfig.lockG5 === true,
+    emailProviderLock: ["am", "g5", "5m"].includes(emailProviderLock) ? emailProviderLock : "am",
     lockTV: safeConfig.lockTV === true,
   };
 }
@@ -208,6 +214,7 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
     proxyPriorityPatterns: Array.isArray(runner.proxy_priority_patterns)
       ? runner.proxy_priority_patterns
       : base.proxyPriorityPatterns,
+    proxyType: runner.proxy_type || base.proxyType,
     pushAdspowerIdEnabled: runner.push_adspower_id_enabled !== false,
     fullAutoModeEnabled: runner.full_auto_mode_enabled === true,
     continuousModeEnabled: runner.continuous_mode_enabled === true,
@@ -1586,7 +1593,9 @@ async function getStatusSnapshot(forceRunnerRefresh = false) {
   try {
     const configPayload = await callLocalNyxify("GET", "/config");
     if (configPayload && configPayload.config) {
-      config = extensionConfigFromRunnerConfig(configPayload.config, config);
+      const latestSyncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
+      const latestLocalConfig = normalizeConfig(latestSyncData[STORAGE_KEYS.config] || {});
+      config = extensionConfigFromRunnerConfig(configPayload.config, latestLocalConfig);
       await chrome.storage.sync.set({ [STORAGE_KEYS.config]: config });
     }
   } catch (error) {

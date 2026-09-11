@@ -14,7 +14,6 @@ const TOGGLE_OPTIONS = [
   ["continuousModeToggle", "continuousModeEnabled", "Continuous Mode enabled.", "Continuous Mode disabled."],
   ["keepProfileOpenToggle", "keepProfileOpenAfterSignup", "Keep Profile Open enabled.", "Keep Profile Open disabled."],
   ["autoFillRowToggle", "autoFillRow", "Auto-Fill Row enabled.", "Auto-Fill Row disabled."],
-  ["lockG5Toggle", "lockG5", "Lock in G5 enabled.", "Lock in G5 disabled."],
   ["lockTVToggle", "lockTV", "Lock in TV enabled.", "Lock in TV disabled."],
   ["enabledToggle", "enabled", "Nyxify enabled.", "Nyxify disabled."],
 ];
@@ -60,6 +59,9 @@ function normalizeConfig(config) {
     autoFillRow: safeConfig.autoFillRow === true,
     autoFillAccountTarget: Number.isFinite(parsedAutoFillTarget) && parsedAutoFillTarget > 0 ? parsedAutoFillTarget : 0,
     lockG5: safeConfig.lockG5 === true,
+    emailProviderLock: ["am", "g5", "5m"].includes(String(safeConfig.emailProviderLock || (safeConfig.lockG5 ? "g5" : "am")).toLowerCase())
+      ? String(safeConfig.emailProviderLock || (safeConfig.lockG5 ? "g5" : "am")).toLowerCase()
+      : "am",
     lockTV: safeConfig.lockTV === true,
   };
 }
@@ -86,7 +88,7 @@ function loadOptions() {
     document.getElementById("autoFillRowToggle").checked = config.autoFillRow;
     document.getElementById("autoFillAccountTarget").value = config.autoFillAccountTarget > 0 ? config.autoFillAccountTarget : "";
     document.getElementById("verificationPriority").value = config.verificationPriority;
-    document.getElementById("lockG5Toggle").checked = config.lockG5;
+    document.getElementById("emailProviderLock").value = config.emailProviderLock;
     document.getElementById("lockTVToggle").checked = config.lockTV;
     document.getElementById("enabledToggle").checked = config.enabled;
     chrome.storage.local.get(SNAPBOARD_LOGIN_KEY, (localResult) => {
@@ -118,7 +120,8 @@ function saveOptions() {
     autoFillRow: document.getElementById("autoFillRowToggle").checked,
     autoFillAccountTarget: document.getElementById("autoFillAccountTarget").value,
     verificationPriority: document.getElementById("verificationPriority").value,
-    lockG5: document.getElementById("lockG5Toggle").checked,
+    emailProviderLock: document.getElementById("emailProviderLock").value,
+    lockG5: document.getElementById("emailProviderLock").value === "g5",
     lockTV: document.getElementById("lockTVToggle").checked,
     enabled: document.getElementById("enabledToggle").checked,
   });

@@ -15,7 +15,7 @@ class _ProxyRotateStore:
 
     def __init__(self):
         self._lock = threading.Lock()
-        self._pending = {}   # row_key -> {"dispatched": bool, "created_at": float, "max_clicks": int|None, "force": bool, "priority_patterns": list[str], "blocked_patterns": list[str]}
+        self._pending = {}   # row_key -> request metadata
         self._results = {}   # row_key -> {"proxy": str|None, "error": str|None, "done_at": float}
 
     def _normalize_max_clicks(self, max_clicks):
@@ -36,7 +36,7 @@ class _ProxyRotateStore:
             raw_items = []
         return [str(item or "").strip() for item in raw_items if str(item or "").strip()]
 
-    def request(self, row_key, max_clicks=None, force=False, priority_patterns=None, blocked_patterns=None):
+    def request(self, row_key, max_clicks=None, force=False, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
         with self._lock:
             existing = self._pending.get(row_key)
             # A runner tick can observe the same stale proxy while the browser
@@ -52,6 +52,7 @@ class _ProxyRotateStore:
                 "force": bool(force),
                 "priority_patterns": self._normalize_priority_patterns(priority_patterns),
                 "blocked_patterns": self._normalize_priority_patterns(blocked_patterns),
+                "proxy_type": str(proxy_type or "off").strip().lower() if str(proxy_type or "off").strip().lower() in {"off", "socks5", "http"} else "off",
             }
             self._results.pop(row_key, None)
 
@@ -66,6 +67,7 @@ class _ProxyRotateStore:
                         "force": bool(val.get("force")),
                         "priority_patterns": list(val.get("priority_patterns") or []),
                         "blocked_patterns": list(val.get("blocked_patterns") or []),
+                        "proxy_type": val.get("proxy_type", "off"),
                     }
             return None
 
@@ -1365,6 +1367,7 @@ class NyxifyLocalApiServer:
                                 "force": bool(request.get("force")),
                                 "priority_patterns": request.get("priority_patterns") or [],
                                 "blocked_patterns": request.get("blocked_patterns") or [],
+                                "proxy_type": request.get("proxy_type", "off"),
                             },
                         )
                     else:
@@ -1542,6 +1545,7 @@ class NyxifyLocalApiServer:
                     max_clicks = payload.get("max_clicks")
                     priority_patterns = payload.get("priority_patterns")
                     blocked_patterns = payload.get("blocked_patterns")
+                    proxy_type = payload.get("proxy_type", "off")
                     if not row_key:
                         self._write_json(400, {"ok": False, "error": "Row key is required."})
                         return
@@ -1550,6 +1554,7 @@ class NyxifyLocalApiServer:
                         max_clicks=max_clicks,
                         priority_patterns=priority_patterns,
                         blocked_patterns=blocked_patterns,
+                        proxy_type=proxy_type,
                     )
                     self._write_json(200, {"ok": True, "message": "Proxy rotation requested."})
                     return
@@ -1845,6 +1850,7 @@ class NyxifyLocalApiServer:
                         "proxy_checker_enabled",
                         "proxy_priority_enabled",
                         "proxy_priority_patterns",
+                        "proxy_type",
                         "push_adspower_id_enabled",
                         "full_auto_mode_enabled",
                         "continuous_mode_enabled",

@@ -506,14 +506,8 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('data-provider="textverified"', content)
         self.assertIn("setemailprovider('gmail500')", content)
         self.assertIn("setphoneprovider('textverified')", content)
-        self.assertIn(
-            "if (config.lockG5) {\n"
-            "      lockProviderToG5();\n"
-            "    } else {\n"
-            "      lockProviderToAM();\n"
-            "    }",
-            content,
-        )
+        self.assertIn("var emailProviderLock = config.emailProviderLock || (config.lockG5 ? \"g5\" : \"am\");", content)
+        self.assertIn('if (emailProviderLock === "5m")', content)
         self.assertIn(
             "if (config.lockTV) {\n"
             "      lockProviderToTV();\n"

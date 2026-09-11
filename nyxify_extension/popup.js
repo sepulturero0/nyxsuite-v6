@@ -25,6 +25,7 @@ function normalizePositiveInteger(value, fallback = 0) {
 function normalizePopupConfig(config) {
   const safeConfig = config || {};
   const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
+  const emailProviderLock = String(safeConfig.emailProviderLock || (safeConfig.lockG5 === true ? "g5" : "am")).trim().toLowerCase();
   return {
     enabled: safeConfig.enabled !== false,
     pushAdspowerIdEnabled: safeConfig.pushAdspowerIdEnabled !== false,
@@ -37,6 +38,7 @@ function normalizePopupConfig(config) {
     verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
     lockG5: safeConfig.lockG5 === true,
+    emailProviderLock: ["am", "g5", "5m"].includes(emailProviderLock) ? emailProviderLock : "am",
     lockTV: safeConfig.lockTV === true,
     temporaryProfileName: String(safeConfig.temporaryProfileName || DEFAULT_TEMPORARY_PROFILE_NAME),
     adspowerGroup: String(safeConfig.adspowerGroup || DEFAULT_ADSPOWER_GROUP),
@@ -103,7 +105,9 @@ function setProviderLockValue(configKey, locked) {
     return;
   }
   control.querySelectorAll(".provider-lock-option").forEach((button) => {
-    const isActive = (button.dataset.value === "true") === (locked === true);
+    const isActive = configKey === "emailProviderLock"
+      ? button.dataset.value === locked
+      : (button.dataset.value === "true") === (locked === true);
     button.classList.toggle("provider-lock-option-active", isActive);
     button.setAttribute("aria-pressed", isActive ? "true" : "false");
   });
@@ -136,10 +140,12 @@ function getProviderLockSetting(configKey, fallback = false) {
     `.provider-lock-segmented[data-config-key="${configKey}"] .provider-lock-option-active`
   );
   if (active) {
-    return active.dataset.value === "true";
+    return active.dataset.value === "true" ? true : (configKey === "emailProviderLock" ? active.dataset.value : false);
   }
   if (Object.prototype.hasOwnProperty.call(latestPopupConfig, configKey)) {
-    return latestPopupConfig[configKey] === true;
+    return configKey === "emailProviderLock"
+      ? latestPopupConfig[configKey]
+      : latestPopupConfig[configKey] === true;
   }
   return fallback;
 }
@@ -328,7 +334,7 @@ function applyPopupStatusSnapshot(status) {
   setCheckboxValue("popupContinuousModeToggle", config.continuousModeEnabled === true);
   setCheckboxValue("popupKeepProfileOpenToggle", config.keepProfileOpenAfterSignup === true);
   setCheckboxValue("popupAutoFillRowToggle", config.autoFillRow === true);
-  setProviderLockValue("lockG5", config.lockG5 === true);
+  setProviderLockValue("emailProviderLock", config.emailProviderLock);
   setProviderLockValue("lockTV", config.lockTV === true);
   document.getElementById("countReady").textContent = String(counts.ready || 0);
   document.getElementById("countWaiting").textContent = String(counts.waiting || 0);
@@ -439,7 +445,8 @@ function savePopupSettings(options = {}) {
     continuousModeEnabled: getCheckedSetting("popupContinuousModeToggle", "continuousModeEnabled", false),
     keepProfileOpenAfterSignup: getCheckedSetting("popupKeepProfileOpenToggle", "keepProfileOpenAfterSignup", false),
     autoFillRow: getCheckedSetting("popupAutoFillRowToggle", "autoFillRow", false),
-    lockG5: getProviderLockSetting("lockG5", false),
+    emailProviderLock: getProviderLockSetting("emailProviderLock", "am"),
+    lockG5: getProviderLockSetting("emailProviderLock", "am") === "g5",
     lockTV: getProviderLockSetting("lockTV", false),
     temporaryProfileName: getInputSetting("popupTemporaryName", "temporaryProfileName", DEFAULT_TEMPORARY_PROFILE_NAME),
     adspowerGroup: getInputSetting("popupGroup", "adspowerGroup", DEFAULT_ADSPOWER_GROUP),
@@ -530,19 +537,24 @@ function saveProviderLockOption(button) {
   if (!configKey) {
     return;
   }
-  const locked = button.dataset.value === "true";
+  const isEmailProvider = configKey === "emailProviderLock";
+  const selectedValue = isEmailProvider ? button.dataset.value : button.dataset.value === "true";
   const messages = {
     lockG5: ["Lock in G5 enabled.", "Lock in G5 disabled."],
     lockTV: ["Lock in TV enabled.", "Lock in TV disabled."],
   };
-  const [enabledMessage, disabledMessage] = messages[configKey] || ["Provider lock enabled.", "Provider lock disabled."];
-  const previous = latestPopupConfig[configKey] === true;
+  const [enabledMessage, disabledMessage] = isEmailProvider
+    ? [`Email provider locked to ${String(selectedValue).toUpperCase()}.`, "Email provider unlocked."]
+    : (messages[configKey] || ["Provider lock enabled.", "Provider lock disabled."]);
+  const previous = isEmailProvider
+    ? (latestPopupConfig[configKey] || "am")
+    : latestPopupConfig[configKey] === true;
   const payload = { type: "NYXIFY_SAVE_CONFIG" };
-  payload[configKey] = locked;
+  payload[configKey] = selectedValue;
 
-  setProviderLockValue(configKey, locked);
+  setProviderLockValue(configKey, selectedValue);
   latestPopupConfig = normalizePopupConfig({ ...latestPopupConfig, ...payload });
-  setPrimaryStatus(locked ? enabledMessage : disabledMessage, 1500);
+  setPrimaryStatus(isEmailProvider ? enabledMessage : (selectedValue ? enabledMessage : disabledMessage), 1500);
 
   chrome.runtime.sendMessage(payload, (response) => {
     if (!response || !response.ok) {
@@ -551,7 +563,7 @@ function saveProviderLockOption(button) {
       setPrimaryStatus((response && response.error) || "Could not save Nyxify toggle.", 2500);
       return;
     }
-    refreshPopupStatus(locked ? enabledMessage : disabledMessage, true);
+    refreshPopupStatus(isEmailProvider ? enabledMessage : (selectedValue ? enabledMessage : disabledMessage), true);
   });
 }
 

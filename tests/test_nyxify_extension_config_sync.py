@@ -245,7 +245,7 @@ def test_proxy_rotation_returns_without_click_when_current_proxy_is_already_vali
     content_js = (ROOT / "nyxify_extension" / "content.js").read_text()
 
     assert "var initialPriorityOk = !patterns.length || proxyMatchesPriority(oldProxy, patterns);" in content_js
-    assert "if (oldProxy && initialPriorityOk && initialBlockerOk)" in content_js
+    assert "if (oldProxy && initialPriorityOk && initialBlockerOk && proxyMatchesType(rowId, desiredType))" in content_js
 
 
 def test_extension_refreshes_runner_config_while_snapboard_bridge_is_connected():
@@ -643,13 +643,14 @@ def test_nyxify_extension_exposes_lock_tv_provider_lock():
     options_js = (ext / "options.js").read_text()
     background_js = (ext / "background.js").read_text()
 
-    # Popup provider locks use the compact AM/G5 and SP/TV segmented controls.
-    assert 'data-provider-lock="g5"' in popup_html
+    # Popup provider locks use the compact AM/G5/5M and SP/TV segmented controls.
+    assert 'data-provider-lock="email"' in popup_html
     assert 'data-provider-lock="tv"' in popup_html
-    assert 'data-config-key="lockG5"' in popup_html
+    assert 'data-config-key="emailProviderLock"' in popup_html
     assert 'data-config-key="lockTV"' in popup_html
-    assert 'data-value="false" aria-pressed="true">AM</button>' in popup_html
-    assert 'data-value="true" aria-pressed="false">G5</button>' in popup_html
+    assert 'data-value="am" aria-pressed="true">AM</button>' in popup_html
+    assert 'data-value="g5" aria-pressed="false">G5</button>' in popup_html
+    assert 'data-value="5m" aria-pressed="false">5M</button>' in popup_html
     assert 'data-value="false" aria-pressed="true">SP</button>' in popup_html
     assert 'data-value="true" aria-pressed="false">TV</button>' in popup_html
     assert "popupLockG5Toggle" not in popup_html

@@ -449,6 +449,10 @@ pre {
   box-sizing: border-box;
 }
 
+.provider-lock-segmented[data-provider-lock="email"] {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .provider-lock-option {
   height: 34px;
   min-width: 0;

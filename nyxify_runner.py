@@ -537,7 +537,7 @@ def _build_waiting_step(missing_fields):
     return "waiting_for_" + "_and_".join(missing_fields)
 
 
-def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
     payload = {"row_key": row_key}
     if max_clicks is not None:
         payload["max_clicks"] = max_clicks
@@ -547,6 +547,9 @@ def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_pattern
     normalized_blocked_patterns = _normalize_proxy_priority_patterns(blocked_patterns)
     if normalized_blocked_patterns:
         payload["blocked_patterns"] = normalized_blocked_patterns
+    normalized_proxy_type = str(proxy_type or "off").strip().lower()
+    if normalized_proxy_type in {"socks5", "http"}:
+        payload["proxy_type"] = normalized_proxy_type
     try:
         _post_local_api_response("/proxy/rotate_request", payload, timeout=5)
         return True
@@ -555,13 +558,14 @@ def _queue_snapboard_rotation_request(row_key, max_clicks=None, priority_pattern
         return False
 
 
-def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
     """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
     if not _queue_snapboard_rotation_request(
         row_key,
         max_clicks=max_clicks,
         priority_patterns=priority_patterns,
         blocked_patterns=blocked_patterns,
+        proxy_type=proxy_type,
     ):
         return None
 
@@ -587,7 +591,7 @@ def _request_snapboard_rotation_sync(row_key, timeout_seconds=40, max_clicks=Non
     return None
 
 
-async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None):
+async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=None, priority_patterns=None, blocked_patterns=None, proxy_type="off"):
     return await asyncio.to_thread(
         _request_snapboard_rotation_sync,
         row_key,
@@ -595,6 +599,7 @@ async def _request_snapboard_rotation(row_key, timeout_seconds=40, max_clicks=No
         max_clicks,
         priority_patterns,
         blocked_patterns,
+        proxy_type,
     )
 
 
@@ -895,6 +900,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
         store.update_task_state(task_id, last_step=f"refreshing_proxy_after_{normalized_failure_step}")
         runtime_config = load_nyxify_config()
         priority_patterns = _priority_patterns_from_config(runtime_config)
+        proxy_type = str(runtime_config.get("proxy_type") or "off").strip().lower()
         blocked_patterns = (
             runtime_config.get("blocked_proxies", [])
             if runtime_config.get("proxy_blocker_enabled", True)
@@ -906,6 +912,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
             max_clicks=1,
             priority_patterns=priority_patterns or None,
             blocked_patterns=blocked_patterns or None,
+            proxy_type=proxy_type,
         ) or ""
         if refreshed_proxy and refreshed_proxy != old_proxy:
             store.update_task_proxy(task_id, refreshed_proxy)
@@ -926,7 +933,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
         task_id,
         status="PENDING",
         last_step="proxy_refreshed_retry_pending" if refreshed_proxy
-        else (WAITING_FOR_FORCED_PROXY_ROTATION_STEP if row_key else f"retry_pending_after_{normalized_failure_step}"),
+            else f"retry_pending_after_{normalized_failure_step}",
         error="",
         adspower_id="",
         adspower_profile_id="",
@@ -1444,6 +1451,7 @@ async def _rotate_proxy_until_usable(
             else []
         )
         active_proxy_checker_enabled = runtime_config.get("proxy_checker_enabled", proxy_checker_enabled)
+        active_proxy_type = str(runtime_config.get("proxy_type") or "off").strip().lower()
 
         is_blocked = bool(active_blocked_proxies and _is_proxy_banned(proxy_value, active_blocked_proxies))
         priority_mismatch = bool(
@@ -1493,6 +1501,7 @@ async def _rotate_proxy_until_usable(
             max_clicks=3,
             priority_patterns=active_priority_patterns if priority_mismatch else None,
             blocked_patterns=active_blocked_proxies if is_blocked else None,
+            proxy_type=active_proxy_type,
         )
         if new_proxy:
             store.update_task_proxy(task_id, new_proxy)
@@ -1664,21 +1673,6 @@ async def process_task(task, store, adspower):
                 logger.info(f"Received SMS OTP for task {task_id} from SnapBoard bridge.")
             return code
 
-        if _task_requires_forced_proxy_rotation({"last_step": initial_last_step}):
-            forced_ok, forced_proxy = await _force_proxy_rotation_before_create(
-                task_id=task_id,
-                task_row_key=task_row_key,
-                store=store,
-                proxy_value=proxy_value,
-                blocked_proxies=blocked_proxies if proxy_blocker_enabled else [],
-            )
-            if not forced_ok:
-                logger.warning(
-                    f"Task {task_id}: waiting for forced proxy rotation before creating a replacement account."
-                )
-                return
-            proxy_value = forced_proxy
-
         proxy_value, proxy_check = await _rotate_proxy_until_usable(
             task_id=task_id,
             task_row_key=task_row_key,
@@ -1714,6 +1708,7 @@ async def process_task(task, store, adspower):
                 task_row_key,
                 timeout_seconds=55,
                 max_clicks=1,
+                proxy_type=str(load_nyxify_config().get("proxy_type") or "off"),
             )
             new_proxy = str(new_proxy or "").strip()
             if not new_proxy:

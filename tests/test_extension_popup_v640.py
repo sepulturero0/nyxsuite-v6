@@ -80,12 +80,13 @@ def test_nyxify_popup_provider_locks_use_yellow_segmented_controls():
     popup_js = read("nyxify_extension/popup.js")
     popup_css = read("nyxify_extension/styles.css")
 
-    assert 'data-provider-lock="g5"' in popup_html
+    assert 'data-provider-lock="email"' in popup_html
     assert 'data-provider-lock="tv"' in popup_html
-    assert 'data-config-key="lockG5"' in popup_html
+    assert 'data-config-key="emailProviderLock"' in popup_html
     assert 'data-config-key="lockTV"' in popup_html
-    assert re.search(r'<button[^>]*data-value="false"[^>]*>AM</button>', popup_html)
-    assert re.search(r'<button[^>]*data-value="true"[^>]*>G5</button>', popup_html)
+    assert re.search(r'<button[^>]*data-value="am"[^>]*>AM</button>', popup_html)
+    assert re.search(r'<button[^>]*data-value="g5"[^>]*>G5</button>', popup_html)
+    assert re.search(r'<button[^>]*data-value="5m"[^>]*>5M</button>', popup_html)
     assert re.search(r'<button[^>]*data-value="false"[^>]*>SP</button>', popup_html)
     assert re.search(r'<button[^>]*data-value="true"[^>]*>TV</button>', popup_html)
 
@@ -163,7 +164,7 @@ def version_decl(name, text):
 
 
 def test_extension_version_metadata_is_synced():
-    expected_version = "6.7.3"
+    expected_version = "6.7.5"
     version_py = read("core/version.py")
     nyx_manifest = json.loads(read("nyx_extension/manifest.json"))
     nyxify_manifest = json.loads(read("nyxify_extension/manifest.json"))

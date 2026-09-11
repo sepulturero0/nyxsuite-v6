@@ -186,7 +186,7 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(rotation_calls[0].get("priority_patterns"), ["23.54"])
         self.assertEqual(rotation_calls[0].get("blocked_patterns"), ["45.10"])
 
-    def test_cleanup_waits_for_forced_proxy_rotation_when_rotation_fails(self):
+    def test_cleanup_requeues_to_normal_retry_when_proxy_rotation_fails(self):
         # A failed SnapBoard rotation must not allow the replacement account to
         # reuse the same dirty proxy. Keep the row claimable, but mark it so the
         # next cycle must rotate before profile creation.
@@ -208,7 +208,7 @@ class NyxifyCleanupTests(unittest.TestCase):
             )
 
         self.assertEqual(store.state["status"], "PENDING")
-        self.assertEqual(store.state["last_step"], nyxify_runner.WAITING_FOR_FORCED_PROXY_ROTATION_STEP)
+        self.assertEqual(store.state["last_step"], "retry_pending_after_signup_automation_failed")
         self.assertEqual(store.state["adspower_profile_id"], "")
         self.assertEqual(adspower.deleted, ["k1del2"])
 

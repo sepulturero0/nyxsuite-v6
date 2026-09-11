@@ -128,11 +128,12 @@
       </div>
 
       <div class="toggle-row">
-        <span class="toggle-text">Lock in G5 <span class="muted">(keeps SnapBoard email provider on G5 after refresh)</span></span>
-        <label class="toggle-switch" for="lockG5Toggle">
-          <input id="lockG5Toggle" type="checkbox">
-          <span class="toggle-slider" aria-hidden="true"></span>
-        </label>
+        <label class="toggle-text" for="emailProviderLock">Email provider lock <span class="muted">(keeps SnapBoard provider after refresh)</span></label>
+        <select id="emailProviderLock" class="input">
+          <option value="am">AM</option>
+          <option value="g5">G5</option>
+          <option value="5m">5M</option>
+        </select>
       </div>
 
       <div class="toggle-row">

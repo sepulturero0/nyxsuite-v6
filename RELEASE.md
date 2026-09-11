@@ -7,6 +7,23 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.5
+
+- Nyxify SnapBoard provider lock now supports AM, G5, and 5M across the
+  extension popup, options page, and SnapBoard page automation.
+- Added Nyxify Proxy Type with Off, SOCKS5, and HTTP options. Off keeps the
+  existing any-proxy behavior; SOCKS5 and HTTP rotate until the row shows the
+  requested proxy type.
+- Account-creation blocker cleanup now uses the normal SnapBoard proxy rotation
+  request path after deleting the failed AdsPower profile and clearing the
+  SnapBoard AdsPower ID.
+- Nyxify web and extension config controls are grouped more clearly, including
+  the new provider and proxy-type controls.
+- Provider selections no longer bounce back to stale runner config when the
+  SnapBoard page or extension status refreshes.
+- Added focused regression coverage for provider locks, proxy-type persistence,
+  SnapBoard rotation payloads, and failed-profile retry cleanup.
+
 ## NyxSuite v6.7.4
 
 - Bitmoji outfit selection now scans deeper through the outfit panel before

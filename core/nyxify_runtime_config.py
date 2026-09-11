@@ -71,6 +71,7 @@ DEFAULTS = {
     "proxy_checker_enabled": True,
     "proxy_priority_enabled": False,
     "proxy_priority_patterns": [],
+    "proxy_type": "off",
     "push_adspower_id_enabled": True,
     "full_auto_mode_enabled": False,
     "continuous_mode_enabled": False,
@@ -99,6 +100,7 @@ DEFAULTS = {
 }
 
 VERIFICATION_PRIORITIES = {"email", "phone", "auto"}
+PROXY_TYPES = {"off", "socks5", "http"}
 
 
 def _safe_int(value, default):
@@ -140,6 +142,11 @@ def _safe_bool(value, default):
 def _safe_verification_priority(value, default="auto"):
     normalized = str(value or "").strip().lower()
     return normalized if normalized in VERIFICATION_PRIORITIES else default
+
+
+def _safe_proxy_type(value, default="off"):
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in PROXY_TYPES else default
 
 
 def _safe_score(value, default, lo=1, hi=100):
@@ -200,6 +207,7 @@ def load_nyxify_config():
             DEFAULTS["proxy_priority_enabled"],
         ),
         "proxy_priority_patterns": _safe_proxy_patterns(raw.get("proxy_priority_patterns")),
+        "proxy_type": _safe_proxy_type(raw.get("proxy_type"), DEFAULTS["proxy_type"]),
         "push_adspower_id_enabled": _safe_bool(
             raw.get("push_adspower_id_enabled"),
             DEFAULTS["push_adspower_id_enabled"],
@@ -296,6 +304,10 @@ def save_nyxify_config(updates):
             _safe_proxy_patterns(updates.get("proxy_priority_patterns"))
             if "proxy_priority_patterns" in updates
             else current["proxy_priority_patterns"]
+        ),
+        "proxy_type": _safe_proxy_type(
+            updates.get("proxy_type", current["proxy_type"]),
+            current["proxy_type"],
         ),
         "push_adspower_id_enabled": _safe_bool(
             updates.get("push_adspower_id_enabled"),
