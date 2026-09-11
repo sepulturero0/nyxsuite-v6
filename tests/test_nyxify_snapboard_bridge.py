@@ -544,10 +544,17 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("function findRedoPhoneButton(rowId)", content)
         self.assertIn("function readRedoCooldownSeconds(button)", content)
         self.assertIn("function isRedoOnCooldown(button)", content)
+        self.assertIn("var redoRefreshStateByKey = Object.create(null);", content)
+        self.assertIn("function redoStateKey", content)
+        self.assertIn("REDO_COOLDOWN_INTERNAL_MS = 65000", content)
+        self.assertIn("memory.cooldownUntil", content)
+        self.assertIn("SNAPBOARD_REDO_STATE_KEY", content)
+        self.assertIn("await loadRedoRefreshMemory(stateKey)", content)
+        self.assertIn("await persistRedoRefreshMemory()", content)
         self.assertIn("async function waitForRedoReady(", content)
         # Both reorder paths route through the cooldown wait.
-        self.assertIn("waitForRedoReady(function () { return findRedoEmailButton(rowId); })", content)
-        self.assertIn("waitForRedoReady(function () { return findRedoPhoneButton(rowId); })", content)
+        self.assertIn("waitForRedoReady(function () { return findRedoEmailButton(rowId); }, null, redoStateKey(rowId, \"email\"))", content)
+        self.assertIn("waitForRedoReady(function () { return findRedoPhoneButton(rowId); }, null, redoStateKey(rowId, \"phone\"))", content)
 
     def test_content_script_types_stored_login_credentials(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
@@ -655,6 +662,7 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
     def test_background_passes_full_verification_timeout_to_snapboard(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         self.assertIn("const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;", background)
+        self.assertIn("const MAX_VERIFICATION_BRIDGE_BATCH = 3;", background)
 
         bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
             "function ensureBridgeLoop()", 1
@@ -664,6 +672,21 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
 
         self.assertIn("timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS", otp_block)
         self.assertIn("timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS", sms_block)
+        self.assertIn('collectPendingBridgeRequests("/otp/pending", MAX_VERIFICATION_BRIDGE_BATCH)', bridge_loop)
+        self.assertIn('collectPendingBridgeRequests("/sms/pending", MAX_VERIFICATION_BRIDGE_BATCH)', bridge_loop)
+
+    def test_background_detaches_slow_otp_sms_fetches_from_bridge_loop(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+
+        self.assertIn("const otpFetchesInFlight = new Set();", background)
+        self.assertIn("const smsFetchesInFlight = new Set();", background)
+        self.assertIn("startDetachedSnapboardFetch(otpFetchesInFlight", bridge_loop)
+        self.assertIn("startDetachedSnapboardFetch(smsFetchesInFlight", bridge_loop)
+        self.assertNotIn("const otpResponse = await runVerificationCodeFetch", bridge_loop)
+        self.assertNotIn("const smsResponse = await runVerificationCodeFetch", bridge_loop)
 
     def test_background_does_not_drop_new_port_after_snapboard_reload(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")

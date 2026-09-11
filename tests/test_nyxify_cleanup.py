@@ -186,9 +186,10 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(rotation_calls[0].get("priority_patterns"), ["23.54"])
         self.assertEqual(rotation_calls[0].get("blocked_patterns"), ["45.10"])
 
-    def test_cleanup_requeues_pending_even_when_proxy_rotation_fails(self):
-        # A failed SnapBoard rotation must NOT strand the row in RUNNING — the row
-        # is requeued PENDING so the next cycle creates another (and rotates then).
+    def test_cleanup_waits_for_forced_proxy_rotation_when_rotation_fails(self):
+        # A failed SnapBoard rotation must not allow the replacement account to
+        # reuse the same dirty proxy. Keep the row claimable, but mark it so the
+        # next cycle must rotate before profile creation.
         store = FakeStore()
         store.state["status"] = "RUNNING"
         adspower = FakeAdsPower()
@@ -207,8 +208,35 @@ class NyxifyCleanupTests(unittest.TestCase):
             )
 
         self.assertEqual(store.state["status"], "PENDING")
+        self.assertEqual(store.state["last_step"], nyxify_runner.WAITING_FOR_FORCED_PROXY_ROTATION_STEP)
         self.assertEqual(store.state["adspower_profile_id"], "")
         self.assertEqual(adspower.deleted, ["k1del2"])
+
+    def test_forced_proxy_rotation_rejects_same_proxy_before_create(self):
+        store = FakeStore()
+        store.state["status"] = "RUNNING"
+
+        async def rotation_same(*_args, **_kwargs):
+            return "1.2.3.4:1:u:p"
+
+        with mock.patch.object(nyxify_runner, "_request_snapboard_rotation", rotation_same), \
+             mock.patch.object(nyxify_runner, "load_nyxify_config", return_value={}):
+            ok, proxy = asyncio.run(
+                nyxify_runner._force_proxy_rotation_before_create(
+                    task_id=2111,
+                    task_row_key="row-force",
+                    store=store,
+                    proxy_value="1.2.3.4:1:u:p",
+                    blocked_proxies=[],
+                    max_rotation_attempts=1,
+                )
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(proxy, "1.2.3.4:1:u:p")
+        self.assertEqual(store.state["status"], "PENDING")
+        self.assertEqual(store.state["last_step"], nyxify_runner.WAITING_FOR_FORCED_PROXY_ROTATION_STEP)
+        self.assertEqual(store.proxy_updates, [])
 
     def test_cleanup_does_not_crash_without_row_key(self):
         # Latent UnboundLocalError guard: refreshed_proxy must be defined even when

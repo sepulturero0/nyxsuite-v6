@@ -548,7 +548,7 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(any(update.get("status") == "DONE" for _task_id, update in store.updates))
         self.assertTrue(any(
             update.get("status") == "PENDING"
-            and update.get("last_step") == "retry_pending_after_awaiting_welcome_username"
+            and update.get("last_step") == nyxify_runner.WAITING_FOR_FORCED_PROXY_ROTATION_STEP
             for _task_id, update in store.updates
         ))
 

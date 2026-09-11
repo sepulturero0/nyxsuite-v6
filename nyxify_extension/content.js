@@ -6,6 +6,8 @@
   // pushed around. The options page writes it; auto-login types it when the
   // board is signed out and the fields aren't already filled.
   var SNAPBOARD_LOGIN_KEY = "nyxifySnapboardLogin";
+  var SNAPBOARD_VERIFICATION_STATE_KEY = "nyxifySnapboardVerificationState";
+  var SNAPBOARD_REDO_STATE_KEY = "nyxifySnapboardRedoState";
   var otpPollTimer = null;
   var otpPollInFlight = false;
   var proxyRotatePollTimer = null;
@@ -34,10 +36,14 @@
   // the wait follows that timer, but never beyond this safety cap.
   var OTP_FETCH_MAX_TIMEOUT_MS = 180000;
   var OTP_COUNTDOWN_GRACE_MS = 1000;
+  var VERIFICATION_CHECK_ACTIVE_MS = 125000;
+  var verificationCheckStateByKey = Object.create(null);
   var EMAIL_FETCH_TIMEOUT_MS = 45000;
   // SnapBoard's "get new email / number" (redo) buttons enforce a ~60s cooldown
   // after each order. Wait a little past that so a reorder click isn't a no-op.
   var REDO_COOLDOWN_MAX_WAIT_MS = 72000;
+  var REDO_COOLDOWN_INTERNAL_MS = 65000;
+  var redoRefreshStateByKey = Object.create(null);
   var OTP_CLICK_RETRY_INTERVAL_MS = 2500;
   var VERIFICATION_RECLICK_INTERVAL_MS = 10000;
   var VERIFICATION_RECLICK_LIMIT = 3;
@@ -81,6 +87,109 @@
       var ms = performance.now() - start;
       console.debug("[nyxify-timing] " + label + " | " + ms.toFixed(1) + " ms");
     } catch (e) { /* timing is best-effort */ }
+  }
+
+  function verificationStateKey(rowId, kind) {
+    return String(kind || "code") + ":" + String(rowId || "").trim();
+  }
+
+  function verificationCheckMemory(rowId, kind) {
+    var key = verificationStateKey(rowId, kind);
+    if (!verificationCheckStateByKey[key]) {
+      verificationCheckStateByKey[key] = {
+        activeUntil: 0,
+        lastClickAt: 0,
+        lastMode: "",
+        reason: "",
+      };
+    }
+    return verificationCheckStateByKey[key];
+  }
+
+  function chromeLocalGet(key) {
+    return new Promise(function (resolve) {
+      try {
+        chrome.storage.local.get(key, function (result) {
+          resolve((result && result[key]) || {});
+        });
+      } catch (_error) {
+        resolve({});
+      }
+    });
+  }
+
+  function chromeLocalSet(key, value) {
+    return new Promise(function (resolve) {
+      try {
+        var payload = {};
+        payload[key] = value || {};
+        chrome.storage.local.set(payload, function () { resolve(true); });
+      } catch (_error) {
+        resolve(false);
+      }
+    });
+  }
+
+  function pruneExpiringStateMap(map, now) {
+    var pruned = {};
+    Object.keys(map || {}).forEach(function (key) {
+      var item = map[key] || {};
+      var expiresAt = Math.max(
+        Number(item.activeUntil || 0),
+        Number(item.cooldownUntil || 0)
+      );
+      if (expiresAt && expiresAt >= now - 5000) {
+        pruned[key] = item;
+      }
+    });
+    return pruned;
+  }
+
+  async function loadVerificationCheckMemory(rowId, kind) {
+    var key = verificationStateKey(rowId, kind);
+    var stored = pruneExpiringStateMap(await chromeLocalGet(SNAPBOARD_VERIFICATION_STATE_KEY), Date.now());
+    verificationCheckStateByKey = stored;
+    return verificationCheckMemory(rowId, kind);
+  }
+
+  async function persistVerificationCheckMemory() {
+    verificationCheckStateByKey = pruneExpiringStateMap(verificationCheckStateByKey, Date.now());
+    await chromeLocalSet(SNAPBOARD_VERIFICATION_STATE_KEY, verificationCheckStateByKey);
+  }
+
+  function redoStateKey(rowId, kind) {
+    return String(kind || "email") + ":" + String(rowId || "").trim();
+  }
+
+  function redoRefreshMemory(key) {
+    var normalizedKey = String(key || "").trim();
+    if (!normalizedKey) {
+      return { cooldownUntil: 0 };
+    }
+    if (!redoRefreshStateByKey[normalizedKey]) {
+      redoRefreshStateByKey[normalizedKey] = { cooldownUntil: 0, lastClickAt: 0 };
+    }
+    return redoRefreshStateByKey[normalizedKey];
+  }
+
+  async function loadRedoRefreshMemory(key) {
+    var stored = pruneExpiringStateMap(await chromeLocalGet(SNAPBOARD_REDO_STATE_KEY), Date.now());
+    redoRefreshStateByKey = stored;
+    return redoRefreshMemory(key);
+  }
+
+  async function persistRedoRefreshMemory() {
+    redoRefreshStateByKey = pruneExpiringStateMap(redoRefreshStateByKey, Date.now());
+    await chromeLocalSet(SNAPBOARD_REDO_STATE_KEY, redoRefreshStateByKey);
+  }
+
+  function markRedoRefreshClicked(key) {
+    var memory = redoRefreshMemory(key);
+    memory.lastClickAt = Date.now();
+    memory.cooldownUntil = Math.max(
+      Number(memory.cooldownUntil || 0),
+      memory.lastClickAt + REDO_COOLDOWN_INTERNAL_MS
+    );
   }
 
   function toArray(nodeList) {
@@ -1085,15 +1194,31 @@
   function _authCheckState(rowId, kind) {
     var rowEl = getRowEl(rowId);
     if (!rowEl) {
-      return { rowPresent: false, candidates: 0, clickable: 0, button: null };
+      return { rowPresent: false, candidates: 0, clickable: 0, button: null, mode: "missing", countdown_ms: 0 };
     }
     var candidates = _authCheckCandidates(rowEl, kind, rowId);
     var clickable = candidates.filter(function (node) { return _isClickableControl(node); });
+    var countdownMs = readAuthCheckCountdownMs(rowId, kind);
+    var texts = candidates.concat([rowEl]).map(function (node) {
+      return normalizeText((node && (node.innerText || node.textContent)) || "");
+    }).join(" ").toLowerCase();
+    var mode = "missing";
+    if (/\bretry\b/.test(texts)) {
+      mode = "retry";
+    } else if (countdownMs > 0) {
+      mode = "waiting";
+    } else if (clickable.length > 0) {
+      mode = "ready";
+    } else if (candidates.length > 0) {
+      mode = "disabled";
+    }
     return {
       rowPresent: true,
       candidates: candidates.length,
       clickable: clickable.length,
       button: clickable[0] || null,
+      mode: mode,
+      countdown_ms: countdownMs,
     };
   }
 
@@ -1146,6 +1271,15 @@
 
   function _countdownMsFromText(value) {
     var text = normalizeText(value);
+    var minutes = 0;
+    var seconds = 0;
+    var minuteMatch = text.match(/\b(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b/i);
+    var secondMatch = text.match(/\b(\d{1,2})\s*(?:s|sec|secs|second|seconds)\b/i);
+    if (minuteMatch) {
+      minutes = parseInt(minuteMatch[1], 10);
+      seconds = secondMatch ? parseInt(secondMatch[1], 10) : 0;
+      return Math.max(0, (minutes * 60 + seconds) * 1000);
+    }
     var match = text.match(/\b(\d{1,4})\s*(?:s|sec|secs|second|seconds)\b/i);
     if (match) {
       return Math.max(0, parseInt(match[1], 10) * 1000);
@@ -1300,10 +1434,25 @@
   // actually lands. Re-locates the button each tick because SnapBoard re-renders
   // the row while the countdown ticks. Returns the ready button, or the latest
   // one found (possibly still on cooldown) once the cap elapses.
-  async function waitForRedoReady(findButton, maxWaitMs) {
+  async function waitForRedoReady(findButton, maxWaitMs, stateKey) {
     var deadline = Date.now() + (maxWaitMs || REDO_COOLDOWN_MAX_WAIT_MS);
+    var memory = await loadRedoRefreshMemory(stateKey);
     var button = findButton();
-    while (button && isRedoOnCooldown(button) && Date.now() < deadline) {
+    while (Date.now() < deadline) {
+      var now = Date.now();
+      if (now < Number(memory.cooldownUntil || 0)) {
+        await sleep(Math.min(1000, Math.max(250, Number(memory.cooldownUntil || 0) - now)));
+        button = findButton();
+        continue;
+      }
+      if (!button || !isRedoOnCooldown(button)) {
+        break;
+      }
+      var cooldownSeconds = readRedoCooldownSeconds(button);
+      if (cooldownSeconds > 0) {
+        memory.cooldownUntil = Math.max(memory.cooldownUntil || 0, Date.now() + cooldownSeconds * 1000);
+        await persistRedoRefreshMemory();
+      }
       await sleep(1000);
       button = findButton();
     }
@@ -1458,8 +1607,12 @@
       // Reorder path: the redo button carries a ~60s cooldown. Wait it out so
       // the click actually orders a new email instead of no-opping while
       // disabled (the "email never changed → account failed" symptom).
-      var redoEmail = await waitForRedoReady(function () { return findRedoEmailButton(rowId); });
+      var redoEmail = await waitForRedoReady(function () { return findRedoEmailButton(rowId); }, null, redoStateKey(rowId, "email"));
       clicked = redoEmail ? clickElement(redoEmail) : false;
+      if (clicked) {
+        markRedoRefreshClicked(redoStateKey(rowId, "email"));
+        await persistRedoRefreshMemory();
+      }
       if (!clicked) {
         // Fall back to Get Email so we still order one instead of failing.
         clicked = clickGetEmailButton(rowId);
@@ -1516,8 +1669,12 @@
       // Reorder path: the redo button carries a ~60s cooldown. Wait it out so
       // the click actually orders a new number instead of no-opping while
       // disabled (the "phone never changed → account failed" symptom).
-      var redoPhone = await waitForRedoReady(function () { return findRedoPhoneButton(rowId); });
+      var redoPhone = await waitForRedoReady(function () { return findRedoPhoneButton(rowId); }, null, redoStateKey(rowId, "phone"));
       clicked = redoPhone ? clickElement(redoPhone) : false;
+      if (clicked) {
+        markRedoRefreshClicked(redoStateKey(rowId, "phone"));
+        await persistRedoRefreshMemory();
+      }
       if (!clicked) {
         // Fall back to Request Number so we still order one instead of failing.
         clicked = clickGetPhoneButton(rowId);
@@ -2241,17 +2398,28 @@
   async function clickAuthCodeUntilFound(rowId, timeoutMs, sms) {
     var startedAt = Date.now();
     var diagStart = performance.now();
+    var kind = sms ? "sms" : "code";
+    var memory = await loadVerificationCheckMemory(rowId, kind);
     var fallbackTimeoutMs = Math.max(1000, Number(timeoutMs) || OTP_FETCH_TIMEOUT_MS);
     var hardDeadline = startedAt + Math.max(fallbackTimeoutMs, OTP_FETCH_MAX_TIMEOUT_MS);
-    var deadline = startedAt + fallbackTimeoutMs;
+    var deadline = Math.max(startedAt + fallbackTimeoutMs, Number(memory.activeUntil || 0));
     var observedCountdownSeconds = -1;
     var observedCountdownDeadline = 0;
     var popupSnapshot = captureOtpPopupSnapshot();
     var previousCode = sms ? getSmsTextForRow(rowId) : getOtpTextForRow(rowId);
-    var lastClickState = { rowPresent: false, candidates: 0, clickable: 0 };
+    var lastClickState = { rowPresent: false, candidates: 0, clickable: 0, mode: "missing", countdown_ms: 0 };
     var clickAttempts = 0;
     var successfulClicks = 0;
     var nextAllowedClickAt = startedAt;
+    var memoryDirty = false;
+    function rememberActiveWindow(ms, reason) {
+      var now = Date.now();
+      var activeUntil = Math.min(hardDeadline, now + Math.max(1000, Number(ms) || 0));
+      memory.activeUntil = Math.max(Number(memory.activeUntil || 0), activeUntil);
+      memory.reason = reason || memory.reason || "";
+      deadline = Math.max(deadline, memory.activeUntil);
+      memoryDirty = true;
+    }
     function observeCountdown(force) {
       var countdownMs = readAuthCheckCountdownMs(rowId, sms ? "sms" : "code");
       if (!countdownMs) {
@@ -2271,16 +2439,44 @@
           now + countdownMs + OTP_COUNTDOWN_GRACE_MS
         );
         deadline = Math.max(deadline, observedCountdownDeadline);
+        rememberActiveWindow(countdownMs + OTP_COUNTDOWN_GRACE_MS, "visible_countdown");
       }
     }
 
     observeCountdown(false);
     while (Date.now() < deadline) {
-      var shouldClick = clickAttempts < VERIFICATION_RECLICK_LIMIT
+      var authState = _authCheckState(rowId, kind);
+      lastClickState = authState || lastClickState;
+      memory.lastMode = authState.mode || memory.lastMode || "";
+      memoryDirty = true;
+      var retryReady = authState.mode === "retry";
+      var internalWaitActive = Date.now() < Number(memory.activeUntil || 0) && !retryReady;
+      var shouldClick = !internalWaitActive
+        && authState.mode !== "waiting"
+        && authState.mode !== "disabled"
+        && authState.mode !== "missing"
+        && clickAttempts < VERIFICATION_RECLICK_LIMIT
         && successfulClicks < VERIFICATION_RECLICK_LIMIT
         && Date.now() >= nextAllowedClickAt;
       var latestCode = "";
-      if (shouldClick) {
+      if (authState.mode === "waiting") {
+        observeCountdown(true);
+        latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+          rowId,
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
+          popupSnapshot,
+          previousCode
+        );
+      } else if (internalWaitActive) {
+        // A SnapBoard page refresh can hide the visible 0→2min counter. Keep
+        // waiting on the bot-side active window instead of duplicate-clicking.
+        latestCode = await (sms ? waitForSmsCode : waitForOtpCode)(
+          rowId,
+          Math.min(OTP_CLICK_RETRY_INTERVAL_MS, Math.max(500, deadline - Date.now())),
+          popupSnapshot,
+          previousCode
+        );
+      } else if (shouldClick) {
         var clickResult = sms ? clickCheckSms(rowId) : clickCheckCode(rowId);
         var clicked = !!(clickResult && clickResult.clicked);
         lastClickState = (clickResult && clickResult.state) || lastClickState;
@@ -2288,7 +2484,11 @@
         nextAllowedClickAt = Date.now() + VERIFICATION_RECLICK_INTERVAL_MS;
         if (clicked) {
           successfulClicks += 1;
+          memory.lastClickAt = Date.now();
+          rememberActiveWindow(VERIFICATION_CHECK_ACTIVE_MS, lastClickState.mode === "retry" ? "retry_clicked" : "clicked");
           observeCountdown(true);
+          await persistVerificationCheckMemory();
+          memoryDirty = false;
           diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         }
       } else if (
@@ -2325,6 +2525,10 @@
       }
       if (latestCode) {
         diagTiming(sms ? "sms.code_retrieval" : "otp.code_retrieval", diagStart);
+        memory.activeUntil = 0;
+        memory.reason = "code_found";
+        await persistVerificationCheckMemory();
+        memoryDirty = false;
         return { ok: true, code: latestCode };
       }
       if (hasNoPendingOrderToast(sms ? "phone" : "email")) {
@@ -2337,6 +2541,10 @@
         };
       }
       observeCountdown(false);
+      if (memoryDirty) {
+        await persistVerificationCheckMemory();
+        memoryDirty = false;
+      }
     }
     var controlMissing = lastClickState.rowPresent && Number(lastClickState.candidates || 0) === 0;
     var controlUnresponsive = lastClickState.rowPresent
@@ -2350,7 +2558,9 @@
         + ", successful_clicks=" + successfulClicks
         + ", row_present=" + (lastClickState.rowPresent ? "1" : "0")
         + ", candidates=" + Number(lastClickState.candidates || 0)
-        + ", clickable=" + Number(lastClickState.clickable || 0) + "]",
+        + ", clickable=" + Number(lastClickState.clickable || 0)
+        + ", mode=" + String(lastClickState.mode || "")
+        + ", countdown_ms=" + Number(lastClickState.countdown_ms || 0) + "]",
     };
   }
 

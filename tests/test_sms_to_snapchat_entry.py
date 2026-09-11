@@ -48,6 +48,34 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("successfulClicks < VERIFICATION_RECLICK_LIMIT", content)
         self.assertIn("Date.now() >= nextAllowedClickAt", content)
 
+    def test_check_code_and_sms_use_internal_deadline_when_page_refresh_hides_countdown(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        retrieval_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split(
+            "async function rotateProxyUntilChanged", 1
+        )[0]
+
+        self.assertIn("var verificationCheckStateByKey = Object.create(null);", content)
+        self.assertIn("SNAPBOARD_VERIFICATION_STATE_KEY", content)
+        self.assertIn("async function loadVerificationCheckMemory", content)
+        self.assertIn("await persistVerificationCheckMemory()", retrieval_fn)
+        self.assertIn("function verificationStateKey", content)
+        self.assertIn("VERIFICATION_CHECK_ACTIVE_MS = 125000", content)
+        self.assertIn("authState.mode === \"waiting\"", retrieval_fn)
+        self.assertIn("memory.activeUntil", retrieval_fn)
+        self.assertIn("Date.now() < Number(memory.activeUntil || 0)", retrieval_fn)
+        self.assertIn("authState.mode === \"retry\"", retrieval_fn)
+        self.assertIn("countdown_ms=", retrieval_fn)
+
+    def test_countdown_parser_accepts_minute_labels(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        countdown_fn = content.split("function _countdownMsFromText", 1)[1].split(
+            "function _countdownMsFromNode", 1
+        )[0]
+
+        self.assertIn("minuteMatch", countdown_fn)
+        self.assertIn("min|mins|minute|minutes", countdown_fn)
+        self.assertIn("minutes * 60 + seconds", countdown_fn)
+
     def test_check_controls_do_not_reactivate_disabled_rows(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
 

@@ -28,6 +28,8 @@ class _StubOutfit(BitmojiOutfitMixin):
         self.all_fail = all_fail
         self.clicked_items = []
         self.catalog_fallback_calls = []
+        self.panel_scroll_states = []
+        self.panel_scrolls = []
 
     async def wait_if_paused(self):
         return None
@@ -49,6 +51,12 @@ class _StubOutfit(BitmojiOutfitMixin):
     async def wait_for_category_items(self, ctx=None, timeout=None):
         return None
 
+    async def scroll_editor_panel(self, ctx, direction="down", amount=None):
+        self.panel_scrolls.append({"direction": direction, "amount": amount})
+        if self.panel_scroll_states:
+            return self.panel_scroll_states.pop(0)
+        return {"found": True, "moved": False, "atTop": False, "atBottom": True}
+
     async def _click_any_item_in_open_category(self, category_key, param, profile_id, blocked_ids=None):
         self.catalog_fallback_calls.append((category_key, param, tuple(blocked_ids or ())))
         return True
@@ -63,10 +71,42 @@ class OutfitFallbackTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self._sleep.stop()
 
-    def test_outfit_panel_scan_is_limited_to_three_passes(self):
+    def test_outfit_panel_scan_is_not_limited_to_three_passes(self):
         source = Path(outfit_flow.__file__).read_text(encoding="utf-8")
-        self.assertIn("_OUTFIT_PANEL_SCAN_STEPS = 3", source)
-        self.assertIn("for attempt_index in range(_OUTFIT_PANEL_SCAN_STEPS):", source)
+        self.assertIn("_OUTFIT_PANEL_SCAN_MAX_STEPS", source)
+        self.assertNotIn("_OUTFIT_PANEL_SCAN_STEPS = 3", source)
+        self.assertNotIn("for attempt_index in range(_OUTFIT_PANEL_SCAN_STEPS):", source)
+
+    async def test_exact_outfit_item_deep_in_panel_is_clicked_before_fallback(self):
+        class DeepPanelContext:
+            def __init__(self, match_on_evaluate):
+                self.evaluate_calls = 0
+                self.match_on_evaluate = match_on_evaluate
+
+            async def evaluate(self, *_args, **_kwargs):
+                self.evaluate_calls += 1
+                return self.evaluate_calls >= self.match_on_evaluate
+
+        stub = _StubOutfit()
+        stub.panel_scroll_states = [
+            {"found": True, "moved": True, "atTop": False, "atBottom": False},
+            {"found": True, "moved": True, "atTop": False, "atBottom": False},
+            {"found": True, "moved": True, "atTop": False, "atBottom": False},
+            {"found": True, "moved": True, "atTop": False, "atBottom": False},
+            {"found": True, "moved": True, "atTop": False, "atBottom": True},
+        ]
+        ctx = DeepPanelContext(match_on_evaluate=6)
+
+        ok = await stub.click_outfit_item(
+            ctx,
+            "xpath=//img[contains(@src,'top=chosen')]",
+            profile_id="prof1",
+            selector_key="items.top",
+        )
+
+        self.assertTrue(ok)
+        self.assertGreaterEqual(ctx.evaluate_calls, 6)
+        self.assertGreaterEqual(len(stub.panel_scrolls), 5)
 
     async def test_pool_fallback_selects_another_pool_item(self):
         pool = ["top=chosen", "top=alt1", "top=alt2"]

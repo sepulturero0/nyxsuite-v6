@@ -70,6 +70,8 @@ NYXIFY_COMPLETION_SOUND_ENABLED = str(os.getenv("NYXIFY_COMPLETION_SOUND", "1"))
 }
 MAX_PROXY_ROTATION_ATTEMPTS = 30
 PRIORITY_PREFETCH_MAX_ROWS = 5
+WAITING_FOR_FORCED_PROXY_ROTATION_STEP = "waiting_for_forced_proxy_rotation"
+FORCING_PROXY_ROTATION_STEP = "forcing_proxy_rotation_before_create"
 
 _LOCAL_API_TOKEN_CACHED = False
 
@@ -843,6 +845,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
     row_key = str((task or {}).get("row_key") or "").strip()
     normalized_reason = str(cleanup_reason or failure_last_step or "failed signup").strip()
     normalized_failure_step = str(failure_last_step or "profile_creation_failed").strip()
+    old_proxy = str((task or {}).get("proxy_address") or (task or {}).get("ip_address") or "").strip()
     delete_confirmed = not profile_id
     cleanup_result = None
 
@@ -904,7 +907,7 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
             priority_patterns=priority_patterns or None,
             blocked_patterns=blocked_patterns or None,
         ) or ""
-        if refreshed_proxy:
+        if refreshed_proxy and refreshed_proxy != old_proxy:
             store.update_task_proxy(task_id, refreshed_proxy)
             logger.info(
                 f"Task {task_id}: refreshed SnapBoard proxy once after {normalized_reason} for {row_key}."
@@ -912,20 +915,18 @@ async def _cleanup_failed_created_profile(task_id, task, store, adspower, create
         else:
             logger.warning(
                 f"Task {task_id}: SnapBoard proxy did not refresh after {normalized_reason} for {row_key}; "
-                f"requeuing anyway — the next attempt re-checks and rotates the proxy before creating."
+                f"next attempt must force a different proxy before creating a replacement account."
             )
+            refreshed_proxy = ""
 
-    # The failed profile is deleted, so always requeue the row to PENDING and
-    # create another. We do NOT gate the requeue on the one-shot rotation above
-    # (that is only a head start): the next cycle's _rotate_proxy_until_usable
-    # re-validates and rotates the proxy itself. Gating here would strand the row
-    # in RUNNING forever whenever a single SnapBoard rotation click didn't land
-    # (there is no stale-RUNNING reaper), silently losing the account.
+    # The failed profile is deleted, so requeue the row to PENDING. If the
+    # one-shot rotation did not return a different proxy, keep it claimable but
+    # mark the next cycle to force rotation before another account is created.
     store.update_task_state(
         task_id,
         status="PENDING",
         last_step="proxy_refreshed_retry_pending" if refreshed_proxy
-        else f"retry_pending_after_{normalized_failure_step}",
+        else (WAITING_FOR_FORCED_PROXY_ROTATION_STEP if row_key else f"retry_pending_after_{normalized_failure_step}"),
         error="",
         adspower_id="",
         adspower_profile_id="",
@@ -1234,7 +1235,7 @@ async def _request_snapboard_sms(row_key, timeout_seconds=None, expected_phone="
         timeout_seconds=timeout_seconds or SNAPBOARD_VERIFICATION_CODE_TIMEOUT_SECONDS,
         force_new=None,
         extra_payload={"phone": str(expected_phone or "").strip()},
-        allow_dispatch_refresh=False,
+        allow_dispatch_refresh=True,
     )
 
 
@@ -1353,6 +1354,73 @@ async def _run_proxy_check(adspower, proxy_value, proxy_checker_enabled, proxy_c
     return await asyncio.to_thread(adspower.test_proxy_connection, proxy_value)
 
 
+def _task_requires_forced_proxy_rotation(task):
+    last_step = str((task or {}).get("last_step") or "").strip()
+    return (
+        last_step == WAITING_FOR_FORCED_PROXY_ROTATION_STEP
+        or last_step.startswith("retry_pending_after_")
+    )
+
+
+async def _force_proxy_rotation_before_create(
+    task_id,
+    task_row_key,
+    store,
+    proxy_value,
+    blocked_proxies,
+    max_rotation_attempts=MAX_PROXY_ROTATION_ATTEMPTS,
+):
+    old_proxy = str(proxy_value or "").strip()
+    if not task_row_key:
+        return True, old_proxy
+
+    runtime_config = load_nyxify_config()
+    priority_patterns = _priority_patterns_from_config(runtime_config)
+    blocked_patterns = (
+        runtime_config.get("blocked_proxies", blocked_proxies)
+        if runtime_config.get("proxy_blocker_enabled", True)
+        else []
+    )
+
+    store.update_task_state(task_id, status="RUNNING", last_step=FORCING_PROXY_ROTATION_STEP, error="")
+    for attempt in range(1, max(1, int(max_rotation_attempts or 1)) + 1):
+        new_proxy = await _request_snapboard_rotation(
+            task_row_key,
+            timeout_seconds=55,
+            max_clicks=3,
+            priority_patterns=priority_patterns or None,
+            blocked_patterns=blocked_patterns or None,
+        ) or ""
+        normalized_new_proxy = str(new_proxy or "").strip()
+        if (
+            normalized_new_proxy
+            and normalized_new_proxy != old_proxy
+            and not (blocked_patterns and _is_proxy_banned(normalized_new_proxy, blocked_patterns))
+            and not (priority_patterns and not _is_proxy_priority_match(normalized_new_proxy, priority_patterns))
+        ):
+            store.update_task_proxy(task_id, normalized_new_proxy)
+            logger.info(
+                f"Task {task_id}: forced proxy rotation before replacement account succeeded "
+                f"on attempt {attempt}/{max_rotation_attempts}."
+            )
+            return True, normalized_new_proxy
+
+        logger.warning(
+            f"Task {task_id}: forced proxy rotation before replacement account attempt "
+            f"{attempt}/{max_rotation_attempts} did not produce a usable different proxy."
+        )
+        if attempt < max(1, int(max_rotation_attempts or 1)):
+            await asyncio.sleep(min(5.0, 1.0 + attempt * 0.5))
+
+    store.update_task_state(
+        task_id,
+        status="PENDING",
+        last_step=WAITING_FOR_FORCED_PROXY_ROTATION_STEP,
+        error="",
+    )
+    return False, old_proxy
+
+
 async def _rotate_proxy_until_usable(
     task_id,
     task_row_key,
@@ -1449,6 +1517,7 @@ async def _rotate_proxy_until_usable(
 async def process_task(task, store, adspower):
     task_id = task["id"]
     proxy_value = str(task.get("proxy_address") or task.get("ip_address") or "").strip()
+    initial_last_step = str(task.get("last_step") or "").strip()
     username = str(task.get("username") or "").strip()
     email = str(task.get("email") or "").strip()
     signup_password = str(task.get("password") or "").strip()
@@ -1594,6 +1663,21 @@ async def process_task(task, store, adspower):
             if code:
                 logger.info(f"Received SMS OTP for task {task_id} from SnapBoard bridge.")
             return code
+
+        if _task_requires_forced_proxy_rotation({"last_step": initial_last_step}):
+            forced_ok, forced_proxy = await _force_proxy_rotation_before_create(
+                task_id=task_id,
+                task_row_key=task_row_key,
+                store=store,
+                proxy_value=proxy_value,
+                blocked_proxies=blocked_proxies if proxy_blocker_enabled else [],
+            )
+            if not forced_ok:
+                logger.warning(
+                    f"Task {task_id}: waiting for forced proxy rotation before creating a replacement account."
+                )
+                return
+            proxy_value = forced_proxy
 
         proxy_value, proxy_check = await _rotate_proxy_until_usable(
             task_id=task_id,

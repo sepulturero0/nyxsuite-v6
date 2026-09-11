@@ -7,6 +7,27 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.4
+
+- Bitmoji outfit selection now scans deeper through the outfit panel before
+  falling back, so lower-panel configured outfit selectors can be selected
+  instead of being mistaken for retired catalog items.
+- SnapBoard Check Code / Check SMS bridge work now runs detached per row, so one
+  long two-minute verification wait no longer blocks the next pending SMS or OTP
+  request.
+- Check Code / Check SMS handling now tracks ready, waiting/countdown, retry,
+  disabled, and missing states and remembers an internal active window when a
+  SnapBoard page refresh hides the visible counter.
+- Email and phone redo cooldowns now keep an internal cooldown after a refresh
+  click, preventing duplicate reorder clicks when a SnapBoard reload removes the
+  visible 60-second countdown.
+- Failed-account cleanup now requires a different SnapBoard proxy before a
+  replacement account can be created when the first cleanup rotation misses,
+  fails, or returns the same proxy.
+- Added focused regression coverage for deep outfit panel scanning, detached
+  OTP/SMS dispatch, SnapBoard countdown state memory, redo cooldown memory, and
+  forced replacement-account proxy rotation.
+
 ## NyxSuite v6.7.3
 
 - SnapBoard Check Code / Check SMS now uses at most three clicks spaced 10

@@ -33,6 +33,7 @@ const LOCAL_API_TIMEOUT_MS = 4000;
 // request.
 const LOCAL_CONFIG_CACHE_TTL_MS = 3500;
 const VERIFICATION_CODE_FETCH_TIMEOUT_MS = 180000;
+const MAX_VERIFICATION_BRIDGE_BATCH = 3;
 const PROXY_PREP_ROTATE_CLICK_ATTEMPTS = 10;
 const REMOTE_CONFIG_SYNC_INTERVAL_MS = 2000;
 const PROXY_PREP_RETRY_INTERVAL_MS = 5000;
@@ -79,6 +80,8 @@ let scrapeHydrationInFlight = null;
 const snapboardPorts = new Map();
 const emailFetchesInFlight = new Set();
 const phoneFetchesInFlight = new Set();
+const otpFetchesInFlight = new Set();
+const smsFetchesInFlight = new Set();
 const verificationCodeFetchesInFlight = new Set();
 let bridgeLoopPromise = null;
 const popupPorts = new Set();
@@ -2142,51 +2145,59 @@ async function processBridgeActionsOnce() {
   }
 
   // SMS / OTP first: a pending signup verification code must NOT wait behind a
-  // long email/metadata batch. Each stage is wrapped in its own try/catch so one
-  // failed request is logged and the bridge loop keeps going.
+  // long email/metadata batch or another row's two-minute Check Code/SMS wait.
+  // Launch each row as a detached worker so the bridge loop can keep polling.
   try {
-    const otpPayload = await callLocalNyxify("GET", "/otp/pending");
-    const otpRequest = otpPayload && otpPayload.request ? otpPayload.request : null;
-    if (otpRequest && otpRequest.row_key) {
-      const otpResponse = await runVerificationCodeFetch({
-        type: "NYXIFY_SNAPBOARD_ACTION",
-        action: "otp",
-        row_key: otpRequest.row_key,
-        email: otpRequest.email || "",
-        timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
+    const otpRequests = await collectPendingBridgeRequests("/otp/pending", MAX_VERIFICATION_BRIDGE_BATCH);
+    if (otpRequests.length) {
+      otpRequests.forEach((otpRequest) => {
+        startDetachedSnapboardFetch(otpFetchesInFlight, otpRequest.row_key, "OTP", async () => {
+          const otpResponsePromise = runVerificationCodeFetch({
+            type: "NYXIFY_SNAPBOARD_ACTION",
+            action: "otp",
+            row_key: otpRequest.row_key,
+            email: otpRequest.email || "",
+            timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
+          });
+          const otpResponse = await otpResponsePromise;
+          if (otpResponse.ok && otpResponse.code) {
+            await callLocalNyxify("POST", "/otp/result", {
+              row_key: otpRequest.row_key,
+              code: otpResponse.code,
+            });
+          } else if (otpResponse && !otpResponse.ok) {
+            await callLocalNyxify("POST", "/otp/result", {
+              row_key: otpRequest.row_key,
+              code: "",
+              error: otpResponse.error || "SnapBoard OTP fetch failed.",
+            });
+          }
+        });
       });
-      if (otpResponse.ok && otpResponse.code) {
-        await callLocalNyxify("POST", "/otp/result", {
-          row_key: otpRequest.row_key,
-          code: otpResponse.code,
-        });
-      } else if (otpResponse && !otpResponse.ok) {
-        await callLocalNyxify("POST", "/otp/result", {
-          row_key: otpRequest.row_key,
-          code: "",
-          error: otpResponse.error || "SnapBoard OTP fetch failed.",
-        });
-      }
     }
   } catch (error) {
     await appendEventLog(`Nyxify OTP bridge error: ${error.message}`);
   }
 
   try {
-    const smsPayload = await callLocalNyxify("GET", "/sms/pending");
-    const smsRequest = smsPayload && smsPayload.request ? smsPayload.request : null;
-    if (smsRequest && smsRequest.row_key) {
-      const smsResponse = await runVerificationCodeFetch({
-        type: "NYXIFY_SNAPBOARD_ACTION",
-        action: "sms",
-        row_key: smsRequest.row_key,
-        phone: smsRequest.phone || "",
-        timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
-      });
-      await callLocalNyxify("POST", "/sms/result", {
-        row_key: smsRequest.row_key,
-        code: smsResponse.ok ? (smsResponse.code || "") : "",
-        error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
+    const smsRequests = await collectPendingBridgeRequests("/sms/pending", MAX_VERIFICATION_BRIDGE_BATCH);
+    if (smsRequests.length) {
+      smsRequests.forEach((smsRequest) => {
+        startDetachedSnapboardFetch(smsFetchesInFlight, smsRequest.row_key, "SMS", async () => {
+          const smsResponsePromise = runVerificationCodeFetch({
+            type: "NYXIFY_SNAPBOARD_ACTION",
+            action: "sms",
+            row_key: smsRequest.row_key,
+            phone: smsRequest.phone || "",
+            timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
+          });
+          const smsResponse = await smsResponsePromise;
+          await callLocalNyxify("POST", "/sms/result", {
+            row_key: smsRequest.row_key,
+            code: smsResponse.ok ? (smsResponse.code || "") : "",
+            error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
+          });
+        });
       });
     }
   } catch (error) {
