@@ -7,6 +7,21 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.7
+
+- macOS extension-started bridge launches no longer immediately force
+  `launchctl kickstart -k` after `bootstrap`, avoiding launchd's fresh-job
+  respawn throttle. Live verification reduced bridge ON time from about ten
+  seconds to roughly 230 ms on the tested macOS install.
+- Windows source launches now use recorded setup state before running expensive
+  dependency and Playwright Chromium probes, so normal bridge starts skip repeat
+  setup/install work after a valid first setup.
+- Added a one-time Windows bridge live verifier in the source tree for checking
+  OFF/ON timing, endpoint health, process snapshots, and portable launcher log
+  behavior without manual timing.
+- Added focused regression coverage for the macOS launchd path, Windows
+  launcher fast path, and Windows bridge verifier script shape.
+
 ## NyxSuite v6.7.6
 
 - Account/profile failure cleanup now forces a real SnapBoard proxy rotation

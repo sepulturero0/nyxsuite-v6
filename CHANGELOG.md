@@ -1,5 +1,18 @@
 # Changelog
 
+## 6.7.7 - Bridge startup performance fixes
+
+- macOS extension-started bridge launches no longer force a fresh launchd job
+  through `kickstart -k` immediately after `bootstrap`, removing the observed
+  launchd respawn throttle during NyxSuite bridge ON.
+- Windows source launches now trust recorded setup state and matching hashes
+  before falling back to expensive dependency and Playwright Chromium probes,
+  preventing repeated setup/install work during normal bridge starts.
+- Added a Windows bridge live verifier script for one-shot OFF/ON timing,
+  endpoint, process, and portable launcher log evidence collection.
+- Added regression coverage for the launchd start sequence, Windows launcher
+  fast path, and verifier script coverage.
+
 ## 6.7.6 - Forced proxy rotation after failed account creation
 
 - Failed account/profile cleanup now forces an actual SnapBoard proxy rotation
