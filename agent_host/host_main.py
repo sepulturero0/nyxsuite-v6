@@ -115,6 +115,10 @@ def _start_agent_via_launchd(cmd, env, root: Path):
     domain = f"gui/{os.getuid()}"
     service = f"{domain}/{MACOS_LAUNCHD_LABEL}"
     _run_launchctl(["bootout", service])
+    # ``bootstrap`` already starts the job because the plist sets RunAtLoad=True.
+    # A follow-up ``kickstart -k`` kills that fresh instance and forces launchd to
+    # respawn it under its ~10-second throttle, which made the extension's
+    # bridge toggle take ~10 s to come up. Let bootstrap do the start.
     result = _run_launchctl(["bootstrap", domain, str(path)])
     if result.returncode != 0:
         message = (result.stderr or result.stdout or "").strip()
@@ -122,7 +126,6 @@ def _start_agent_via_launchd(cmd, env, root: Path):
             "ok": False,
             "error": f"launchd start failed: {message or result.returncode}",
         }
-    _run_launchctl(["kickstart", "-k", service])
     return {"ok": True, "message": "Agent started via launchd."}
 
 
