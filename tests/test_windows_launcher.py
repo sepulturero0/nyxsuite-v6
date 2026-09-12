@@ -45,6 +45,24 @@ def test_powershell_launcher_logs_actionable_failures():
     assert 'Failure category: "' in launcher
 
 
+def test_powershell_launcher_has_cheap_recorded_setup_fast_path():
+    launcher = (ROOT / "portable_launch_nyx.ps1").read_text(encoding="ascii")
+
+    assert "function Test-RecordedLaunchEnvironmentReady" in launcher
+    assert "Test-RecordedLaunchEnvironmentReady -SkipBrowsers:$SkipBrowserInstall.IsPresent" in launcher
+
+    fast_path_start = launcher.index("function Test-RecordedLaunchEnvironmentReady")
+    fast_path_end = launcher.index("function Remove-VenvIfBroken")
+    fast_path = launcher[fast_path_start:fast_path_end]
+
+    assert "setup_completed" in fast_path
+    assert "requirements_hash" in fast_path
+    assert "venv_python_hash" in fast_path
+    assert "Test-VenvDependenciesAvailable" not in fast_path
+    assert "Test-PlaywrightChromiumAvailable" not in fast_path
+    assert "playwright install chromium" not in fast_path
+
+
 def test_host_main_bat_prefers_and_falls_back_to_nyxsuite_venvs():
     launcher = (ROOT / "agent_host" / "host_main.bat").read_text(encoding="ascii")
 

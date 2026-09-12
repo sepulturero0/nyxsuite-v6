@@ -368,6 +368,59 @@ function Test-LaunchEnvironmentReady {
     return (Test-PlaywrightChromiumAvailable)
 }
 
+function Test-RecordedLaunchEnvironmentReady {
+    param(
+        [switch]$SkipBrowsers
+    )
+
+    if (-not (Test-Path -LiteralPath $venvPython)) {
+        return $false
+    }
+
+    $state = Get-SetupState
+    if (-not $state.setup_completed) {
+        return $false
+    }
+
+    $requirementsHash = Get-FileSha256 -Path $requirementsPath
+    $venvExeHash = Get-FileSha256 -Path $venvPython
+
+    if ($state.requirements_hash -ne $requirementsHash) {
+        return $false
+    }
+
+    if ($state.venv_python_hash -ne $venvExeHash) {
+        return $false
+    }
+
+    if ($SkipBrowsers) {
+        return $true
+    }
+
+    $browserStateKey = "playwright_browsers_for_$requirementsHash"
+    return [bool]$state[$browserStateKey]
+}
+
+function Mark-LaunchEnvironmentReady {
+    param(
+        [switch]$SkipBrowsers
+    )
+
+    $state = Get-SetupState
+    $requirementsHash = Get-FileSha256 -Path $requirementsPath
+    $venvExeHash = Get-FileSha256 -Path $venvPython
+
+    $state.requirements_hash = $requirementsHash
+    $state.venv_python_hash = $venvExeHash
+    if (-not $SkipBrowsers) {
+        $browserStateKey = "playwright_browsers_for_$requirementsHash"
+        $state[$browserStateKey] = $true
+    }
+    $state.setup_completed = $true
+    $state.setup_completed_at = (Get-Date).ToString("o")
+    Save-SetupState -State $state
+}
+
 function Remove-VenvIfBroken {
     if (-not (Test-Path -LiteralPath $venvDir)) {
         return
@@ -768,7 +821,13 @@ try {
     if ((-not $SetupOnly) -and (-not $ForceSetup)) {
         $entryPath = Resolve-EntryScriptPath -Value $EntryScript
 
+        if (Test-RecordedLaunchEnvironmentReady -SkipBrowsers:$SkipBrowserInstall.IsPresent) {
+            $entryExitCode = Start-EntryScript -Path $entryPath -RunInConsole:$Console.IsPresent
+            exit $entryExitCode
+        }
+
         if (Test-LaunchEnvironmentReady -SkipBrowsers:$SkipBrowserInstall.IsPresent) {
+            Mark-LaunchEnvironmentReady -SkipBrowsers:$SkipBrowserInstall.IsPresent
             $entryExitCode = Start-EntryScript -Path $entryPath -RunInConsole:$Console.IsPresent
             exit $entryExitCode
         }
