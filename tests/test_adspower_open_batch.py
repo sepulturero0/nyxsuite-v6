@@ -861,20 +861,20 @@ class ProxyCheckSpeedTests(unittest.TestCase):
 
         ctrl._rect = mock.Mock(return_value=btn)
         ctrl._click_rect = mock.Mock()
-        ctrl._visible_text_blob = mock.Mock(side_effect=["Proxy", "Connection test passed success"])
+        ctrl._visible_text_blob = mock.Mock(return_value="Connection test passed success")
 
         with mock.patch.object(aui.time, "sleep", lambda secs: sleeps.append(secs)):
             self.assertTrue(ctrl._check_proxy())
 
         self.assertEqual(sleeps, [])
-        self.assertEqual(ctrl._visible_text_blob.call_count, 2)
+        ctrl._visible_text_blob.assert_called_once_with()
 
     def test_connection_test_failed_is_a_hard_failure(self):
         ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
         ctrl.config = SimpleNamespace(proxy_check_timeout=10.0, proxy_poll_interval=0.25)
         ctrl._rect = mock.Mock(return_value=_Rect(396, 453, 614, 493))
         ctrl._click_rect = mock.Mock()
-        ctrl._visible_text_blob = mock.Mock(side_effect=["Proxy", "Connection test failed"])
+        ctrl._visible_text_blob = mock.Mock(return_value="Connection test failed")
 
         with mock.patch.object(aui.time, "sleep") as sleep:
             self.assertFalse(ctrl._check_proxy())
@@ -886,17 +886,16 @@ class ProxyCheckSpeedTests(unittest.TestCase):
         ctrl.config = SimpleNamespace(proxy_check_timeout=10.0, proxy_poll_interval=0.25)
         ctrl._rect = mock.Mock(return_value=_Rect(396, 453, 614, 493))
         ctrl._click_rect = mock.Mock()
-        ctrl._visible_text_blob = mock.Mock(side_effect=[
-            "Proxy",
-            "Connection test passed! IP:178.92.186.204 Location:us / virginia / ashburn",
-        ])
+        ctrl._visible_text_blob = mock.Mock(
+            return_value="Connection test passed success! IP:178.92.186.204 Location:us / virginia / ashburn"
+        )
 
         with mock.patch.object(aui.time, "sleep") as sleep:
             self.assertTrue(ctrl._check_proxy())
 
         sleep.assert_not_called()
 
-    def test_missing_verdict_fails_closed(self):
+    def test_missing_verdict_is_assumed_ok(self):
         ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
         ctrl.config = SimpleNamespace(proxy_check_timeout=0.0, proxy_poll_interval=0.03)
         ctrl._rect = mock.Mock(return_value=_Rect(396, 453, 614, 493))
@@ -904,7 +903,7 @@ class ProxyCheckSpeedTests(unittest.TestCase):
         ctrl._visible_text_blob = mock.Mock(return_value="Proxy")
 
         with mock.patch.object(aui.time, "sleep"):
-            self.assertFalse(ctrl._check_proxy())
+            self.assertTrue(ctrl._check_proxy())
 
 
 class ProfileNameFillTests(unittest.TestCase):

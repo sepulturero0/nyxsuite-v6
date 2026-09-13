@@ -7,6 +7,14 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.9
+
+- AdsPower GUI proxy checking now uses the v6.7.7 verdict behavior again while
+  retaining the rest of the v6.7.8 proxy and signup recovery updates.
+- Inconclusive in-form proxy checks no longer fail closed by default, preventing
+  a green or unchanged AdsPower proxy result from being treated as a failed
+  proxy check.
+
 ## NyxSuite v6.7.8
 
 - Nyxify now recognizes a completed Snapchat account even when the user takes
