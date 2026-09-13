@@ -68,7 +68,7 @@ NYXIFY_COMPLETION_SOUND_ENABLED = str(os.getenv("NYXIFY_COMPLETION_SOUND", "1"))
     "no",
     "off",
 }
-MAX_PROXY_ROTATION_ATTEMPTS = 30
+MAX_PROXY_ROTATION_ATTEMPTS = 300
 PRIORITY_PREFETCH_MAX_ROWS = 5
 WAITING_FOR_FORCED_PROXY_ROTATION_STEP = "waiting_for_forced_proxy_rotation"
 FORCING_PROXY_ROTATION_STEP = "forcing_proxy_rotation_before_create"
@@ -194,18 +194,30 @@ def _play_completion_sound():
         logger.warning(f"Could not play Nyxify completion sound: {exc}")
 
 
+def _proxy_host(proxy_value):
+    """Extract only the host from a proxy endpoint or proxy-list value."""
+    normalized = str(proxy_value or "").strip().lower()
+    if not normalized:
+        return ""
+    if "://" in normalized:
+        normalized = normalized.split("://", 1)[1]
+    normalized = normalized.split("/", 1)[0]
+    if "@" in normalized:
+        normalized = normalized.rsplit("@", 1)[1]
+    if normalized.startswith("["):
+        return normalized[1:].split("]", 1)[0]
+    return normalized.split(":", 1)[0]
+
+
 def _is_proxy_banned(proxy_value, banned_proxies):
-    normalized_proxy = str(proxy_value or "").strip().lower()
-    if not normalized_proxy:
+    proxy_host = _proxy_host(proxy_value)
+    if not proxy_host:
         return False
-    proxy_host = normalized_proxy.split(":")[0]
     for banned in banned_proxies or []:
-        normalized_banned = str(banned or "").strip().lower()
-        if not normalized_banned:
+        banned_host = _proxy_host(banned)
+        if not banned_host:
             continue
-        if proxy_host.startswith(normalized_banned) or normalized_proxy.startswith(normalized_banned):
-            return True
-        if normalized_banned in normalized_proxy:
+        if proxy_host.startswith(banned_host):
             return True
     return False
 
@@ -221,10 +233,9 @@ def _normalize_proxy_priority_patterns(priority_patterns):
 
 
 def _is_proxy_priority_match(proxy_value, priority_patterns):
-    normalized_proxy = str(proxy_value or "").strip().lower()
-    if not normalized_proxy:
+    proxy_host = _proxy_host(proxy_value)
+    if not proxy_host:
         return False
-    proxy_host = normalized_proxy.split(":", 1)[0]
     for pattern in _normalize_proxy_priority_patterns(priority_patterns):
         if proxy_host == pattern or proxy_host.startswith(pattern + "."):
             return True
@@ -560,8 +571,14 @@ def _queue_snapboard_rotation_request(
     if normalized_proxy_type in {"socks5", "http"}:
         payload["proxy_type"] = normalized_proxy_type
     try:
-        _post_local_api_response("/proxy/rotate_request", payload, timeout=5)
-        return True
+        response = _post_local_api_response("/proxy/rotate_request", payload, timeout=5)
+        if response is None or getattr(response, "status_code", 200) >= 400:
+            return False
+        try:
+            request_id = str((response.json() or {}).get("request_id") or "").strip()
+        except Exception:
+            request_id = ""
+        return request_id or True
     except Exception as exc:
         logger.warning(f"Could not send proxy rotate request to local API: {exc}")
         return False
@@ -577,22 +594,26 @@ def _request_snapboard_rotation_sync(
     force=False,
 ):
     """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
-    if not _queue_snapboard_rotation_request(
+    request_id = _queue_snapboard_rotation_request(
         row_key,
         max_clicks=max_clicks,
         priority_patterns=priority_patterns,
         blocked_patterns=blocked_patterns,
         proxy_type=proxy_type,
         force=force,
-    ):
+    )
+    if not request_id:
         return None
 
     for _ in range(timeout_seconds):
         time.sleep(1)
         try:
+            params = {"row_key": row_key}
+            if isinstance(request_id, str):
+                params["request_id"] = request_id
             resp = _requests.get(
                 f"{NYXIFY_LOCAL_API_URL}/proxy/rotate_status",
-                params={"row_key": row_key},
+                params=params,
                 timeout=5,
             )
             data = resp.json()
@@ -689,7 +710,7 @@ def _prefetch_proxy_prep_for_pending_rows(
         try:
             queued = _queue_snapboard_rotation_request(
                 row_key,
-                max_clicks=3,
+                max_clicks=1,
                 priority_patterns=normalized_patterns if priority_mismatch else None,
                 blocked_patterns=normalized_blocked if blocked_match else None,
             )
@@ -1437,7 +1458,7 @@ async def _force_proxy_rotation_before_create(
         new_proxy = await _request_snapboard_rotation(
             task_row_key,
             timeout_seconds=55,
-            max_clicks=3,
+            max_clicks=1,
             priority_patterns=priority_patterns or None,
             blocked_patterns=blocked_patterns or None,
             proxy_type=proxy_type,
@@ -1537,13 +1558,12 @@ async def _rotate_proxy_until_usable(
             )
 
         old_proxy = str(proxy_value or "").strip()
-        # Ask SnapBoard to click rotate a few times: escaping a blocked subnet or
-        # a dead proxy often needs more than one swap, and a single click that
-        # lands on another bad proxy would otherwise burn an attempt.
+        # Ask SnapBoard for one rotate click per request. A validation retry
+        # gets its own request, avoiding rapid multi-clicks in the UI.
         new_proxy = await _request_snapboard_rotation(
             task_row_key,
             timeout_seconds=55,
-            max_clicks=3,
+            max_clicks=1,
             priority_patterns=active_priority_patterns if priority_mismatch else None,
             blocked_patterns=active_blocked_proxies if is_blocked else None,
             proxy_type=active_proxy_type,

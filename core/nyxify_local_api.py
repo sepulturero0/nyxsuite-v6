@@ -10,6 +10,9 @@ from core.signup_data import ensure_signup_names_dir, resolve_model_name
 from core.local_http import apply_cors
 
 
+PROXY_ROTATE_DISPATCH_LEASE_SECONDS = 240.0
+
+
 class _ProxyRotateStore:
     """Thread-safe store for proxy rotation requests/results."""
 
@@ -17,6 +20,7 @@ class _ProxyRotateStore:
         self._lock = threading.Lock()
         self._pending = {}   # row_key -> request metadata
         self._results = {}   # row_key -> {"proxy": str|None, "error": str|None, "done_at": float}
+        self._next_request_id = 0
 
     def _normalize_max_clicks(self, max_clicks):
         if max_clicks is None:
@@ -43,10 +47,16 @@ class _ProxyRotateStore:
             # is still rotating. Do not reset dispatched here, or the bridge
             # will dispatch another click for the same row before the result
             # updates the task proxy.
-            if existing and existing.get("dispatched"):
-                return
+            if existing and existing.get("dispatched") and (
+                time.monotonic() - float(existing.get("dispatched_at") or 0.0)
+            ) < PROXY_ROTATE_DISPATCH_LEASE_SECONDS:
+                return existing.get("request_id", "")
+            self._next_request_id += 1
+            request_id = f"proxy:{self._next_request_id}"
             self._pending[row_key] = {
+                "request_id": request_id,
                 "dispatched": False,
+                "dispatched_at": 0.0,
                 "created_at": time.monotonic(),
                 "max_clicks": self._normalize_max_clicks(max_clicks),
                 "force": bool(force),
@@ -55,14 +65,23 @@ class _ProxyRotateStore:
                 "proxy_type": str(proxy_type or "off").strip().lower() if str(proxy_type or "off").strip().lower() in {"off", "socks5", "http"} else "off",
             }
             self._results.pop(row_key, None)
+            return request_id
 
     def pop_pending(self):
         with self._lock:
             for key, val in list(self._pending.items()):
+                if (
+                    val.get("dispatched")
+                    and (time.monotonic() - float(val.get("dispatched_at") or 0.0))
+                    >= PROXY_ROTATE_DISPATCH_LEASE_SECONDS
+                ):
+                    val["dispatched"] = False
                 if not val["dispatched"]:
                     val["dispatched"] = True
+                    val["dispatched_at"] = time.monotonic()
                     return {
                         "row_key": key,
+                        "request_id": val.get("request_id", ""),
                         "max_clicks": val.get("max_clicks"),
                         "force": bool(val.get("force")),
                         "priority_patterns": list(val.get("priority_patterns") or []),
@@ -71,14 +90,28 @@ class _ProxyRotateStore:
                     }
             return None
 
-    def store_result(self, row_key, proxy=None, error=None):
+    def store_result(self, row_key, proxy=None, error=None, request_id=""):
         with self._lock:
-            self._results[row_key] = {"proxy": proxy, "error": error, "done_at": time.monotonic()}
+            pending = self._pending.get(row_key)
+            if pending and request_id and request_id != pending.get("request_id"):
+                return False
+            self._results[row_key] = {
+                "proxy": proxy,
+                "error": error,
+                "request_id": request_id or (pending or {}).get("request_id", ""),
+                "done_at": time.monotonic(),
+            }
             self._pending.pop(row_key, None)
+            return True
 
-    def get_result(self, row_key):
+    def get_result(self, row_key, request_id=""):
         with self._lock:
-            return dict(self._results[row_key]) if row_key in self._results else None
+            result = self._results.get(row_key)
+            if not result:
+                return None
+            if request_id and request_id != result.get("request_id"):
+                return None
+            return dict(result)
 
     def clear(self, row_key):
         with self._lock:
@@ -767,7 +800,7 @@ class NyxifyLocalApiServer:
                 "row": item,
             }
 
-        self.proxy_rotate_store.request(row_key, max_clicks=3, force=True)
+        self.proxy_rotate_store.request(row_key, max_clicks=1, force=True)
         proxy, proxy_error = self._wait_for_value_result(
             self.proxy_rotate_store,
             row_key,
@@ -870,7 +903,7 @@ class NyxifyLocalApiServer:
         if not adspower_clear_ok:
             warnings.append(adspower_clear_error or "SnapBoard AdsPower ID clear was not confirmed.")
 
-        self.proxy_rotate_store.request(row_key, max_clicks=3)
+        self.proxy_rotate_store.request(row_key, max_clicks=1)
         proxy, proxy_error = self._wait_for_value_result(
             self.proxy_rotate_store,
             row_key,
@@ -996,7 +1029,7 @@ class NyxifyLocalApiServer:
             if not result.get("row_key"):
                 continue
             row_key = result["row_key"]
-            self.proxy_rotate_store.request(row_key, max_clicks=3, force=True)
+            self.proxy_rotate_store.request(row_key, max_clicks=1, force=True)
             proxy, proxy_error = self._wait_for_value_result(
                 self.proxy_rotate_store,
                 row_key,
@@ -1363,6 +1396,7 @@ class NyxifyLocalApiServer:
                             {
                                 "ok": True,
                                 "row_key": request.get("row_key"),
+                                "request_id": request.get("request_id", ""),
                                 "max_clicks": request.get("max_clicks"),
                                 "force": bool(request.get("force")),
                                 "priority_patterns": request.get("priority_patterns") or [],
@@ -1377,9 +1411,10 @@ class NyxifyLocalApiServer:
                 if parsed_path.path == "/proxy/rotate_status":
                     params = parse_qs(parsed_path.query)
                     row_key = str((params.get("row_key") or [""])[0]).strip()
-                    result = outer.proxy_rotate_store.get_result(row_key) if row_key else None
+                    request_id = str((params.get("request_id") or [""])[0]).strip()
+                    result = outer.proxy_rotate_store.get_result(row_key, request_id) if row_key else None
                     if result:
-                        self._write_json(200, {"ok": True, "done": True, "proxy": result.get("proxy"), "error": result.get("error")})
+                        self._write_json(200, {"ok": True, "done": True, "proxy": result.get("proxy"), "error": result.get("error"), "request_id": result.get("request_id", "")})
                     else:
                         self._write_json(200, {"ok": True, "done": False})
                     return
@@ -1550,7 +1585,7 @@ class NyxifyLocalApiServer:
                     if not row_key:
                         self._write_json(400, {"ok": False, "error": "Row key is required."})
                         return
-                    outer.proxy_rotate_store.request(
+                    request_id = outer.proxy_rotate_store.request(
                         row_key,
                         max_clicks=max_clicks,
                         force=force,
@@ -1558,17 +1593,23 @@ class NyxifyLocalApiServer:
                         blocked_patterns=blocked_patterns,
                         proxy_type=proxy_type,
                     )
-                    self._write_json(200, {"ok": True, "message": "Proxy rotation requested."})
+                    self._write_json(200, {"ok": True, "message": "Proxy rotation requested.", "request_id": request_id})
                     return
 
                 if self.path == "/proxy/rotate_result":
                     row_key = str(payload.get("row_key", "")).strip()
+                    request_id = str(payload.get("request_id", "")).strip()
                     proxy = str(payload.get("proxy") or "").strip() or None
                     error = str(payload.get("error") or "").strip() or None
                     if not row_key:
                         self._write_json(400, {"ok": False, "error": "Row key is required."})
                         return
-                    outer.proxy_rotate_store.store_result(row_key, proxy=proxy, error=error)
+                    accepted = outer.proxy_rotate_store.store_result(
+                        row_key, proxy=proxy, error=error, request_id=request_id
+                    )
+                    if not accepted:
+                        self._write_json(409, {"ok": False, "error": "Stale proxy rotation result ignored."})
+                        return
                     if proxy:
                         try:
                             tasks = outer.store.list_tasks(limit=500)

@@ -312,9 +312,23 @@ _WINDOW_TITLE_SUBSTR = "AdsPower Browser |"
 # least one letter (e.g. "k1e0lch1"); the No. above it is digits-only.
 _PROFILE_ID_RE = re.compile(r"^(?=.*[a-z])[a-z0-9]{7,9}$")
 
-# Failure words that appear in AdsPower's proxy-check result toast/text.
-_PROXY_FAIL_WORDS = ("failed", "timed out", "timeout", "unavailable", "unable",
-                     "cannot", "error", "invalid", "not available")
+# Failure words that appear in AdsPower's proxy-check result toast/text. Keep
+# the explicit connection-test phrases first: AdsPower has used both a red
+# inline message and a toast for this verdict across Windows/macOS builds.
+_PROXY_FAIL_WORDS = (
+    "connection test failed",
+    "connection failed",
+    "test failed",
+    "failed",
+    "timed out",
+    "timeout",
+    "unavailable",
+    "unable",
+    "cannot",
+    "error",
+    "invalid",
+    "not available",
+)
 
 
 class AdsPowerWindowNotFoundError(RuntimeError):
@@ -369,7 +383,11 @@ class AdsPowerUIConfig:
     # ambiguous/failing case.
     proxy_check_timeout: float = field(
         default_factory=lambda: _env_float("ADSPOWER_UI_PROXY_CHECK_TIMEOUT", 10.0))
-    require_proxy_ok: bool = False     # if True, abort create when proxy check fails
+    # Never create a profile after a failed/inconclusive AdsPower proxy test.
+    # Nyxify supplies a SnapBoard rotator, so a failed check is recoverable by
+    # refilling the form with the next proxy and checking again.
+    require_proxy_ok: bool = field(
+        default_factory=lambda: _env_bool("ADSPOWER_UI_REQUIRE_PROXY_OK", True))
     # Skip the in-form 'Check Proxy' step entirely. The proxy is already
     # validated upstream (Nyxify's _rotate_proxy_until_usable) before create is
     # called, so the in-form recheck is informational only; set
@@ -399,7 +417,7 @@ class AdsPowerUIConfig:
     proxy_parse_timeout: float = field(
         default_factory=lambda: _env_float("ADSPOWER_UI_PROXY_PARSE_TIMEOUT", 1.2))
     proxy_check_rotation_attempts: int = field(
-        default_factory=lambda: int(_env_float("ADSPOWER_UI_PROXY_CHECK_ROTATIONS", 3)))
+        default_factory=lambda: int(_env_float("ADSPOWER_UI_PROXY_CHECK_ROTATIONS", 30)))
     macos_paste_settle: float = field(
         default_factory=lambda: _env_float("ADSPOWER_UI_MACOS_PASTE_SETTLE", 0.12))
     capture_templates: bool = True     # auto-snapshot UIA-found controls for the vision fallback
@@ -1265,6 +1283,12 @@ class AdsPowerUIController:
         if btn is None:
             logger.warning("Check Proxy button not found; skipping proxy verification.")
             return False
+        # AdsPower can leave the previous red/green result mounted while the
+        # next check is starting. Remember its verdict so a stale result cannot
+        # decide the new proxy check.
+        before_text = self._visible_text_blob()
+        before_low = before_text.lower()
+        before_verdict = self._proxy_text_verdict(before_low)
         self._click_rect(btn, template_name="check_proxy_btn")
         logger.info("Clicked 'Check Proxy'; waiting for result...")
         deadline = time.time() + self.config.proxy_check_timeout
@@ -1273,27 +1297,42 @@ class AdsPowerUIController:
         while time.time() < deadline:
             text = self._visible_text_blob()
             low = text.lower()
-            if any(w in low for w in _PROXY_FAIL_WORDS):
-                result = False
-                break
-            # success markers: a country/IP echoed, or explicit success words
-            if "success" in low or "connected" in low or "available" in low:
-                result = True
+            verdict = self._proxy_text_verdict(low)
+            # A changed verdict is the new check result. If AdsPower reuses the
+            # exact same text, wait for a transition and fail closed at timeout.
+            if verdict is not None and (verdict != before_verdict or text != before_text):
+                result = verdict
                 break
             time.sleep(min(poll, max(0.0, deadline - time.time())))
         if result is None:
-            # No explicit verdict within the window — assume OK (production
-            # pre-validates proxies via SnapBoard before we ever get here). Logged
-            # at WARNING so a proxy that silently never rendered a verdict — and so
-            # was never rotated — is visible in the logs.
-            result = True
+            # Fail closed. A missing verdict is not proof that the proxy passed;
+            # treating it as success allowed AdsPower to create profiles with a
+            # red "Connection test failed" result when the UI tree was delayed.
+            # The caller will rotate/refill/recheck when a rotator is available.
+            result = False
             logger.warning(
                 "Proxy check: no explicit verdict within "
-                f"{self.config.proxy_check_timeout:.0f}s; proceeding (assumed OK)."
+                f"{self.config.proxy_check_timeout:.0f}s; treating as FAILED."
             )
         else:
             logger.info(f"Proxy check verdict: {'OK' if result else 'FAILED'}.")
         return result
+
+    @staticmethod
+    def _proxy_text_verdict(text: str):
+        if any(w in text for w in _PROXY_FAIL_WORDS):
+            return False
+        # Success markers: AdsPower echoes an IP/country or uses one of these
+        # explicit connection-result words in the form/toast.
+        if (
+            "connection test passed" in text
+            or "test passed" in text
+            or "success" in text
+            or "connected" in text
+            or "available" in text
+        ):
+            return True
+        return None
 
     def _check_proxy_with_rotation(self, proxy: str, proxy_rotator=None):
         active_proxy = str(proxy or "").strip()
@@ -3543,10 +3582,15 @@ class AdsPowerUIController:
 
     def _visible_text_blob(self) -> str:
         parts = []
+        seen = set()
         try:
-            for t in self._win.descendants(control_type="Text"):
+            # The red inline error is exposed as Text on some AdsPower builds,
+            # but as Pane/Custom/status content on others. Read all accessible
+            # descendants so the same verdict detection works on UIA and AX.
+            for t in self._win.descendants():
                 s = (t.window_text() or "").strip()
-                if s:
+                if s and s not in seen:
+                    seen.add(s)
                     parts.append(s)
         except Exception:
             pass

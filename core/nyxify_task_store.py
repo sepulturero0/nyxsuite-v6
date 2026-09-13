@@ -2,7 +2,7 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from core.nyxify_runtime_config import load_nyxify_config
@@ -643,7 +643,7 @@ class NyxifyTaskStore:
             )
             return cursor.rowcount
 
-    def reset_orphaned_running_tasks(self):
+    def reset_orphaned_running_tasks(self, stale_after_seconds=0):
         """Reset rows left in RUNNING back to PENDING so they get reprocessed.
 
         The single-instance RunnerLock means that at runner startup ANY task still
@@ -652,6 +652,13 @@ class NyxifyTaskStore:
         sit RUNNING forever because claim_pending_tasks only claims PENDING. The
         AdsPower fields are intentionally kept so _cleanup_stale_pending_profile can
         delete any half-created profile before the retry."""
+        try:
+            stale_after = max(0.0, float(stale_after_seconds or 0.0))
+        except (TypeError, ValueError):
+            stale_after = 0.0
+        cutoff = utc_now_iso() if stale_after <= 0 else (
+            datetime.now(timezone.utc) - timedelta(seconds=stale_after)
+        ).isoformat()
         with self._connect() as conn:
             cursor = conn.execute(
                 """
@@ -663,8 +670,9 @@ class NyxifyTaskStore:
                     otp_code = '',
                     updated_at = ?
                 WHERE status = 'RUNNING'
+                  AND updated_at < ?
                 """,
-                (utc_now_iso(),)
+                (utc_now_iso(), cutoff)
             )
             return cursor.rowcount
 

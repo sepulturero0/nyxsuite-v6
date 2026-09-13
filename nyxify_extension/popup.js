@@ -1024,6 +1024,22 @@ function fetchTokenFromApi() {
 // The bridge agent is shared with the Nyx extension; both extensions are allowed
 // origins of the com.nyxsuite.agent native host, so Nyxify can start it too.
 const DASHBOARD_URL = "http://127.0.0.1:8870/";
+// Persisted bridge power state that gates SnapBoard proxy prep/rotation. It is
+// distinct from the Nyxify runner Start/Stop control.
+const BRIDGE_POWER_KEY = "nyxsuiteBridgePower";
+const BRIDGE_POWER_INTENT_KEY = "nyxsuiteBridgePowerIntent";
+const BRIDGE_POWER_REACHABLE_KEY = "nyxsuiteBridgePowerReachable";
+
+function setBridgePowerState(on) {
+  try {
+    const enabled = on === true;
+    chrome.storage.local.set({
+      [BRIDGE_POWER_KEY]: enabled,
+      [BRIDGE_POWER_INTENT_KEY]: enabled,
+    });
+  } catch (_error) {
+  }
+}
 
 function focusOrCreateDashboard(url, setUrl) {
   chrome.tabs.query({}, (tabs) => {
@@ -1128,8 +1144,20 @@ function refreshBridgeToggle() {
   if (!bridgeToggle || bridgeToggle.dataset.busy === "true") return;
   checkAgentRunning().then((running) => {
     if (bridgeToggle.dataset.busy === "true") return;
-    renderBridgeToggle(running, false);
-    if (running) fetchTokenFromApi();
+    chrome.storage.local.get(BRIDGE_POWER_INTENT_KEY).then((data) => {
+      if (bridgeToggle.dataset.busy === "true") return;
+      const explicitlyOff = data[BRIDGE_POWER_INTENT_KEY] === false;
+      const powerOn = running && !explicitlyOff;
+      renderBridgeToggle(powerOn, false);
+      try {
+        chrome.storage.local.set({
+          [BRIDGE_POWER_KEY]: powerOn,
+          [BRIDGE_POWER_REACHABLE_KEY]: running === true,
+        });
+      } catch (_error) {
+      }
+      if (running) fetchTokenFromApi();
+    });
   });
 }
 
@@ -1141,12 +1169,14 @@ if (bridgeToggle) {
     setNyxsuiteIndicator(wantOn, true);
     if (!wantOn) {
       await stopBridge();
+      setBridgePowerState(false);
       setPrimaryStatus("NyxSuite stopping…", 2500);
       setTimeout(() => { bridgeToggle.dataset.busy = "false"; refreshBridgeToggle(); }, 2500);
     } else {
       setPrimaryStatus("Starting NyxSuite…", 2500);
       // Already up (toggled off then on faster than it shut down)? Reflect it.
       if (await checkAgentRunning()) {
+        setBridgePowerState(true);
         bridgeToggle.dataset.busy = "false";
         renderBridgeToggle(true, false);
         fetchTokenFromApi();
@@ -1167,6 +1197,7 @@ if (bridgeToggle) {
           setPrimaryStatus("NyxSuite isn't installed for this browser yet. Opening Setup & Install...", 6000);
           openSetupInstall();
           bridgeToggle.dataset.busy = "false";
+          setBridgePowerState(false);
           renderBridgeToggle(false, false);
           return;
         }
@@ -1180,11 +1211,13 @@ if (bridgeToggle) {
         if (up) {
           clearInterval(poll);
           bridgeToggle.dataset.busy = "false";
+          setBridgePowerState(true);
           renderBridgeToggle(true, false);
           fetchTokenFromApi();
         } else if (tries > 25) {
           clearInterval(poll);
           bridgeToggle.dataset.busy = "false";
+          setBridgePowerState(false);
           renderBridgeToggle(false, false);
           setPrimaryStatus("NyxSuite didn't come online - try Setup & Install.", 4500);
         }

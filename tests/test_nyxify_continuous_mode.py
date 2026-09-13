@@ -190,6 +190,17 @@ async def _fake_signup_without_welcome_username(**kwargs):
     }
 
 
+async def _fake_signup_manual_recovery(**kwargs):
+    # The operator finished verification by hand; the watcher surfaced the
+    # username only once the page reached a confirmed post-signup account page.
+    return {
+        "final_username": "manualqueen",
+        "otp_entered": False,
+        "reached_verification": True,
+        "error": "",
+    }
+
+
 async def _fake_snapboard_wait(*_args, **_kwargs):
     return True
 
@@ -551,6 +562,18 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
             and str(update.get("last_step") or "").startswith("retry_pending_after_")
             for _task_id, update in store.updates
         ))
+
+    async def test_continuous_mode_manual_success_still_queues_nyx(self):
+        store, adspower, handoffs = await self._run_task(
+            True,
+            signup_side_effect=_fake_signup_manual_recovery,
+        )
+
+        self.assertEqual(adspower.closed, [])
+        self.assertEqual(adspower.renamed, [("k1new", "Snapchat: manualqueen")])
+        self.assertEqual(handoffs, [("k1new", "Clea", "manualqueen", "")])
+        self.assertTrue(any(update.get("last_step") == "queued_for_nyx" for _task_id, update in store.updates))
+        self.assertTrue(any(update.get("status") == "DONE" for _task_id, update in store.updates))
 
     async def test_incomplete_signup_does_not_push_adspower_id_to_snapboard(self):
         adspower_id_updates = []

@@ -196,7 +196,7 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(count, 1)
-        self.assertEqual(requested, [("snapboard:10", 3, ["23"])])
+        self.assertEqual(requested, [("snapboard:10", 1, ["23"])])
 
     def test_prefetch_marks_blocked_pending_row_and_requests_rotation(self):
         class FakeStore:
@@ -229,7 +229,7 @@ class BridgeValueWaitTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(count, 1)
         self.assertEqual(store.last_step, ("snapboard:10", "refreshing_blocked_proxy"))
-        self.assertEqual(requested, [("snapboard:10", 3, None, ["45.10"])])
+        self.assertEqual(requested, [("snapboard:10", 1, None, ["45.10"])])
 
     def test_proxy_rotation_request_does_not_requeue_while_same_row_is_in_flight(self):
         store = _ProxyRotateStore()

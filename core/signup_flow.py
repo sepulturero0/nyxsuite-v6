@@ -6,8 +6,10 @@ from __future__ import annotations
 import asyncio
 import os
 import random
+import re
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 
 from core.signup_data import generate_birthday, get_random_name
 
@@ -1828,6 +1830,41 @@ async def _fill_and_submit_phone_number(signup_page, phone: str, logger=None, pr
     return False
 
 
+# Snapchat pages that only exist after a completed signup. A matching URL is
+# not success on its own — the username must still be readable on the page.
+_POST_SIGNUP_URL_BLOCKED_MARKERS = (
+    "signup",
+    "login",
+    "verify",
+    "verification",
+    "/tiv",
+    "oauth",
+    "error",
+    "blocked",
+    "denied",
+)
+_POST_SIGNUP_ERROR_CODE_PATTERN = re.compile(r"/(?:4\d\d|5\d\d)(?:/|$)")
+
+
+def _is_confirmed_post_signup_url(url: str) -> bool:
+    try:
+        parsed = urlparse(str(url or "").strip())
+    except Exception:
+        return False
+    if "accounts.snapchat.com" not in (parsed.netloc or "").lower():
+        return False
+    path = str(parsed.path or "").strip().lower()
+    if not path:
+        return False
+    if any(marker in path for marker in _POST_SIGNUP_URL_BLOCKED_MARKERS):
+        return False
+    if _POST_SIGNUP_ERROR_CODE_PATTERN.search(path):
+        return False
+    if path.startswith("/v2/welcome"):
+        return True
+    return path == "/accounts" or path.startswith("/accounts/")
+
+
 async def _read_success_username_from_page(page) -> str:
     selectors = [
         "h5[data-testid='username'] span",
@@ -1850,16 +1887,25 @@ async def _read_success_username_from_page(page) -> str:
         text = await page.evaluate(
             """
             () => {
+                const blockedLabels = /^(username|change username|edit username|add username)$/i;
                 const nodes = Array.from(
                     document.querySelectorAll(
-                        "h5[data-testid='username'], [data-testid='username'], h5[class*='UserProfileCard_username']"
+                        "h5[data-testid='username'], [data-testid='username'], "
+                        + "[data-testid*='username' i], h5[class*='UserProfileCard_username']"
                     )
                 );
                 for (const node of nodes) {
                     const value = (node.innerText || node.textContent || '').trim();
-                    if (value) {
-                        return value;
+                    if (!value || blockedLabels.test(value)) {
+                        continue;
                     }
+                    // A looser data-testid match could be a label or a control;
+                    // only trust it when the text still looks like a username.
+                    if (node.getAttribute("data-testid") !== "username"
+                        && (/\\s/.test(value) || value.length > 40)) {
+                        continue;
+                    }
+                    return value;
                 }
                 return '';
             }
@@ -1882,6 +1928,12 @@ async def _read_success_username(page) -> str:
                 if other_page not in candidates:
                     candidates.append(other_page)
         for candidate in candidates:
+            try:
+                current_url = str(getattr(candidate, "url", "") or "")
+            except Exception:
+                current_url = ""
+            if not _is_confirmed_post_signup_url(current_url):
+                continue
             text = await _read_success_username_from_page(candidate)
             if text:
                 return text
@@ -1900,12 +1952,16 @@ async def _wait_for_final_success_username(page, logger=None, profile_id: str = 
             logger and logger.info(f"[{profile_id}] Final success username detected: {success_username}")
             return success_username
 
+        # Manual operator recovery can land the account on any confirmed
+        # post-signup page — /v2/welcome, /accounts, or /accounts/* — instead of
+        # only the welcome screen. Surface whichever page carries it so the
+        # username read above can see it.
         try:
             context = getattr(page, "context", None)
             if context is not None:
                 for candidate in list(getattr(context, "pages", []) or []):
-                    current_url = str(getattr(candidate, "url", "") or "").strip()
-                    if "accounts.snapchat.com" in current_url and "/welcome" in current_url:
+                    current_url = str(getattr(candidate, "url", "") or "")
+                    if _is_confirmed_post_signup_url(current_url):
                         try:
                             await candidate.bring_to_front()
                         except Exception:

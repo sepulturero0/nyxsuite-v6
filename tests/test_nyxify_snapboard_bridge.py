@@ -1,8 +1,9 @@
 from pathlib import Path
 import tempfile
+import time
 import unittest
 
-from core.nyxify_local_api import NyxifyLocalApiServer
+from core.nyxify_local_api import NyxifyLocalApiServer, _ProxyRotateStore, PROXY_ROTATE_DISPATCH_LEASE_SECONDS
 from core.nyxify_task_store import NyxifyTaskStore
 
 
@@ -10,6 +11,49 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class NyxifySnapboardBridgeTests(unittest.TestCase):
+    def test_proxy_rotation_request_is_released_after_dispatch_lease(self):
+        store = _ProxyRotateStore()
+        store.request("snapboard:lease", max_clicks=3)
+        first = store.pop_pending()
+        self.assertEqual(first["row_key"], "snapboard:lease")
+        self.assertIsNone(store.pop_pending())
+
+        store._pending["snapboard:lease"]["dispatched_at"] = (
+            time.monotonic() - PROXY_ROTATE_DISPATCH_LEASE_SECONDS - 1
+        )
+        retry = store.pop_pending()
+        self.assertEqual(retry["row_key"], "snapboard:lease")
+
+    def test_proxy_rotation_result_from_old_request_is_rejected(self):
+        store = _ProxyRotateStore()
+        first_id = store.request("snapboard:old", max_clicks=3)
+        store.pop_pending()
+        store._pending["snapboard:old"]["dispatched_at"] = (
+            time.monotonic() - PROXY_ROTATE_DISPATCH_LEASE_SECONDS - 1
+        )
+        second_id = store.request("snapboard:old", max_clicks=3)
+        self.assertNotEqual(first_id, second_id)
+        self.assertFalse(store.store_result("snapboard:old", proxy="old", request_id=first_id))
+        self.assertIsNone(store.get_result("snapboard:old"))
+        self.assertTrue(store.store_result("snapboard:old", proxy="new", request_id=second_id))
+
+    def test_stale_running_task_is_requeued_but_recent_running_task_is_preserved(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+            store.upsert_task("snapboard:stale", "Clea", "1.1.1.1", username="stale")
+            store.upsert_task("snapboard:recent", "Clea", "1.1.1.2", username="recent")
+            claimed = store.claim_pending_tasks(limit=2)
+            self.assertEqual(len(claimed), 2)
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE tasks SET updated_at = datetime('now', '-120 seconds') WHERE row_key = ?",
+                    ("snapboard:stale",),
+                )
+            self.assertEqual(store.reset_orphaned_running_tasks(stale_after_seconds=30), 1)
+            rows = {row["row_key"]: row for row in store.list_tasks()}
+            self.assertEqual(rows["snapboard:stale"]["status"], "PENDING")
+            self.assertEqual(rows["snapboard:recent"]["status"], "RUNNING")
+
     def test_content_script_polls_pending_adspower_id_updates(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
 
@@ -783,6 +827,49 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('SNAPBOARD_LOGIN_KEY = "nyxifySnapboardLogin"', options_js)
         self.assertIn("chrome.storage.local.set({", options_js)
         self.assertIn("chrome.storage.local.get(SNAPBOARD_LOGIN_KEY", options_js)
+
+    def test_content_proxy_poll_requires_bridge_power(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn('var BRIDGE_POWER_KEY = "nyxsuiteBridgePower";', content)
+        self.assertIn("async function isBridgePowerOn()", content)
+        poll_fn = content.split("async function pollPendingProxyRotation()", 1)[1].split(
+            "function readSnapboardRefreshAck", 1
+        )[0]
+        self.assertIn("await isBridgePowerOn()", poll_fn)
+
+        # The final rotate click is also blocked when the bridge power gate is off.
+        rotate_handler = content.split('if (message.action === "proxy_rotate")', 1)[1].split(
+            "sendResponse({ ok: true, proxy: proxyResult.proxy });", 1
+        )[0]
+        self.assertIn("await isBridgePowerOn()", rotate_handler)
+        self.assertIn("proxy rotation is blocked", rotate_handler)
+
+    def test_background_proxy_gates_require_bridge_power(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+
+        self.assertIn('bridgePower: "nyxsuiteBridgePower"', background)
+        self.assertIn("async function isBridgePowerOn()", background)
+        self.assertIn("async function refreshBridgePowerFromLiveness(force = false)", background)
+        self.assertIn("BRIDGE_DASHBOARD_URL", background)
+        self.assertIn("BRIDGE_POWER_PROBE_INTERVAL_MS", background)
+        self.assertIn("await refreshBridgePowerFromLiveness()", background)
+
+        prepare_rows = background.split("async function prepareProxyRows(", 1)[1].split(
+            "\nasync function ", 1
+        )[0]
+        self.assertIn("await isBridgePowerOn()", prepare_rows)
+
+        stored_rows = background.split("async function prepareStoredProxyRows(", 1)[1].split(
+            "\nasync function ", 1
+        )[0]
+        self.assertIn("await isBridgePowerOn()", stored_rows)
+
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+        rotate_gate = bridge_loop.split('"/proxy/rotate_pending"', 1)[0][-200:]
+        self.assertIn("isBridgePowerOn()", rotate_gate)
 
 
 if __name__ == "__main__":

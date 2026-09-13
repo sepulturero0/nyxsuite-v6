@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.8 - Account success recovery and proxy rotation hardening
+
+- Nyxify now recognizes a completed Snapchat account even when the user takes
+  over the signup flow, then continues with the normal post-account step.
+- Stale `RUNNING` tasks are recovered and requeued after the runner stops,
+  while recent task transitions remain untouched.
+- SnapBoard proxy rotation now uses one rotate click per request, with up to
+  300 validation attempts per proxy-validation cycle.
+- Proxy rotation requests now carry request IDs and reject late results from an
+  older timed-out request, preventing duplicate or stale rotations.
+- Proxy rotation remains gated by the NyxSuite bridge power state and stops on
+  the first proxy that satisfies priority, blocker, checker, and type rules.
+- Added focused regression coverage for manual success recovery, stale task
+  recovery, rotation deduplication, priority/blocker matching, bridge state,
+  and the one-click rotation policy.
+
 ## 6.7.7 - Bridge startup performance fixes
 
 - macOS extension-started bridge launches no longer force a fresh launchd job

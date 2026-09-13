@@ -278,7 +278,7 @@ const syncStore = {
     proxyPriorityPatterns: ["23.54"]
   }
 };
-const localStore = {};
+const localStore = { nyxsuiteBridgePower: true };
 const tabMessages = [];
 const fetchCalls = [];
 
@@ -407,7 +407,7 @@ const syncStore = {
     proxyPriorityPatterns: []
   }
 };
-const localStore = {};
+const localStore = { nyxsuiteBridgePower: true };
 const tabMessages = [];
 const fetchCalls = [];
 
@@ -535,6 +535,7 @@ const syncStore = {
   }
 };
 const localStore = {
+  nyxsuiteBridgePower: true,
   nyxifyPendingEntries: [{
     row_key: "snapboard:1",
     model: "Clea",
@@ -666,3 +667,304 @@ def test_nyxify_extension_exposes_lock_tv_provider_lock():
     assert "lockTV: safeConfig.lockTV === true" in background_js
     assert "lockTV: safeConfig.lockTV === true" in options_js
     assert "lockTV: safeConfig.lockTV === true" in popup_js
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for extension config tests")
+def test_extension_skips_proxy_prep_when_bridge_power_is_off():
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const backgroundPath = process.argv[1];
+const source = fs.readFileSync(backgroundPath, "utf8");
+const syncStore = {
+  nyxifyConfig: {
+    enabled: false,
+    localApiUrl: "http://127.0.0.1:8866",
+    proxyPriorityEnabled: true,
+    proxyPriorityPatterns: ["23.54"]
+  }
+};
+const localStore = {
+  nyxifyPendingEntries: [{
+    row_key: "snapboard:1",
+    model: "Clea",
+    ip_address: "45.10.1.1",
+    proxy_address: "45.10.1.1:9000:u:p",
+    username: "cleauser",
+    password: "Password1!"
+  }]
+};
+const tabMessages = [];
+
+function pick(store, key) {
+  if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, store[item]]));
+  if (typeof key === "string") return { [key]: store[key] };
+  return { ...store };
+}
+
+const chromeStub = {
+  storage: {
+    sync: {
+      get: async (key) => pick(syncStore, key),
+      set: async (value) => Object.assign(syncStore, value)
+    },
+    local: {
+      get: async (key) => pick(localStore, key),
+      set: async (value) => Object.assign(localStore, value)
+    },
+    onChanged: { addListener: () => {} }
+  },
+  runtime: {
+    onInstalled: { addListener: () => {} },
+    onStartup: { addListener: () => {} },
+    onConnect: { addListener: () => {} },
+    onMessage: { addListener: () => {} },
+    getURL: (path) => path,
+    lastError: null
+  },
+  alarms: {
+    create: () => {},
+    onAlarm: { addListener: () => {} }
+  },
+  tabs: {
+    onRemoved: { addListener: () => {} },
+    query: async () => [{ id: 77 }],
+    create: async () => ({ id: 1 }),
+    remove: async () => {},
+    get: async () => ({}),
+    sendMessage: (_tabId, message, callback) => {
+      tabMessages.push(message);
+      callback({ ok: true, proxy: "23.54.1.2:9000:u:p" });
+    }
+  },
+  action: {
+    setBadgeBackgroundColor: async () => {},
+    setBadgeText: async () => {}
+  }
+};
+
+const context = {
+  console,
+  chrome: chromeStub,
+  setTimeout,
+  clearTimeout,
+  Date,
+  fetch: async () => ({ ok: true, status: 200, json: async () => ({ ok: true, rows: [] }) })
+};
+
+vm.createContext(context);
+vm.runInContext(
+  source + "\n" + `
+    globalThis.__test = { prepareStoredProxyRows };
+  `,
+  context,
+  { filename: backgroundPath }
+);
+
+(async () => {
+  const result = await context.__test.prepareStoredProxyRows();
+  process.stdout.write(JSON.stringify({ result, pending: localStore.nyxifyPendingEntries, tabMessages }));
+})().catch((error) => {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(ROOT / "nyxify_extension" / "background.js")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(result.stdout)
+
+    assert data["result"]["priorityPrepared"] == 0
+    assert data["result"]["priorityAttempted"] == 0
+    assert data["tabMessages"] == []
+    assert data["pending"][0]["proxy_address"] == "45.10.1.1:9000:u:p"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for extension config tests")
+def test_extension_blocks_pending_proxy_rotation_while_bridge_power_is_off():
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const backgroundPath = process.argv[1];
+const source = fs.readFileSync(backgroundPath, "utf8");
+const syncStore = {
+  nyxifyConfig: {
+    enabled: true,
+    localApiUrl: "http://127.0.0.1:8866",
+    localToken: "tok"
+  }
+};
+const localStore = {};
+const tabMessages = [];
+const fetchCalls = [];
+let bridgeReachable = false;
+
+function pick(store, key) {
+  if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, store[item]]));
+  if (typeof key === "string") return { [key]: store[key] };
+  return { ...store };
+}
+
+const chromeStub = {
+  storage: {
+    sync: {
+      get: async (key) => pick(syncStore, key),
+      set: async (value) => Object.assign(syncStore, value)
+    },
+    local: {
+      get: async (key) => pick(localStore, key),
+      set: async (value) => Object.assign(localStore, value)
+    },
+    onChanged: { addListener: () => {} }
+  },
+  runtime: {
+    onInstalled: { addListener: () => {} },
+    onStartup: { addListener: () => {} },
+    onConnect: { addListener: () => {} },
+    onMessage: { addListener: () => {} },
+    getURL: (path) => path,
+    lastError: null
+  },
+  alarms: {
+    create: () => {},
+    onAlarm: { addListener: () => {} }
+  },
+  tabs: {
+    onRemoved: { addListener: () => {} },
+    query: async () => [{ id: 77, url: "https://snapboard.onrender.com/" }],
+    create: async () => ({ id: 1 }),
+    remove: async () => {},
+    get: async () => ({}),
+    sendMessage: (_tabId, message, callback) => {
+      tabMessages.push(message);
+      if (message && message.action === "proxy_rotate") {
+        callback({ ok: true, proxy: "23.54.1.2:9000:u:p" });
+        return;
+      }
+      callback({ ok: true, bridge_ready: true });
+    }
+  },
+  action: {
+    setBadgeBackgroundColor: async () => {},
+    setBadgeText: async () => {}
+  }
+};
+
+const context = {
+  console,
+  chrome: chromeStub,
+  setTimeout,
+  clearTimeout,
+  Date,
+  fetch: async (url, options = {}) => {
+    const target = String(url);
+    const method = options.method || "GET";
+    fetchCalls.push({ url: target, method });
+    if (method === "HEAD") {
+      if (!bridgeReachable) {
+        throw new Error("bridge offline");
+      }
+      return { ok: true, status: 200 };
+    }
+    if (target.endsWith("/proxy/rotate_pending")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ ok: true, row_key: "snapboard:1", max_clicks: 3, force: true })
+      };
+    }
+    if (target.endsWith("/config")) {
+      return { ok: true, status: 200, json: async () => ({ ok: true, config: {} }) };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+  }
+};
+
+vm.createContext(context);
+vm.runInContext(
+  source + "\n" + `
+    globalThis.__test = { processBridgeActionsOnce, refreshBridgePowerFromLiveness };
+  `,
+  context,
+  { filename: backgroundPath }
+);
+
+(async () => {
+  await context.__test.processBridgeActionsOnce();
+  const firstProxyFetched = fetchCalls.some((call) => call.url.endsWith("/proxy/rotate_pending"));
+  const firstProxyMessages = tabMessages.filter((message) => message && message.action === "proxy_rotate").length;
+  const gateAfterOfflineProbe = localStore.nyxsuiteBridgePower === false;
+
+  bridgeReachable = true;
+  await context.__test.refreshBridgePowerFromLiveness(true);
+  const gateAfterOnlineProbe = localStore.nyxsuiteBridgePower === true;
+
+  await context.__test.processBridgeActionsOnce();
+  const proxyFetched = fetchCalls.some((call) => call.url.endsWith("/proxy/rotate_pending"));
+  const proxyMessages = tabMessages.filter((message) => message && message.action === "proxy_rotate").length;
+  const resultPosted = fetchCalls.some((call) => call.url.endsWith("/proxy/rotate_result"));
+
+  // An explicit NyxSuite OFF must remain authoritative while the shared
+  // server is still reachable.
+  localStore.nyxsuiteBridgePowerIntent = false;
+  await context.__test.refreshBridgePowerFromLiveness(true);
+  const gateAfterExplicitOff = localStore.nyxsuiteBridgePower === false;
+  await context.__test.processBridgeActionsOnce();
+  const proxyMessagesAfterExplicitOff = tabMessages.filter((message) => message && message.action === "proxy_rotate").length;
+
+  process.stdout.write(JSON.stringify({
+    firstProxyFetched,
+    firstProxyMessages,
+    gateAfterOfflineProbe,
+    gateAfterOnlineProbe,
+    proxyFetched,
+    proxyMessages,
+    resultPosted,
+    gateAfterExplicitOff,
+    proxyMessagesAfterExplicitOff
+  }));
+})().catch((error) => {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(ROOT / "nyxify_extension" / "background.js")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(result.stdout)
+
+    assert data["firstProxyFetched"] is False
+    assert data["firstProxyMessages"] == 0
+    assert data["gateAfterOfflineProbe"] is True
+    assert data["gateAfterOnlineProbe"] is True
+    assert data["proxyFetched"] is True
+    assert data["proxyMessages"] == 1
+    assert data["resultPosted"] is True
+    assert data["gateAfterExplicitOff"] is True
+    assert data["proxyMessagesAfterExplicitOff"] == 1
+
+
+def test_popup_persists_bridge_power_independently_of_runner_start_stop():
+    popup_js = (ROOT / "nyxify_extension" / "popup.js").read_text()
+
+    assert 'const BRIDGE_POWER_KEY = "nyxsuiteBridgePower";' in popup_js
+    assert 'const BRIDGE_POWER_INTENT_KEY = "nyxsuiteBridgePowerIntent";' in popup_js
+    assert "function setBridgePowerState(on)" in popup_js
+    # Explicit toggle changes persist user intent; liveness only updates the
+    # effective state and must not overwrite an explicit OFF.
+    assert "[BRIDGE_POWER_INTENT_KEY]: enabled" in popup_js
+    assert "[BRIDGE_POWER_REACHABLE_KEY]: running === true" in popup_js
+    assert "setBridgePowerState(true);" in popup_js
+    assert "setBridgePowerState(false);" in popup_js
+
+    # Nyxify runner Start/Stop is a separate control and must not touch bridge power.
+    runner_fn = popup_js.split("function runBotAction(", 1)[1].split("\nfunction ", 1)[0]
+    assert "setBridgePowerState" not in runner_fn

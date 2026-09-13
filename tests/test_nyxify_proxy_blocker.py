@@ -20,6 +20,14 @@ class IsProxyBannedTests(unittest.TestCase):
     def test_substring_match(self):
         self.assertTrue(nyxify_runner._is_proxy_banned("user@82.26.10.5:3128", ["82.26"]))
 
+    def test_credentials_do_not_cause_false_positive(self):
+        self.assertFalse(
+            nyxify_runner._is_proxy_banned("217.79.120.92:9000:user13:pass", ["13"])
+        )
+
+    def test_proxy_host_parser_ignores_credentials_and_port(self):
+        self.assertEqual(nyxify_runner._proxy_host("http://user:pass@217.79.120.92:9000"), "217.79.120.92")
+
     def test_no_match(self):
         self.assertFalse(nyxify_runner._is_proxy_banned("45.10.1.1:80", ["130", "82.26"]))
 

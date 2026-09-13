@@ -6,6 +6,9 @@ const STORAGE_KEYS = {
   lastSync: "nyxifyLastSync",
   eventLog: "nyxifyEventLog",
   autoFillProgress: "nyxifyAutoFillAccountProgress",
+  bridgePower: "nyxsuiteBridgePower",
+  bridgePowerIntent: "nyxsuiteBridgePowerIntent",
+  bridgePowerReachable: "nyxsuiteBridgePowerReachable",
 };
 const SCRAPE_STORAGE_KEYS = {
   config: "nyxifyUsernameScrapeConfig",
@@ -39,11 +42,16 @@ const REMOTE_CONFIG_SYNC_INTERVAL_MS = 2000;
 const PROXY_PREP_RETRY_INTERVAL_MS = 5000;
 const BRIDGE_RECOVERY_COOLDOWN_MS = 20000;
 const BRIDGE_WAITING_LOG_COOLDOWN_MS = 30000;
+const BRIDGE_DASHBOARD_URL = "http://127.0.0.1:8870/";
+const BRIDGE_POWER_PROBE_INTERVAL_MS = 5000;
+const SNAPBOARD_MESSAGE_TIMEOUT_MS = 240000;
 let localConfigCache = null;
 let localConfigCacheAt = 0;
 let remoteConfigSyncAt = 0;
 let remoteConfigSyncInFlight = null;
 let proxyPrepRetryAt = 0;
+let bridgePowerProbeAt = 0;
+let bridgePowerProbeInFlight = null;
 
 function fetchWithTimeout(url, options, timeoutMs) {
   // AbortController may not be available in every sandbox (e.g. tests); degrade
@@ -66,6 +74,67 @@ async function getLocalConfig() {
   localConfigCache = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
   localConfigCacheAt = now;
   return localConfigCache;
+}
+
+// Proxy prep/rotation is only allowed while the NyxSuite bridge power toggle is
+// ON and the bridge must be reachable. An explicit OFF from the popup remains
+// authoritative even if another NyxSuite component keeps the shared server up.
+async function isBridgePowerOn() {
+  try {
+    const data = await chrome.storage.local.get(STORAGE_KEYS.bridgePower);
+    return !!data && data[STORAGE_KEYS.bridgePower] === true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+// The popup is not always open, and the shared bridge can also be stopped from
+// the Nyx extension, so the persisted gate alone can go stale. Probe the
+// dashboard directly. The user intent remains separate: an explicit OFF must
+// stay OFF even when another NyxSuite component keeps the shared server alive.
+async function refreshBridgePowerFromLiveness(force = false) {
+  const now = Date.now();
+  if (!force && (now - bridgePowerProbeAt) < BRIDGE_POWER_PROBE_INTERVAL_MS) {
+    return null;
+  }
+  if (bridgePowerProbeInFlight) {
+    return bridgePowerProbeInFlight;
+  }
+  bridgePowerProbeAt = now;
+  bridgePowerProbeInFlight = (async () => {
+    let reachable = false;
+    try {
+      const response = await fetchWithTimeout(
+        BRIDGE_DASHBOARD_URL,
+        { method: "HEAD", cache: "no-store" },
+        2500
+      );
+      reachable = !!response && response.ok !== false;
+    } catch (_error) {
+      reachable = false;
+    }
+    try {
+      const state = await chrome.storage.local.get([
+        STORAGE_KEYS.bridgePower,
+        STORAGE_KEYS.bridgePowerIntent,
+      ]);
+      const intent = state[STORAGE_KEYS.bridgePowerIntent];
+      // Preserve pre-intent installations by letting liveness control the
+      // effective gate until the user explicitly toggles it.
+      const effective = typeof intent === "boolean" ? (intent && reachable) : reachable;
+      await chrome.storage.local.set({
+        [STORAGE_KEYS.bridgePower]: effective,
+        [STORAGE_KEYS.bridgePowerReachable]: reachable,
+      });
+    } catch (_error) {
+    }
+    return reachable;
+  })();
+  try {
+    return await bridgePowerProbeInFlight;
+  } finally {
+    bridgePowerProbeInFlight = null;
+  }
 }
 const MAX_EMAIL_BRIDGE_BATCH = 50;
 const DEFAULT_TEMPORARY_PROFILE_NAME = "Snapchat:";
@@ -113,30 +182,36 @@ function normalizeStringList(value) {
   return rawItems.map((item) => String(item || "").trim()).filter(Boolean);
 }
 
+function proxyHost(proxyValue) {
+  let normalized = String(proxyValue || "").trim().toLowerCase();
+  if (!normalized) return "";
+  if (normalized.includes("://")) normalized = normalized.split("://", 2)[1];
+  normalized = normalized.split("/", 1)[0];
+  if (normalized.includes("@")) normalized = normalized.split("@").pop();
+  if (normalized.startsWith("[")) return normalized.slice(1).split("]", 1)[0];
+  return normalized.split(":", 1)[0];
+}
+
 function proxyMatchesPriority(proxyValue, priorityPatterns) {
-  const normalizedProxy = String(proxyValue || "").trim().toLowerCase();
   const patterns = normalizeStringList(priorityPatterns).map((item) => item.toLowerCase());
-  if (!normalizedProxy || !patterns.length) {
+  const host = proxyHost(proxyValue);
+  if (!host || !patterns.length) {
     return false;
   }
-  const proxyHost = normalizedProxy.split(":", 1)[0];
-  return patterns.some((pattern) => proxyHost === pattern || proxyHost.startsWith(`${pattern}.`));
+  return patterns.some((pattern) => host === proxyHost(pattern) || host.startsWith(`${proxyHost(pattern)}.`));
 }
 
 function proxyMatchesBlockedPattern(proxyValue, blockedPatterns) {
-  const normalizedProxy = String(proxyValue || "").trim().toLowerCase();
-  if (!normalizedProxy) {
+  const host = proxyHost(proxyValue);
+  if (!host) {
     return false;
   }
-  const proxyHost = normalizedProxy.split(":")[0];
   return normalizeStringList(blockedPatterns).some((item) => {
-    const pattern = item.toLowerCase();
+    const pattern = proxyHost(item);
     if (!pattern) {
       return false;
     }
-    return proxyHost.startsWith(pattern)
-      || normalizedProxy.startsWith(pattern)
-      || normalizedProxy.includes(pattern);
+    return host.startsWith(pattern);
   });
 }
 
@@ -1195,6 +1270,7 @@ async function maybeFetchBridgeToken() {
 
 chrome.runtime.onInstalled.addListener(async () => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  await refreshBridgePowerFromLiveness(true).catch(() => null);
   await maybeFetchBridgeToken().catch(() => null);
   await updateBadge();
   ensureBridgeLoop().catch(() => null);
@@ -1202,6 +1278,7 @@ chrome.runtime.onInstalled.addListener(async () => {
 
 chrome.runtime.onStartup.addListener(async () => {
   chrome.alarms.create(FLUSH_ALARM, { periodInMinutes: 1 });
+  await refreshBridgePowerFromLiveness(true).catch(() => null);
   await maybeFetchBridgeToken().catch(() => null);
   await hydrateScrapeRunFromStorage().catch(() => null);
   await maybeProcessScrapeQueue().catch(() => null);
@@ -1210,6 +1287,7 @@ chrome.runtime.onStartup.addListener(async () => {
 
 chrome.alarms.onAlarm.addListener(async (alarm) => {
   if (alarm.name === FLUSH_ALARM) {
+    await refreshBridgePowerFromLiveness().catch(() => null);
     await maybeFetchBridgeToken().catch(() => null);
     await processSnapboardRefreshRequest().catch(() => null);
     await flushPendingEntries();
@@ -1707,7 +1785,16 @@ async function sendMessageToSnapboardTab(message) {
     return { ok: false, error: "Waiting for SnapBoard tab." };
   }
   return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, error: "SnapBoard message timed out; rotation request will be retried." });
+    }, SNAPBOARD_MESSAGE_TIMEOUT_MS);
     chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (chrome.runtime.lastError) {
         resolve({ ok: false, error: chrome.runtime.lastError.message || "SnapBoard messaging failed." });
         return;
@@ -2144,6 +2231,7 @@ async function processSnapboardRefreshRequest() {
 }
 
 async function processBridgeActionsOnce() {
+  await refreshBridgePowerFromLiveness().catch(() => null);
   await syncExtensionConfigFromRunner();
   if ((Date.now() - proxyPrepRetryAt) >= PROXY_PREP_RETRY_INTERVAL_MS) {
     proxyPrepRetryAt = Date.now();
@@ -2286,23 +2374,27 @@ async function processBridgeActionsOnce() {
   }
 
   try {
-    const proxyPayload = await callLocalNyxify("GET", "/proxy/rotate_pending");
-    if (proxyPayload && proxyPayload.row_key) {
-      const proxyResponse = await sendMessageToSnapboardTab({
-        type: "NYXIFY_SNAPBOARD_ACTION",
-        action: "proxy_rotate",
-        row_key: proxyPayload.row_key,
-        max_clicks: proxyPayload.max_clicks,
-        force: !!proxyPayload.force,
-        priority_patterns: proxyPayload.priority_patterns || [],
-        blocked_patterns: proxyPayload.blocked_patterns || [],
-        proxy_type: proxyPayload.proxy_type,
-      });
-      await callLocalNyxify("POST", "/proxy/rotate_result", {
-        row_key: proxyPayload.row_key,
-        proxy: proxyResponse.ok ? (proxyResponse.proxy || "") : "",
-        error: proxyResponse.ok ? "" : (proxyResponse.error || "SnapBoard proxy rotation failed."),
-      });
+    if (await isBridgePowerOn()) {
+      const proxyPayload = await callLocalNyxify("GET", "/proxy/rotate_pending");
+      if (proxyPayload && proxyPayload.row_key) {
+        const proxyResponse = await sendMessageToSnapboardTab({
+          type: "NYXIFY_SNAPBOARD_ACTION",
+          action: "proxy_rotate",
+          row_key: proxyPayload.row_key,
+          request_id: proxyPayload.request_id,
+          max_clicks: proxyPayload.max_clicks,
+          force: !!proxyPayload.force,
+          priority_patterns: proxyPayload.priority_patterns || [],
+          blocked_patterns: proxyPayload.blocked_patterns || [],
+          proxy_type: proxyPayload.proxy_type,
+        });
+        await callLocalNyxify("POST", "/proxy/rotate_result", {
+          row_key: proxyPayload.row_key,
+          request_id: proxyPayload.request_id,
+          proxy: proxyResponse.ok ? (proxyResponse.proxy || "") : "",
+          error: proxyResponse.ok ? "" : (proxyResponse.error || "SnapBoard proxy rotation failed."),
+        });
+      }
     }
   } catch (error) {
     await appendEventLog(`Nyxify proxy bridge error: ${error.message}`);
@@ -2617,11 +2709,22 @@ async function mergeDetectedEntries(rows, sourceUrl) {
 
 function sendMessageToTab(tabId, message) {
   return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve({ ok: false, error: "SnapBoard message timed out; rotation request will be retried." });
+    }, SNAPBOARD_MESSAGE_TIMEOUT_MS);
     if (tabId == null) {
+      settled = true;
+      clearTimeout(timer);
       resolve({ ok: false, error: "No SnapBoard tab available." });
       return;
     }
     chrome.tabs.sendMessage(tabId, message, (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       if (chrome.runtime.lastError) {
         resolve({ ok: false, error: chrome.runtime.lastError.message || "SnapBoard messaging failed." });
         return;
@@ -2673,6 +2776,9 @@ async function updateLocalDetectedProxy(rowKey, proxy) {
 }
 
 async function prepareProxyRows(rows, config, tabId) {
+  if (!await isBridgePowerOn()) {
+    return { priorityPrepared: 0, blockedPrepared: 0 };
+  }
   const priorityPatterns = normalizeStringList(config && config.proxyPriorityPatterns);
   const priorityEnabled = !!(config && config.proxyPriorityEnabled === true && priorityPatterns.length);
   const blockedPatterns = normalizeStringList(
@@ -2733,6 +2839,9 @@ async function prepareProxyRows(rows, config, tabId) {
 }
 
 async function prepareStoredProxyRows() {
+  if (!await isBridgePowerOn()) {
+    return { priorityPrepared: 0, blockedPrepared: 0, priorityAttempted: 0, blockedAttempted: 0 };
+  }
   const syncData = await chrome.storage.sync.get(STORAGE_KEYS.config);
   const config = normalizeConfig(syncData[STORAGE_KEYS.config] || {});
   const shouldPrepareProxy = (

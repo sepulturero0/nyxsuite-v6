@@ -166,7 +166,17 @@ class NyxifyController:
             return {"state": "RUNNING", "detail": "Nyxify runner is active.", "pid": pid}
         return {"state": "STOPPED", "detail": "Nyxify runner is not running.", "pid": None}
 
+    def _recover_stale_tasks_when_stopped(self):
+        """Requeue old RUNNING rows after the runner is confirmed stopped."""
+        if self.runner.transition() != "idle" or self.runner.resolve_pid():
+            return 0
+        try:
+            return self.store.reset_orphaned_running_tasks(stale_after_seconds=30)
+        except Exception:
+            return 0
+
     def status_snapshot(self) -> dict:
+        self._recover_stale_tasks_when_stopped()
         tasks = self.store.list_tasks(limit=500)
         live = annotate_rows_with_open_state(tasks, ("adspower_profile_id", "adspower_id"))
         pid = self.runner.resolve_pid()
@@ -182,6 +192,7 @@ class NyxifyController:
         """Cheap status for an action ack: bot + counts, no rows and no AdsPower
         annotations. The SSE watcher pushes the full snapshot, so an ack never
         builds the expensive table just to confirm the button press."""
+        self._recover_stale_tasks_when_stopped()
         tasks = self.store.list_tasks(limit=500)
         return {
             "bot": self._compute_bot(

@@ -8,6 +8,9 @@
   var SNAPBOARD_LOGIN_KEY = "nyxifySnapboardLogin";
   var SNAPBOARD_VERIFICATION_STATE_KEY = "nyxifySnapboardVerificationState";
   var SNAPBOARD_REDO_STATE_KEY = "nyxifySnapboardRedoState";
+  // Persisted by the popup from its NyxSuite bridge liveness probe. Proxy
+  // rotation/prep is blocked whenever this is not true.
+  var BRIDGE_POWER_KEY = "nyxsuiteBridgePower";
   var otpPollTimer = null;
   var otpPollInFlight = false;
   var proxyRotatePollTimer = null;
@@ -48,7 +51,7 @@
   var VERIFICATION_RECLICK_INTERVAL_MS = 10000;
   var VERIFICATION_RECLICK_LIMIT = 3;
   var PROXY_ROTATE_WAIT_MS = 22000;
-  var PROXY_ROTATE_CLICK_ATTEMPTS = 4;
+  var PROXY_ROTATE_CLICK_ATTEMPTS = 1;
   var bridgePort = null;
   var autoFillPollTimer = null;
   var AUTO_FILL_POLL_MS = 5000;
@@ -116,6 +119,10 @@
         resolve({});
       }
     });
+  }
+
+  async function isBridgePowerOn() {
+    return (await chromeLocalGet(BRIDGE_POWER_KEY)) === true;
   }
 
   function chromeLocalSet(key, value) {
@@ -2062,24 +2069,32 @@
     }).filter(Boolean);
   }
 
+  function proxyHost(proxyValue) {
+    var normalized = normalizeText(proxyValue).toLowerCase();
+    if (!normalized) return "";
+    if (normalized.indexOf("://") >= 0) normalized = normalized.split("://", 2)[1];
+    normalized = normalized.split("/", 1)[0];
+    if (normalized.indexOf("@") >= 0) normalized = normalized.split("@").pop();
+    if (normalized.indexOf("[") === 0) return normalized.slice(1).split("]", 1)[0];
+    return normalized.split(":", 1)[0];
+  }
+
   function proxyMatchesPriority(proxyValue, priorityPatterns) {
-    var normalizedProxy = normalizeText(proxyValue).toLowerCase();
     var patterns = normalizeProxyPriorityPatterns(priorityPatterns);
-    if (!normalizedProxy || !patterns.length) return true;
-    var proxyHost = normalizedProxy.split(":", 1)[0];
+    var host = proxyHost(proxyValue);
+    if (!host || !patterns.length) return true;
     return patterns.some(function (pattern) {
-      return proxyHost === pattern || proxyHost.indexOf(pattern + ".") === 0;
+      var patternHost = proxyHost(pattern);
+      return host === patternHost || host.indexOf(patternHost + ".") === 0;
     });
   }
 
   function proxyMatchesBlockedPattern(proxyValue, blockedPatterns) {
-    var normalizedProxy = normalizeText(proxyValue).toLowerCase();
-    if (!normalizedProxy) return false;
-    var proxyHost = normalizedProxy.split(":")[0];
+    var host = proxyHost(proxyValue);
+    if (!host) return false;
     return normalizeProxyPriorityPatterns(blockedPatterns).some(function (pattern) {
-      return proxyHost.indexOf(pattern) === 0
-        || normalizedProxy.indexOf(pattern) === 0
-        || normalizedProxy.indexOf(pattern) >= 0;
+      var patternHost = proxyHost(pattern);
+      return !!patternHost && host.indexOf(patternHost) === 0;
     });
   }
 
@@ -2090,6 +2105,7 @@
       var config = await getStoredConfig();
       var apiConfig = getLocalApiConfig(config);
       if (!apiConfig.localApiUrl) return;
+      if (!await isBridgePowerOn()) return;
       var headers = {};
       if (apiConfig.localToken) headers["X-Nyxify-Token"] = apiConfig.localToken;
 
@@ -2112,13 +2128,11 @@
       var rowId = extractRowId(rowKey);
       if (!rowId) return;
 
-      // Use the same robust multi-click rotate as the manual path: click the
-      // rotate button up to maxClicks times and wait PROXY_ROTATE_WAIT_MS for the
-      // proxy cell to actually change. The single-click / 16s wait this replaced
-      // reported "did not change" when SnapBoard simply took longer than 16s to
-      // swap the proxy, which read to the runner as a failed rotation.
+      // Process one rotate click per request and wait PROXY_ROTATE_WAIT_MS for
+      // the proxy cell to actually change. Validation retries are issued as
+      // separate requests so SnapBoard is not hit by rapid multi-clicks.
       var maxClicks = parseInt(payload.max_clicks, 10);
-      if (!(maxClicks >= 1)) maxClicks = 3;
+      if (!(maxClicks >= 1)) maxClicks = 1;
 
       var result = await rotateProxyUntilChanged(
         rowId,
@@ -2134,12 +2148,12 @@
       if (result && result.ok && result.proxy) {
         await fetch(apiConfig.localApiUrl + "/proxy/rotate_result", {
           method: "POST", headers: headers,
-          body: JSON.stringify({ row_key: rowKey, proxy: result.proxy }),
+          body: JSON.stringify({ row_key: rowKey, request_id: payload.request_id, proxy: result.proxy }),
         });
       } else {
         await fetch(apiConfig.localApiUrl + "/proxy/rotate_result", {
           method: "POST", headers: headers,
-          body: JSON.stringify({ row_key: rowKey, error: (result && result.error) || "Proxy did not change after rotation" }),
+          body: JSON.stringify({ row_key: rowKey, request_id: payload.request_id, error: (result && result.error) || "Proxy did not change after rotation" }),
         });
       }
     } catch (error) {
@@ -3202,6 +3216,10 @@
       }
 
       if (message.action === "proxy_rotate") {
+        if (!await isBridgePowerOn()) {
+          sendResponse({ ok: false, error: "NyxSuite bridge power is off; proxy rotation is blocked." });
+          return;
+        }
         var requestedMaxClicks = parseInt(message.max_clicks, 10);
         var maxClicks = Number.isFinite(requestedMaxClicks) && requestedMaxClicks > 0
           ? requestedMaxClicks
