@@ -12,6 +12,8 @@ const TOGGLE_OPTIONS = [
   ["adspowerTagsToggle", "adspowerTagsEnabled", "AdsPower tags enabled.", "AdsPower tags disabled."],
   ["fullAutoModeToggle", "fullAutoModeEnabled", "Full Auto Mode enabled.", "Full Auto Mode disabled."],
   ["continuousModeToggle", "continuousModeEnabled", "Continuous Mode enabled.", "Continuous Mode disabled."],
+  ["adaptiveEmailProviderToggle", "adaptiveEmailProviderEnabled", "Adaptive Email Provider enabled.", "Adaptive Email Provider disabled."],
+  ["adaptivePhoneProviderToggle", "adaptivePhoneProviderEnabled", "Adaptive Phone Provider enabled.", "Adaptive Phone Provider disabled."],
   ["keepProfileOpenToggle", "keepProfileOpenAfterSignup", "Keep Profile Open enabled.", "Keep Profile Open disabled."],
   ["autoFillRowToggle", "autoFillRow", "Auto-Fill Row enabled.", "Auto-Fill Row disabled."],
   ["lockTVToggle", "lockTV", "Lock in TV enabled.", "Lock in TV disabled."],
@@ -54,6 +56,8 @@ function normalizeConfig(config) {
     adspowerTagsEnabled: safeConfig.adspowerTagsEnabled === true,
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
+    adaptiveEmailProviderEnabled: safeConfig.adaptiveEmailProviderEnabled === true,
+    adaptivePhoneProviderEnabled: safeConfig.adaptivePhoneProviderEnabled === true,
     keepProfileOpenAfterSignup: safeConfig.keepProfileOpenAfterSignup === true,
     verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
@@ -84,6 +88,8 @@ function loadOptions() {
     document.getElementById("adspowerTagsToggle").checked = config.adspowerTagsEnabled;
     document.getElementById("fullAutoModeToggle").checked = config.fullAutoModeEnabled === true;
     document.getElementById("continuousModeToggle").checked = config.continuousModeEnabled === true;
+    document.getElementById("adaptiveEmailProviderToggle").checked = config.adaptiveEmailProviderEnabled === true;
+    document.getElementById("adaptivePhoneProviderToggle").checked = config.adaptivePhoneProviderEnabled === true;
     document.getElementById("keepProfileOpenToggle").checked = config.keepProfileOpenAfterSignup === true;
     document.getElementById("autoFillRowToggle").checked = config.autoFillRow;
     document.getElementById("autoFillAccountTarget").value = config.autoFillAccountTarget > 0 ? config.autoFillAccountTarget : "";
@@ -116,6 +122,8 @@ function saveOptions() {
     adspowerTagsEnabled: document.getElementById("adspowerTagsToggle").checked,
     fullAutoModeEnabled: document.getElementById("fullAutoModeToggle").checked,
     continuousModeEnabled: document.getElementById("continuousModeToggle").checked,
+    adaptiveEmailProviderEnabled: document.getElementById("adaptiveEmailProviderToggle").checked,
+    adaptivePhoneProviderEnabled: document.getElementById("adaptivePhoneProviderToggle").checked,
     keepProfileOpenAfterSignup: document.getElementById("keepProfileOpenToggle").checked,
     autoFillRow: document.getElementById("autoFillRowToggle").checked,
     autoFillAccountTarget: document.getElementById("autoFillAccountTarget").value,

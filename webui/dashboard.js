@@ -1225,6 +1225,8 @@ function renderNyxifyAdvanced() {
       </select></label>
       <div class="adv-field toggle-row"><span class="toggle-text">Full Auto Mode</span><label class="toggle-switch"><input id="ncfg-full_auto_mode_enabled" type="checkbox" ${v.full_auto_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <div class="adv-field toggle-row"><span class="toggle-text">Continuous Mode <span class="muted">(send completed signups to Nyx)</span></span><label class="toggle-switch"><input id="ncfg-continuous_mode_enabled" type="checkbox" ${v.continuous_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+      <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Email Provider <span class="muted">(AM/G5/5M fallback)</span></span><label class="toggle-switch"><input id="ncfg-adaptive_email_provider_enabled" type="checkbox" ${v.adaptive_email_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+      <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Phone Provider <span class="muted">(SP/TV fallback)</span></span><label class="toggle-switch"><input id="ncfg-adaptive_phone_provider_enabled" type="checkbox" ${v.adaptive_phone_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       <label class="adv-field"><span>Verification priority</span><select id="ncfg-verification_priority" class="input">
         <option value="email" ${verificationPriority === "email" ? "selected" : ""}>Email</option>
         <option value="phone" ${verificationPriority === "phone" ? "selected" : ""}>Phone</option>
@@ -1488,6 +1490,8 @@ document.addEventListener("click", async (e) => {
       proxy_priority_patterns: el("ncfg-proxy_priority_patterns").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
       full_auto_mode_enabled: el("ncfg-full_auto_mode_enabled").checked,
       continuous_mode_enabled: el("ncfg-continuous_mode_enabled").checked,
+      adaptive_email_provider_enabled: el("ncfg-adaptive_email_provider_enabled").checked,
+      adaptive_phone_provider_enabled: el("ncfg-adaptive_phone_provider_enabled").checked,
       verification_priority: el("ncfg-verification_priority").value,
       disable_extensions_enabled: el("ncfg-disable_extensions_enabled").checked,
       cookie_warmup_enabled: el("ncfg-cookie_warmup_enabled").checked,

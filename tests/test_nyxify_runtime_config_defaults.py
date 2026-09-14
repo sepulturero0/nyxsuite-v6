@@ -23,6 +23,32 @@ def test_nyxify_defaults_keep_tags_blank_and_disabled():
     assert config["proxy_priority_enabled"] is False
     assert config["proxy_priority_patterns"] == []
     assert config["proxy_type"] == "off"
+    assert config["adaptive_email_provider_enabled"] is False
+    assert config["adaptive_phone_provider_enabled"] is False
+
+
+def test_adaptive_provider_flags_round_trip_through_save():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            nrc.save_nyxify_config({
+                "adaptive_email_provider_enabled": True,
+                "adaptive_phone_provider_enabled": True,
+            })
+            reloaded = nrc.load_nyxify_config()
+            assert reloaded["adaptive_email_provider_enabled"] is True
+            assert reloaded["adaptive_phone_provider_enabled"] is True
+
+            nrc.save_nyxify_config({
+                "adaptive_email_provider_enabled": False,
+                "adaptive_phone_provider_enabled": False,
+            })
+            reloaded = nrc.load_nyxify_config()
+            assert reloaded["adaptive_email_provider_enabled"] is False
+            assert reloaded["adaptive_phone_provider_enabled"] is False
 
 
 def test_disable_extensions_flag_round_trips_through_save():

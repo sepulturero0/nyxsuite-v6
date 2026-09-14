@@ -10,6 +10,7 @@ from core.process_utils import APP_DATA_DIR
 
 DATA_DIR = APP_DATA_DIR / "data"
 DB_PATH = DATA_DIR / "nyxify_tasks.db"
+OTP_DISPATCH_LEASE_SECONDS = 185.0
 
 
 def utc_now_iso():
@@ -737,22 +738,33 @@ class NyxifyTaskStore:
                 )
             return cursor.rowcount
 
-    def get_pending_otp_request(self):
+    def get_pending_otp_request(self, lease_seconds=OTP_DISPATCH_LEASE_SECONDS):
         with self._connect() as conn:
+            now = time.time()
+            try:
+                lease = max(1.0, float(lease_seconds))
+            except Exception:
+                lease = OTP_DISPATCH_LEASE_SECONDS
+            redispatch_before = now - lease
             row = conn.execute(
                 """
                 SELECT id, row_key, email, username, otp_request_status,
                        otp_dispatch_count, otp_dispatched_at, updated_at
                 FROM tasks
                 WHERE otp_request_status = 'PENDING'
+                  AND (
+                    COALESCE(otp_dispatched_at, 0) <= 0
+                    OR COALESCE(otp_dispatched_at, 0) <= ?
+                  )
                 ORDER BY updated_at ASC, id ASC
                 LIMIT 1
-                """
+                """,
+                (redispatch_before,),
             ).fetchone()
             if not row:
                 return None
 
-            dispatched_at = time.time()
+            dispatched_at = now
             conn.execute(
                 """
                 UPDATE tasks

@@ -11,6 +11,8 @@ from core.local_http import apply_cors
 
 
 PROXY_ROTATE_DISPATCH_LEASE_SECONDS = 240.0
+VERIFICATION_DISPATCH_LEASE_SECONDS = 185.0
+EMAIL_PHONE_FETCH_DISPATCH_LEASE_SECONDS = 300.0
 
 POST_CREATE_PROXY_LOCK_STEPS = {
     "creating_adspower_profile",
@@ -369,7 +371,9 @@ class _EmailFetchStore:
         with self._lock:
             now = time.monotonic()
             for row_key, payload in list(self._pending.items()):
-                if payload.get("dispatched") and (now - float(payload.get("dispatched_at") or 0.0)) < 5.0:
+                if payload.get("dispatched") and (
+                    now - float(payload.get("dispatched_at") or 0.0)
+                ) < EMAIL_PHONE_FETCH_DISPATCH_LEASE_SECONDS:
                     continue
                 payload["dispatched"] = True
                 payload["dispatched_at"] = now
@@ -434,7 +438,9 @@ class _PhoneFetchStore:
         with self._lock:
             now = time.monotonic()
             for row_key, payload in list(self._pending.items()):
-                if payload.get("dispatched") and (now - float(payload.get("dispatched_at") or 0.0)) < 5.0:
+                if payload.get("dispatched") and (
+                    now - float(payload.get("dispatched_at") or 0.0)
+                ) < EMAIL_PHONE_FETCH_DISPATCH_LEASE_SECONDS:
                     continue
                 payload["dispatched"] = True
                 payload["dispatched_at"] = now
@@ -491,6 +497,7 @@ class _SmsFetchStore:
                 "created_at": time.monotonic(),
                 "dispatched": False,
                 "dispatched_at": 0.0,
+                "dispatch_count": 0,
                 "phone": str(phone or "").strip(),
             }
             self._results.pop(row_key, None)
@@ -499,22 +506,31 @@ class _SmsFetchStore:
         with self._lock:
             now = time.monotonic()
             for row_key, payload in list(self._pending.items()):
-                if payload.get("dispatched") and (now - float(payload.get("dispatched_at") or 0.0)) < 5.0:
+                if payload.get("dispatched") and (
+                    now - float(payload.get("dispatched_at") or 0.0)
+                ) < VERIFICATION_DISPATCH_LEASE_SECONDS:
                     continue
                 payload["dispatched"] = True
                 payload["dispatched_at"] = now
-                return {"row_key": row_key, "phone": payload.get("phone", "")}
+                payload["dispatch_count"] = int(payload.get("dispatch_count") or 0) + 1
+                return {
+                    "row_key": row_key,
+                    "phone": payload.get("phone", ""),
+                    "dispatch_count": payload.get("dispatch_count", 0),
+                    "dispatched_at": now,
+                }
             return None
 
     def store_result(self, row_key, code="", error=None):
         with self._lock:
             normalized_code = str(code or "").strip()
+            normalized_error = str(error or "").strip()
             self._results[row_key] = {
                 "code": normalized_code,
-                "error": str(error or "").strip(),
+                "error": normalized_error,
                 "done_at": time.monotonic(),
             }
-            if normalized_code:
+            if normalized_code or normalized_error:
                 self._pending.pop(row_key, None)
             elif row_key in self._pending:
                 self._pending[row_key]["dispatched"] = False
@@ -538,6 +554,7 @@ class _SmsFetchStore:
                 "dispatched": dispatched,
                 "age_seconds": max(0.0, now - created_at),
                 "phone": payload.get("phone", ""),
+                "dispatch_count": int(payload.get("dispatch_count") or 0),
             }
             if dispatched and dispatched_at:
                 info["dispatched_age_seconds"] = max(0.0, now - dispatched_at)
@@ -1942,6 +1959,8 @@ class NyxifyLocalApiServer:
                         "push_adspower_id_enabled",
                         "full_auto_mode_enabled",
                         "continuous_mode_enabled",
+                        "adaptive_email_provider_enabled",
+                        "adaptive_phone_provider_enabled",
                         "verification_priority",
                         "keep_profile_open_after_signup",
                         "disable_extensions_enabled",

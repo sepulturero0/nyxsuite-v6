@@ -42,6 +42,8 @@
   var VERIFICATION_CHECK_ACTIVE_MS = 125000;
   var verificationCheckStateByKey = Object.create(null);
   var EMAIL_FETCH_TIMEOUT_MS = 45000;
+  var ADAPTIVE_PROVIDER_SWITCH_SETTLE_MS = 450;
+  var ADAPTIVE_PROVIDER_LOCK_HOLD_MS = 180000;
   // SnapBoard's "get new email / number" (redo) buttons enforce a ~60s cooldown
   // after each order. Wait a little past that so a reorder click isn't a no-op.
   var REDO_COOLDOWN_MAX_WAIT_MS = 72000;
@@ -49,6 +51,8 @@
   var redoRefreshStateByKey = Object.create(null);
   var OTP_CLICK_RETRY_INTERVAL_MS = 2500;
   var VERIFICATION_RECLICK_INTERVAL_MS = 10000;
+  var VERIFICATION_IGNORED_RECLICK_INTERVAL_MS = 1500;
+  var VERIFICATION_CLICK_ACK_TIMEOUT_MS = 2200;
   var VERIFICATION_RECLICK_LIMIT = 3;
   var PROXY_ROTATE_WAIT_MS = 22000;
   var PROXY_ROTATE_CLICK_ATTEMPTS = 1;
@@ -57,6 +61,7 @@
   var AUTO_FILL_POLL_MS = 5000;
   var providerLockTimer = null;
   var PROVIDER_LOCK_POLL_MS = 1500;
+  var adaptiveProviderOverrideByKind = Object.create(null);
   var autoLoginTimer = null;
   var AUTO_LOGIN_POLL_MS = 2000;
   var AUTO_LOGIN_MAX_ATTEMPTS = 5;
@@ -804,9 +809,213 @@
     return clickElement(button);
   }
 
+  function findProviderButton(kind, provider) {
+    if (kind === "email") {
+      if (provider === "5m") return find5MProviderButton();
+      if (provider === "g5") return findG5ProviderButton();
+      return findAMProviderButton();
+    }
+    return provider === "tv" ? findTVProviderButton() : findSPProviderButton();
+  }
+
+  function providerCycle(kind) {
+    return kind === "email" ? ["am", "g5", "5m"] : ["sp", "tv"];
+  }
+
+  function providerLabel(provider) {
+    return String(provider || "").toUpperCase();
+  }
+
+  function configuredProvider(kind, config) {
+    if (kind === "email") {
+      var emailProviderLock = String((config && (config.emailProviderLock || (config.lockG5 ? "g5" : "am"))) || "am").toLowerCase();
+      return providerCycle("email").indexOf(emailProviderLock) >= 0 ? emailProviderLock : "am";
+    }
+    return config && config.lockTV ? "tv" : "sp";
+  }
+
+  function activeProvider(kind) {
+    var cycle = providerCycle(kind);
+    for (var index = 0; index < cycle.length; index += 1) {
+      var provider = cycle[index];
+      if (isProviderOptionActive(findProviderButton(kind, provider))) {
+        return provider;
+      }
+    }
+    return "";
+  }
+
+  function providerAttemptOrder(kind, firstProvider) {
+    var cycle = providerCycle(kind);
+    var first = String(firstProvider || "").toLowerCase();
+    var start = cycle.indexOf(first);
+    if (start < 0) start = 0;
+    return cycle.slice(start).concat(cycle.slice(0, start));
+  }
+
+  function setAdaptiveProviderOverride(kind, provider, holdMs) {
+    adaptiveProviderOverrideByKind[kind] = {
+      provider: provider,
+      until: Date.now() + (holdMs || ADAPTIVE_PROVIDER_LOCK_HOLD_MS),
+    };
+  }
+
+  function clearAdaptiveProviderOverride(kind) {
+    delete adaptiveProviderOverrideByKind[kind];
+  }
+
+  function activeAdaptiveProviderOverride(kind) {
+    var entry = adaptiveProviderOverrideByKind[kind];
+    if (!entry || !entry.provider || Number(entry.until || 0) <= Date.now()) {
+      clearAdaptiveProviderOverride(kind);
+      return "";
+    }
+    return entry.provider;
+  }
+
+  function providerFromElement(element, kind) {
+    var cycle = providerCycle(kind);
+    var node = element;
+    while (node && node !== document) {
+      var dataProvider = normalizeText(node.getAttribute && node.getAttribute("data-provider") || "").toLowerCase();
+      var onclickText = normalizeText(node.getAttribute && node.getAttribute("onclick") || "").toLowerCase();
+      var text = normalizeText(node.innerText || node.textContent || "").toLowerCase();
+      if (kind === "email") {
+        if (
+          dataProvider === "accountmanager"
+          || dataProvider === "accountsmarket"
+          || dataProvider === "accsmarket"
+          || dataProvider === "am"
+          || onclickText.indexOf("setemailprovider('accountmanager')") >= 0
+          || onclickText.indexOf('setemailprovider("accountmanager")') >= 0
+          || onclickText.indexOf("setemailprovider('accountsmarket')") >= 0
+          || onclickText.indexOf('setemailprovider("accountsmarket")') >= 0
+          || onclickText.indexOf("setemailprovider('accsmarket')") >= 0
+          || onclickText.indexOf('setemailprovider("accsmarket")') >= 0
+          || onclickText.indexOf("setemailprovider('am')") >= 0
+          || onclickText.indexOf('setemailprovider("am")') >= 0
+          || text === "am"
+        ) {
+          return "am";
+        }
+        if (
+          dataProvider === "gmail500"
+          || dataProvider === "g5"
+          || onclickText.indexOf("setemailprovider('gmail500')") >= 0
+          || onclickText.indexOf('setemailprovider("gmail500")') >= 0
+          || text === "g5"
+        ) {
+          return "g5";
+        }
+        if (
+          dataProvider === "5mail"
+          || dataProvider === "5m"
+          || onclickText.indexOf("setemailprovider('5mail')") >= 0
+          || onclickText.indexOf('setemailprovider("5mail")') >= 0
+          || onclickText.indexOf("setemailprovider('5m')") >= 0
+          || onclickText.indexOf('setemailprovider("5m")') >= 0
+          || text === "5m"
+        ) {
+          return "5m";
+        }
+      } else {
+        if (
+          dataProvider === "smspool"
+          || dataProvider === "sms_pool"
+          || dataProvider === "sp"
+          || onclickText.indexOf("setphoneprovider('smspool')") >= 0
+          || onclickText.indexOf('setphoneprovider("smspool")') >= 0
+          || onclickText.indexOf("setphoneprovider('sms_pool')") >= 0
+          || onclickText.indexOf('setphoneprovider("sms_pool")') >= 0
+          || onclickText.indexOf("setphoneprovider('sp')") >= 0
+          || onclickText.indexOf('setphoneprovider("sp")') >= 0
+          || text === "sp"
+        ) {
+          return "sp";
+        }
+        if (
+          dataProvider === "textverified"
+          || dataProvider === "tv"
+          || onclickText.indexOf("setphoneprovider('textverified')") >= 0
+          || onclickText.indexOf('setphoneprovider("textverified")') >= 0
+          || text === "tv"
+        ) {
+          return "tv";
+        }
+      }
+      node = node.parentElement;
+    }
+    return cycle.indexOf("") >= 0 ? "" : "";
+  }
+
+  function updateConfigCache(patch) {
+    configCache = Object.assign({}, configCache || {}, patch || {});
+    configCacheAt = Date.now();
+  }
+
+  function persistManualProviderLock(kind, provider) {
+    if (!provider) {
+      return;
+    }
+    var patch = kind === "email"
+      ? { emailProviderLock: provider, lockG5: provider === "g5" }
+      : { lockTV: provider === "tv" };
+    updateConfigCache(patch);
+    setAdaptiveProviderOverride(kind, provider, 10000);
+    try {
+      chrome.runtime.sendMessage(Object.assign({ type: "NYXIFY_SAVE_CONFIG" }, patch), function () {});
+    } catch (_error) {}
+  }
+
+  function captureManualProviderLock(event) {
+    if (event && event.isTrusted === false) {
+      return;
+    }
+    var emailProvider = providerFromElement(event && event.target, "email");
+    if (emailProvider) {
+      persistManualProviderLock("email", emailProvider);
+      return;
+    }
+    var phoneProvider = providerFromElement(event && event.target, "phone");
+    if (phoneProvider) {
+      persistManualProviderLock("phone", phoneProvider);
+    }
+  }
+
+  async function activateProvider(kind, provider) {
+    var button = findProviderButton(kind, provider);
+    if (!button) {
+      return { ok: false, error: providerLabel(provider) + " provider button missing." };
+    }
+    setAdaptiveProviderOverride(kind, provider, ADAPTIVE_PROVIDER_LOCK_HOLD_MS);
+    if (isProviderOptionActive(button) || activeProvider(kind) === provider) {
+      return { ok: true, already_active: true };
+    }
+    var clicked = clickElement(button);
+    if (!clicked) {
+      return { ok: false, error: providerLabel(provider) + " provider switch click failed." };
+    }
+    await sleep(ADAPTIVE_PROVIDER_SWITCH_SETTLE_MS);
+    if (isProviderOptionActive(button) || activeProvider(kind) === provider) {
+      return { ok: true, clicked: true };
+    }
+    await sleep(ADAPTIVE_PROVIDER_SWITCH_SETTLE_MS);
+    if (isProviderOptionActive(findProviderButton(kind, provider)) || activeProvider(kind) === provider) {
+      return { ok: true, clicked: true };
+    }
+    return {
+      ok: false,
+      clicked: true,
+      active_provider: activeProvider(kind),
+      error: providerLabel(provider) + " provider switch clicked but did not become active.",
+    };
+  }
+
   async function checkProviderLock() {
     var config = await getStoredConfig();
-    var emailProviderLock = config.emailProviderLock || (config.lockG5 ? "g5" : "am");
+    var emailProviderLock = activeAdaptiveProviderOverride("email")
+      || config.emailProviderLock
+      || (config.lockG5 ? "g5" : "am");
     if (emailProviderLock === "5m") {
       lockProviderTo5M();
     } else if (emailProviderLock === "g5") {
@@ -814,7 +1023,8 @@
     } else {
       lockProviderToAM();
     }
-    if (config.lockTV) {
+    var phoneProviderLock = activeAdaptiveProviderOverride("phone") || (config.lockTV ? "tv" : "sp");
+    if (phoneProviderLock === "tv") {
       lockProviderToTV();
     } else {
       lockProviderToSP();
@@ -1302,6 +1512,53 @@
     return { clicked: clickAuthElement(state.button), state: state };
   }
 
+  async function waitForAuthClickAcknowledgement(rowId, kind, previousState, popupSnapshot, previousCode, timeoutMs) {
+    var deadline = Date.now() + Math.max(300, Number(timeoutMs) || VERIFICATION_CLICK_ACK_TIMEOUT_MS);
+    var latestState = previousState || { rowPresent: false, candidates: 0, clickable: 0, mode: "missing", countdown_ms: 0 };
+    while (Date.now() < deadline) {
+      var code = kind === "sms"
+        ? waitlessSmsCode(rowId, popupSnapshot, previousCode)
+        : waitlessOtpCode(rowId, popupSnapshot, previousCode);
+      if (code) {
+        return { acknowledged: true, code: code, state: latestState, reason: "code" };
+      }
+      latestState = _authCheckState(rowId, kind);
+      if (
+        Number(latestState.countdown_ms || 0) > 0
+        || latestState.mode === "waiting"
+        || (
+          latestState.rowPresent
+          && Number(latestState.candidates || 0) > 0
+          && Number(latestState.clickable || 0) === 0
+        )
+      ) {
+        return { acknowledged: true, code: "", state: latestState, reason: latestState.mode || "state_changed" };
+      }
+      await sleep(250);
+    }
+    return { acknowledged: false, code: "", state: latestState, reason: "click_ignored_ready" };
+  }
+
+  function waitlessOtpCode(rowId, popupSnapshot, previousCode) {
+    var rowCode = getOtpTextForRow(rowId);
+    var popupCode = getNewOtpPopupCode(popupSnapshot);
+    var code = rowCode || popupCode;
+    if (code && previousCode && code === previousCode) {
+      code = popupCode && popupCode !== previousCode ? popupCode : "";
+    }
+    return code || "";
+  }
+
+  function waitlessSmsCode(rowId, popupSnapshot, previousCode) {
+    var rowCode = getSmsTextForRow(rowId);
+    var popupCode = getNewOtpPopupCode(popupSnapshot);
+    var code = rowCode || popupCode;
+    if (code && previousCode && code === previousCode) {
+      code = popupCode && popupCode !== previousCode ? popupCode : "";
+    }
+    return code || "";
+  }
+
   function _countdownMsFromText(value) {
     var text = normalizeText(value);
     var minutes = 0;
@@ -1629,7 +1886,7 @@
       || text.indexOf("get email first") >= 0;
   }
 
-  async function requestEmailFetch(rowId, forceNew) {
+  async function requestEmailFetchOnce(rowId, forceNew) {
     var currentEmail = readEmailFromRowId(rowId);
     if (currentEmail && !forceNew) {
       return { ok: true, email: currentEmail };
@@ -1691,7 +1948,50 @@
     return { ok: true, email: fetchedEmail };
   }
 
-  async function requestPhoneFetch(rowId, forceNew) {
+  async function requestEmailFetch(rowId, forceNew) {
+    var config = await getStoredConfig();
+    if (config.adaptiveEmailProviderEnabled !== true) {
+      return await requestEmailFetchOnce(rowId, forceNew);
+    }
+    var initialEmail = readEmailFromRowId(rowId);
+    if (initialEmail && !forceNew) {
+      return { ok: true, email: initialEmail };
+    }
+    var startProvider = activeProvider("email") || configuredProvider("email", config);
+    var attempts = providerAttemptOrder("email", startProvider);
+    var errors = [];
+    var lastResult = null;
+    try {
+      for (var index = 0; index < attempts.length; index += 1) {
+        var provider = attempts[index];
+        var switchResult = await activateProvider("email", provider);
+        if (!switchResult.ok) {
+          errors.push(providerLabel(provider) + ": " + switchResult.error);
+          continue;
+        }
+        lastResult = await requestEmailFetchOnce(rowId, forceNew);
+        if (lastResult && lastResult.ok && lastResult.email) {
+          lastResult.adaptive_provider = providerLabel(provider);
+          lastResult.adaptive_attempts = index + 1;
+          return lastResult;
+        }
+        errors.push(providerLabel(provider) + ": " + ((lastResult && lastResult.error) || "Email fetch failed."));
+      }
+      return {
+        ok: false,
+        stale: !!(lastResult && lastResult.stale),
+        terminal: !!(lastResult && lastResult.terminal),
+        no_pending_order: !!(lastResult && lastResult.no_pending_order),
+        adaptive_provider: attempts.map(providerLabel).join("->"),
+        adaptive_provider_exhausted: true,
+        error: "All adaptive email providers exhausted. " + errors.join(" | "),
+      };
+    } finally {
+      clearAdaptiveProviderOverride("email");
+    }
+  }
+
+  async function requestPhoneFetchOnce(rowId, forceNew) {
     var currentPhone = readPhoneFromRowId(rowId);
     if (currentPhone && !forceNew) {
       return { ok: true, phone: currentPhone };
@@ -1751,6 +2051,49 @@
 
     queueScan();
     return { ok: true, phone: fetchedPhone };
+  }
+
+  async function requestPhoneFetch(rowId, forceNew) {
+    var config = await getStoredConfig();
+    if (config.adaptivePhoneProviderEnabled !== true) {
+      return await requestPhoneFetchOnce(rowId, forceNew);
+    }
+    var currentPhone = readPhoneFromRowId(rowId);
+    if (currentPhone && !forceNew) {
+      return { ok: true, phone: currentPhone };
+    }
+    var startProvider = activeProvider("phone") || configuredProvider("phone", config);
+    var attempts = providerAttemptOrder("phone", startProvider);
+    var errors = [];
+    var lastResult = null;
+    try {
+      for (var index = 0; index < attempts.length; index += 1) {
+        var provider = attempts[index];
+        var switchResult = await activateProvider("phone", provider);
+        if (!switchResult.ok) {
+          errors.push(providerLabel(provider) + ": " + switchResult.error);
+          continue;
+        }
+        lastResult = await requestPhoneFetchOnce(rowId, forceNew);
+        if (lastResult && lastResult.ok && lastResult.phone) {
+          lastResult.adaptive_provider = providerLabel(provider);
+          lastResult.adaptive_attempts = index + 1;
+          return lastResult;
+        }
+        errors.push(providerLabel(provider) + ": " + ((lastResult && lastResult.error) || "Phone fetch failed."));
+      }
+      return {
+        ok: false,
+        stale: !!(lastResult && lastResult.stale),
+        terminal: !!(lastResult && lastResult.terminal),
+        no_pending_order: !!(lastResult && lastResult.no_pending_order),
+        adaptive_provider: attempts.map(providerLabel).join("->"),
+        adaptive_provider_exhausted: true,
+        error: "All adaptive phone providers exhausted. " + errors.join(" | "),
+      };
+    } finally {
+      clearAdaptiveProviderOverride("phone");
+    }
   }
 
   function sleep(ms) {
@@ -2481,6 +2824,7 @@
     var lastClickState = { rowPresent: false, candidates: 0, clickable: 0, mode: "missing", countdown_ms: 0 };
     var clickAttempts = 0;
     var successfulClicks = 0;
+    var ignoredClicks = 0;
     var nextAllowedClickAt = startedAt;
     var memoryDirty = false;
     function rememberActiveWindow(ms, reason) {
@@ -2521,7 +2865,10 @@
       memory.lastMode = authState.mode || memory.lastMode || "";
       memoryDirty = true;
       var retryReady = authState.mode === "retry";
-      var internalWaitActive = Date.now() < Number(memory.activeUntil || 0) && !retryReady;
+      var readyWithoutCountdown = authState.mode === "ready"
+        && Number(authState.countdown_ms || 0) === 0
+        && Number(authState.clickable || 0) > 0;
+      var internalWaitActive = Date.now() < Number(memory.activeUntil || 0) && !retryReady && !readyWithoutCountdown;
       var shouldClick = !internalWaitActive
         && authState.mode !== "waiting"
         && authState.mode !== "disabled"
@@ -2554,12 +2901,31 @@
         clickAttempts += 1;
         nextAllowedClickAt = Date.now() + VERIFICATION_RECLICK_INTERVAL_MS;
         if (clicked) {
-          successfulClicks += 1;
-          memory.lastClickAt = Date.now();
-          rememberActiveWindow(VERIFICATION_CHECK_ACTIVE_MS, lastClickState.mode === "retry" ? "retry_clicked" : "clicked");
-          observeCountdown(true);
-          await persistVerificationCheckMemory();
-          memoryDirty = false;
+          var ack = await waitForAuthClickAcknowledgement(
+            rowId,
+            kind,
+            lastClickState,
+            popupSnapshot,
+            previousCode,
+            VERIFICATION_CLICK_ACK_TIMEOUT_MS
+          );
+          lastClickState = ack.state || lastClickState;
+          if (ack.code) {
+            latestCode = ack.code;
+          } else if (ack.acknowledged) {
+            successfulClicks += 1;
+            memory.lastClickAt = Date.now();
+            rememberActiveWindow(VERIFICATION_CHECK_ACTIVE_MS, lastClickState.mode === "retry" ? "retry_clicked" : "clicked");
+            observeCountdown(true);
+            await persistVerificationCheckMemory();
+            memoryDirty = false;
+          } else {
+            ignoredClicks += 1;
+            memory.reason = ack.reason || "click_ignored_ready";
+            memory.activeUntil = 0;
+            nextAllowedClickAt = Date.now() + VERIFICATION_IGNORED_RECLICK_INTERVAL_MS;
+            memoryDirty = true;
+          }
           diagTiming(sms ? "check_sms.click" : "check_code.click", diagStart);
         }
       } else if (
@@ -2621,12 +2987,19 @@
     var controlUnresponsive = lastClickState.rowPresent
       && Number(lastClickState.candidates || 0) > 0
       && successfulClicks === 0;
+    var clickIgnoredReady = ignoredClicks > 0
+      && lastClickState.rowPresent
+      && Number(lastClickState.candidates || 0) > 0
+      && Number(lastClickState.clickable || 0) > 0
+      && Number(lastClickState.countdown_ms || 0) === 0
+      && lastClickState.mode === "ready";
     return {
       ok: false,
-      refresh_required: controlMissing || controlUnresponsive,
+      refresh_required: controlMissing || controlUnresponsive || clickIgnoredReady,
       error: (sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.")
         + " [check_attempts=" + clickAttempts
         + ", successful_clicks=" + successfulClicks
+        + ", ignored_clicks=" + ignoredClicks
         + ", row_present=" + (lastClickState.rowPresent ? "1" : "0")
         + ", candidates=" + Number(lastClickState.candidates || 0)
         + ", clickable=" + Number(lastClickState.clickable || 0)
@@ -3250,6 +3623,7 @@
   document.addEventListener("input", queueScan, true);
   document.addEventListener("change", queueScan, true);
   document.addEventListener("click", queueScanFromInteraction, true);
+  document.addEventListener("click", captureManualProviderLock, true);
   chrome.storage.onChanged.addListener(function (changes, areaName) {
     if (areaName !== "sync" || !changes[CONFIG_KEY]) {
       return;

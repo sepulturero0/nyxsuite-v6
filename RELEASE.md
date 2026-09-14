@@ -7,6 +7,26 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.11
+
+- Nyxify now has Adaptive Email Provider and Adaptive Phone Provider toggles in
+  the dashboard config, allowing failed email/number fetches to try the next
+  SnapBoard provider instead of immediately failing the account.
+- Adaptive email fetches cycle through the current provider plus AM, G5, and
+  5M; adaptive phone fetches cycle through the current provider plus SP and TV.
+  OTP/SMS code checking itself does not rotate providers.
+- Manual SnapBoard provider clicks now update the saved Nyxify provider lock,
+  so clicking AM/G5/5M or SP/TV directly on SnapBoard persists across refreshes
+  without opening the extension settings.
+- SMS/OTP verification is more deterministic: ignored Check Code/Check SMS
+  clicks are detected, ready-without-countdown states are retried, and message
+  channel closure/reload races can trigger controlled recovery.
+- Email, phone, OTP, and SMS bridge dispatches now use longer leases and
+  dispatch diagnostics to avoid duplicate in-flight provider/code fetch races.
+- Added focused regression coverage for adaptive provider config sync,
+  SnapBoard manual provider locking, verification click acknowledgement,
+  dispatch leases, and SMS/OTP bridge recovery diagnostics.
+
 ## NyxSuite v6.7.10
 
 - Nyxify now preserves a manually completed Snapchat signup when the browser is

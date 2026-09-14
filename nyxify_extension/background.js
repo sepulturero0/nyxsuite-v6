@@ -44,7 +44,7 @@ const BRIDGE_RECOVERY_COOLDOWN_MS = 20000;
 const BRIDGE_WAITING_LOG_COOLDOWN_MS = 30000;
 const BRIDGE_DASHBOARD_URL = "http://127.0.0.1:8870/";
 const BRIDGE_POWER_PROBE_INTERVAL_MS = 5000;
-const SNAPBOARD_MESSAGE_TIMEOUT_MS = 240000;
+const SNAPBOARD_MESSAGE_TIMEOUT_MS = 300000;
 let localConfigCache = null;
 let localConfigCacheAt = 0;
 let remoteConfigSyncAt = 0;
@@ -256,6 +256,8 @@ function normalizeConfig(config) {
     pushAdspowerIdEnabled: safeConfig.pushAdspowerIdEnabled !== false,
     fullAutoModeEnabled: safeConfig.fullAutoModeEnabled === true,
     continuousModeEnabled: safeConfig.continuousModeEnabled === true,
+    adaptiveEmailProviderEnabled: safeConfig.adaptiveEmailProviderEnabled === true,
+    adaptivePhoneProviderEnabled: safeConfig.adaptivePhoneProviderEnabled === true,
     keepProfileOpenAfterSignup: safeConfig.keepProfileOpenAfterSignup === true,
     verificationPriority: ["email", "phone", "auto"].includes(verificationPriority) ? verificationPriority : DEFAULT_VERIFICATION_PRIORITY,
     autoFillRow: safeConfig.autoFillRow === true,
@@ -293,6 +295,8 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
     pushAdspowerIdEnabled: runner.push_adspower_id_enabled !== false,
     fullAutoModeEnabled: runner.full_auto_mode_enabled === true,
     continuousModeEnabled: runner.continuous_mode_enabled === true,
+    adaptiveEmailProviderEnabled: runner.adaptive_email_provider_enabled === true,
+    adaptivePhoneProviderEnabled: runner.adaptive_phone_provider_enabled === true,
     keepProfileOpenAfterSignup: runner.keep_profile_open_after_signup === true,
     verificationPriority: runner.verification_priority || base.verificationPriority,
   });
@@ -316,6 +320,8 @@ function runnerConfigPayloadFromExtensionConfig(config, replaceBlocked = false) 
     push_adspower_id_enabled: safe.pushAdspowerIdEnabled,
     full_auto_mode_enabled: safe.fullAutoModeEnabled,
     continuous_mode_enabled: safe.continuousModeEnabled,
+    adaptive_email_provider_enabled: safe.adaptiveEmailProviderEnabled,
+    adaptive_phone_provider_enabled: safe.adaptivePhoneProviderEnabled,
     keep_profile_open_after_signup: safe.keepProfileOpenAfterSignup,
     verification_priority: safe.verificationPriority,
   };
@@ -1634,6 +1640,8 @@ async function saveConfigAndRunner(patch) {
   await chrome.storage.sync.set({
     [STORAGE_KEYS.config]: nextConfig,
   });
+  localConfigCache = nextConfig;
+  localConfigCacheAt = Date.now();
 
   if (targetChanged || autoFillTurnedOn) {
     await resetAutoFillProgress(nextConfig.autoFillAccountTarget);
@@ -2005,6 +2013,15 @@ function isTerminalSnapboardFetchResponse(response) {
     || error.includes("request a number first");
 }
 
+function isSnapboardMessageChannelError(response) {
+  const error = String(response && response.error || "").toLowerCase();
+  return error.includes("message channel closed")
+    || error.includes("receiving end does not exist")
+    || error.includes("extension context invalidated")
+    || error.includes("port closed")
+    || error.includes("snapboard message timed out");
+}
+
 // Send a fetch to SnapBoard and, if it comes back empty/failed, recover the
 // board and retry — "refresh / re-login the SnapBoard first before retrying",
 // since a stale OR logged-out board is a common cause of a missing
@@ -2069,7 +2086,10 @@ async function snapboardFetchVerificationCode(message) {
   if (response && response.ok) {
     return response;
   }
-  if (!response || !response.refresh_required || isTerminalSnapboardFetchResponse(response)) {
+  if (isTerminalSnapboardFetchResponse(response)) {
+    return response;
+  }
+  if (!response || (!response.refresh_required && !isSnapboardMessageChannelError(response))) {
     return response;
   }
   const refreshed = await refreshSnapboardTab({ force: true });
@@ -2318,6 +2338,11 @@ async function processBridgeActionsOnce() {
             row_key: emailRequest.row_key,
             force_new: !!emailRequest.force_new,
           });
+          if (emailResponse && emailResponse.adaptive_provider) {
+            await appendEventLog(
+              `Nyxify adaptive email provider ${emailResponse.ok ? "selected" : "exhausted"}: ${emailResponse.adaptive_provider}.`
+            );
+          }
           await callLocalNyxify("POST", "/email/result", {
             row_key: emailRequest.row_key,
             email: emailResponse.ok ? (emailResponse.email || "") : "",
@@ -2341,6 +2366,11 @@ async function processBridgeActionsOnce() {
             row_key: phoneRequest.row_key,
             force_new: !!phoneRequest.force_new,
           });
+          if (phoneResponse && phoneResponse.adaptive_provider) {
+            await appendEventLog(
+              `Nyxify adaptive phone provider ${phoneResponse.ok ? "selected" : "exhausted"}: ${phoneResponse.adaptive_provider}.`
+            );
+          }
           await callLocalNyxify("POST", "/phone/result", {
             row_key: phoneRequest.row_key,
             phone: phoneResponse.ok ? (phoneResponse.phone || "") : "",

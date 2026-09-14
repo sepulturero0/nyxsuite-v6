@@ -96,6 +96,8 @@ const backendConfig = {
   push_adspower_id_enabled: true,
   full_auto_mode_enabled: true,
   continuous_mode_enabled: true,
+  adaptive_email_provider_enabled: true,
+  adaptive_phone_provider_enabled: true,
   keep_profile_open_after_signup: true,
   verification_priority: "phone"
 };
@@ -162,23 +164,33 @@ vm.runInContext(
 
     assert data["defaults"]["tagOne"] == ""
     assert data["defaults"]["adspowerTagsEnabled"] is False
+    assert data["defaults"]["adaptiveEmailProviderEnabled"] is False
+    assert data["defaults"]["adaptivePhoneProviderEnabled"] is False
     assert data["mapped"]["tagOne"] == ""
     assert data["mapped"]["adspowerTagsEnabled"] is False
     assert data["mapped"]["fullAutoModeEnabled"] is True
     assert data["mapped"]["continuousModeEnabled"] is True
+    assert data["mapped"]["adaptiveEmailProviderEnabled"] is True
+    assert data["mapped"]["adaptivePhoneProviderEnabled"] is True
     assert data["mapped"]["keepProfileOpenAfterSignup"] is True
     assert data["mapped"]["verificationPriority"] == "phone"
     assert data["payload"]["tag_one"] == ""
     assert data["payload"]["adspower_tags_enabled"] is False
     assert data["payload"]["continuous_mode_enabled"] is True
+    assert data["payload"]["adaptive_email_provider_enabled"] is True
+    assert data["payload"]["adaptive_phone_provider_enabled"] is True
     assert data["payload"]["keep_profile_open_after_signup"] is True
     assert data["payload"]["verification_priority"] == "phone"
     assert data["statusConfig"]["tagOne"] == ""
     assert data["statusConfig"]["adspowerTagsEnabled"] is False
     assert data["statusConfig"]["continuousModeEnabled"] is True
+    assert data["statusConfig"]["adaptiveEmailProviderEnabled"] is True
+    assert data["statusConfig"]["adaptivePhoneProviderEnabled"] is True
     assert data["statusConfig"]["keepProfileOpenAfterSignup"] is True
     assert data["statusConfig"]["verificationPriority"] == "phone"
     assert data["savedConfig"]["tagOne"] == ""
+    assert data["savedConfig"]["adaptiveEmailProviderEnabled"] is True
+    assert data["savedConfig"]["adaptivePhoneProviderEnabled"] is True
     assert data["savedConfig"]["keepProfileOpenAfterSignup"] is True
     assert data["savedConfig"]["verificationPriority"] == "phone"
     assert data["fetchedConfig"] is True
@@ -187,6 +199,7 @@ vm.runInContext(
 
 def test_nyxify_popup_and_options_expose_synced_runner_controls():
     popup_html = (ROOT / "nyxify_extension" / "popup.html").read_text()
+    popup_js = (ROOT / "nyxify_extension" / "popup.js").read_text()
     options_html = (ROOT / "nyxify_extension" / "options.html").read_text()
     options_js = (ROOT / "nyxify_extension" / "options.js").read_text()
     dashboard_js = (ROOT / "webui" / "dashboard.js").read_text()
@@ -202,25 +215,39 @@ def test_nyxify_popup_and_options_expose_synced_runner_controls():
 
     assert 'id="continuousModeToggle"' in options_html
     assert 'id="keepProfileOpenToggle"' in options_html
+    assert 'id="adaptiveEmailProviderToggle"' in options_html
+    assert 'id="adaptivePhoneProviderToggle"' in options_html
     assert 'id="adspowerTagsToggle" type="checkbox" checked' not in options_html
     assert 'id="tagOne" class="input" type="text" placeholder="Optional tag"' in options_html
 
+    assert "adaptiveEmailProviderEnabled" in popup_js
+    assert "adaptivePhoneProviderEnabled" in popup_js
     assert 'const DEFAULT_TAG_ONE = "";' in options_js
     assert '["continuousModeToggle", "continuousModeEnabled"' in options_js
+    assert '["adaptiveEmailProviderToggle", "adaptiveEmailProviderEnabled"' in options_js
+    assert '["adaptivePhoneProviderToggle", "adaptivePhoneProviderEnabled"' in options_js
     assert '["keepProfileOpenToggle", "keepProfileOpenAfterSignup"' in options_js
     assert "adspowerTagsEnabled: safeConfig.adspowerTagsEnabled === true" in options_js
     assert 'document.getElementById("continuousModeToggle").checked = config.continuousModeEnabled === true;' in options_js
+    assert 'document.getElementById("adaptiveEmailProviderToggle").checked = config.adaptiveEmailProviderEnabled === true;' in options_js
+    assert 'document.getElementById("adaptivePhoneProviderToggle").checked = config.adaptivePhoneProviderEnabled === true;' in options_js
     assert 'document.getElementById("keepProfileOpenToggle").checked = config.keepProfileOpenAfterSignup === true;' in options_js
     assert 'continuousModeEnabled: document.getElementById("continuousModeToggle").checked' in options_js
+    assert 'adaptiveEmailProviderEnabled: document.getElementById("adaptiveEmailProviderToggle").checked' in options_js
+    assert 'adaptivePhoneProviderEnabled: document.getElementById("adaptivePhoneProviderToggle").checked' in options_js
     assert 'keepProfileOpenAfterSignup: document.getElementById("keepProfileOpenToggle").checked' in options_js
 
     assert 'id="ncfg-proxy_blocker_enabled"' in dashboard_js
     assert 'id="ncfg-proxy_checker_enabled"' in dashboard_js
+    assert 'id="ncfg-adaptive_email_provider_enabled"' in dashboard_js
+    assert 'id="ncfg-adaptive_phone_provider_enabled"' in dashboard_js
     assert 'id="ncfg-proxy_priority_enabled"' in dashboard_js
     assert 'id="ncfg-proxy_priority_patterns"' in dashboard_js
     assert "v.adspower_tags_enabled === true" in dashboard_js
     assert 'proxy_blocker_enabled: el("ncfg-proxy_blocker_enabled").checked' in dashboard_js
     assert 'proxy_checker_enabled: el("ncfg-proxy_checker_enabled").checked' in dashboard_js
+    assert 'adaptive_email_provider_enabled: el("ncfg-adaptive_email_provider_enabled").checked' in dashboard_js
+    assert 'adaptive_phone_provider_enabled: el("ncfg-adaptive_phone_provider_enabled").checked' in dashboard_js
     assert 'proxy_priority_enabled: el("ncfg-proxy_priority_enabled").checked' in dashboard_js
     assert 'proxy_priority_patterns: el("ncfg-proxy_priority_patterns").value.split' in dashboard_js
 

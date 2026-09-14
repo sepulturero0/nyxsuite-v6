@@ -121,7 +121,10 @@ class StatusUpdateApiTests(unittest.TestCase):
         self.assertTrue(resp["ok"])
 
         pending = self._get("/sms/pending")
-        self.assertEqual(pending["request"], {"row_key": "snapboard:99", "phone": "+15551234567"})
+        self.assertEqual(pending["request"]["row_key"], "snapboard:99")
+        self.assertEqual(pending["request"]["phone"], "+15551234567")
+        self.assertEqual(pending["request"]["dispatch_count"], 1)
+        self.assertIn("dispatched_at", pending["request"])
 
         self._post("/sms/result", {"row_key": "snapboard:99", "code": "654321"})
         status = self._get("/sms/status?row_key=snapboard:99")
@@ -160,6 +163,8 @@ class StatusUpdateApiTests(unittest.TestCase):
                 "adspower_group": "",
                 "extension_category": "Snapchat Extensions",
                 "continuous_mode_enabled": True,
+                "adaptive_email_provider_enabled": True,
+                "adaptive_phone_provider_enabled": True,
                 "keep_profile_open_after_signup": True,
             })
 
@@ -168,6 +173,8 @@ class StatusUpdateApiTests(unittest.TestCase):
         self.assertEqual(captured["adspower_group"], "")
         self.assertEqual(captured["extension_category"], "Snapchat Extensions")
         self.assertTrue(captured["continuous_mode_enabled"])
+        self.assertTrue(captured["adaptive_email_provider_enabled"])
+        self.assertTrue(captured["adaptive_phone_provider_enabled"])
         self.assertTrue(captured["keep_profile_open_after_signup"])
 
 

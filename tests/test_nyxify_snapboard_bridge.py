@@ -5,8 +5,13 @@ import unittest
 
 from core.nyxify_local_api import (
     NyxifyLocalApiServer,
+    _EmailFetchStore,
+    _PhoneFetchStore,
     _ProxyRotateStore,
+    _SmsFetchStore,
+    EMAIL_PHONE_FETCH_DISPATCH_LEASE_SECONDS,
     PROXY_ROTATE_DISPATCH_LEASE_SECONDS,
+    VERIFICATION_DISPATCH_LEASE_SECONDS,
     _task_allows_proxy_rotate_result_update,
 )
 from core.nyxify_task_store import NyxifyTaskStore
@@ -212,8 +217,77 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
             store.request_otp_for_row("snapboard:505811", email="submitted@example.com")
             pending = store.get_pending_otp_request()
 
-            self.assertEqual(pending["row_key"], "snapboard:505811")
-            self.assertEqual(pending["email"], "submitted@example.com")
+        self.assertEqual(pending["row_key"], "snapboard:505811")
+        self.assertEqual(pending["email"], "submitted@example.com")
+
+    def test_task_store_otp_pending_has_dispatch_lease(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+            store.upsert_task(
+                row_key="snapboard:505811",
+                model="Clea",
+                ip_address="198.51.100.10",
+                username="cleaopala",
+                email="submitted@example.com",
+            )
+            store.request_otp_for_row("snapboard:505811", email="submitted@example.com")
+
+            first = store.get_pending_otp_request(lease_seconds=60)
+            second = store.get_pending_otp_request(lease_seconds=60)
+
+            self.assertIsNotNone(first)
+            self.assertIsNone(second)
+
+            with store._connect() as conn:
+                conn.execute(
+                    "UPDATE tasks SET otp_dispatched_at = ? WHERE row_key = ?",
+                    (time.time() - 61, "snapboard:505811"),
+                )
+
+            third = store.get_pending_otp_request(lease_seconds=60)
+            self.assertIsNotNone(third)
+            self.assertEqual(third["dispatch_count"], 2)
+
+    def test_sms_store_keeps_request_leased_and_clears_pending_on_error(self):
+        store = _SmsFetchStore()
+        store.request("snapboard:505811", phone="+15551234567")
+
+        first = store.pop_pending()
+        second = store.pop_pending()
+
+        self.assertEqual(first["row_key"], "snapboard:505811")
+        self.assertEqual(first["dispatch_count"], 1)
+        self.assertIsNone(second)
+
+        store._pending["snapboard:505811"]["dispatched_at"] = (
+            time.monotonic() - VERIFICATION_DISPATCH_LEASE_SECONDS - 1
+        )
+        retry = store.pop_pending()
+        self.assertEqual(retry["dispatch_count"], 2)
+
+        store.store_result("snapboard:505811", error="SMS code not found on SnapBoard row.")
+        self.assertIsNone(store.pop_pending())
+        self.assertEqual(
+            store.get_result("snapboard:505811")["error"],
+            "SMS code not found on SnapBoard row.",
+        )
+
+    def test_email_phone_fetch_stores_use_long_dispatch_lease(self):
+        for store_class in (_EmailFetchStore, _PhoneFetchStore):
+            store = store_class()
+            store.request("snapboard:lease")
+
+            first = store.pop_pending()
+            second = store.pop_pending()
+
+            self.assertEqual(first["row_key"], "snapboard:lease")
+            self.assertIsNone(second)
+
+            store._pending["snapboard:lease"]["dispatched_at"] = (
+                time.monotonic() - EMAIL_PHONE_FETCH_DISPATCH_LEASE_SECONDS - 1
+            )
+            retry = store.pop_pending()
+            self.assertEqual(retry["row_key"], "snapboard:lease")
 
     def test_extension_requires_expected_email_for_email_otp(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
@@ -618,10 +692,14 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('data-provider="textverified"', content)
         self.assertIn("setemailprovider('gmail500')", content)
         self.assertIn("setphoneprovider('textverified')", content)
-        self.assertIn("var emailProviderLock = config.emailProviderLock || (config.lockG5 ? \"g5\" : \"am\");", content)
+        self.assertIn('var emailProviderLock = activeAdaptiveProviderOverride("email")', content)
         self.assertIn('if (emailProviderLock === "5m")', content)
         self.assertIn(
-            "if (config.lockTV) {\n"
+            'var phoneProviderLock = activeAdaptiveProviderOverride("phone") || (config.lockTV ? "tv" : "sp");',
+            content,
+        )
+        self.assertIn(
+            'if (phoneProviderLock === "tv") {\n'
             "      lockProviderToTV();\n"
             "    } else {\n"
             "      lockProviderToSP();\n"
@@ -661,6 +739,32 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         # Both reorder paths route through the cooldown wait.
         self.assertIn("waitForRedoReady(function () { return findRedoEmailButton(rowId); }, null, redoStateKey(rowId, \"email\"))", content)
         self.assertIn("waitForRedoReady(function () { return findRedoPhoneButton(rowId); }, null, redoStateKey(rowId, \"phone\"))", content)
+
+    def test_content_script_adaptive_provider_fetch_cycles(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("function providerCycle(kind)", content)
+        self.assertIn('return kind === "email" ? ["am", "g5", "5m"] : ["sp", "tv"];', content)
+        self.assertIn("async function activateProvider(kind, provider)", content)
+        self.assertIn("setAdaptiveProviderOverride(kind, provider, ADAPTIVE_PROVIDER_LOCK_HOLD_MS);", content)
+        self.assertIn("async function requestEmailFetchOnce(rowId, forceNew)", content)
+        self.assertIn("async function requestPhoneFetchOnce(rowId, forceNew)", content)
+        self.assertIn("config.adaptiveEmailProviderEnabled !== true", content)
+        self.assertIn("config.adaptivePhoneProviderEnabled !== true", content)
+        self.assertIn("All adaptive email providers exhausted.", content)
+        self.assertIn("All adaptive phone providers exhausted.", content)
+
+    def test_manual_snapboard_provider_clicks_persist_provider_lock(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+
+        self.assertIn("function captureManualProviderLock(event)", content)
+        self.assertIn("event.isTrusted === false", content)
+        self.assertIn("function persistManualProviderLock(kind, provider)", content)
+        self.assertIn("emailProviderLock: provider", content)
+        self.assertIn("lockG5: provider === \"g5\"", content)
+        self.assertIn("lockTV: provider === \"tv\"", content)
+        self.assertIn('type: "NYXIFY_SAVE_CONFIG"', content)
+        self.assertIn('document.addEventListener("click", captureManualProviderLock, true)', content)
 
     def test_content_script_types_stored_login_credentials(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
@@ -823,6 +927,32 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("var rowCode = getOtpTextForRow(rowId);", content)
         self.assertIn("var rowCode = getSmsTextForRow(rowId);", content)
         self.assertNotIn("Date.now() - startedAt) >= OTP_CLICK_RETRY_INTERVAL_MS", check_fn)
+
+    def test_content_retries_when_check_sms_click_is_ignored_ready(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        check_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split(
+            "async function rotateProxyUntilChanged", 1
+        )[0]
+
+        self.assertIn("async function waitForAuthClickAcknowledgement", content)
+        self.assertIn("VERIFICATION_CLICK_ACK_TIMEOUT_MS", content)
+        self.assertIn("VERIFICATION_IGNORED_RECLICK_INTERVAL_MS", content)
+        self.assertIn('reason: "click_ignored_ready"', content)
+        self.assertIn("var ignoredClicks = 0;", check_fn)
+        self.assertIn("memory.activeUntil = 0;", check_fn)
+        self.assertIn("+ \", ignored_clicks=\" + ignoredClicks", check_fn)
+        self.assertIn("var readyWithoutCountdown = authState.mode === \"ready\"", check_fn)
+        self.assertIn("&& !readyWithoutCountdown", check_fn)
+
+    def test_background_refreshes_verification_after_message_channel_error(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        fetch_fn = background.split("async function snapboardFetchVerificationCode", 1)[1].split(
+            "async function runVerificationCodeFetch", 1
+        )[0]
+
+        self.assertIn("function isSnapboardMessageChannelError(response)", background)
+        self.assertIn('error.includes("message channel closed")', background)
+        self.assertIn("!isSnapboardMessageChannelError(response)", fetch_fn)
 
     def test_content_protects_generic_refresh_during_verification_checks(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")

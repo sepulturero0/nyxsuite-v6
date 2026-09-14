@@ -75,6 +75,8 @@ DEFAULTS = {
     "push_adspower_id_enabled": True,
     "full_auto_mode_enabled": False,
     "continuous_mode_enabled": False,
+    "adaptive_email_provider_enabled": False,
+    "adaptive_phone_provider_enabled": False,
     "verification_priority": "auto",
     "keep_profile_open_after_signup": False,
     # Turning off the profile's Chrome extensions during account creation is now
@@ -220,6 +222,14 @@ def load_nyxify_config():
             raw.get("continuous_mode_enabled"),
             DEFAULTS["continuous_mode_enabled"],
         ),
+        "adaptive_email_provider_enabled": _safe_bool(
+            raw.get("adaptive_email_provider_enabled"),
+            DEFAULTS["adaptive_email_provider_enabled"],
+        ),
+        "adaptive_phone_provider_enabled": _safe_bool(
+            raw.get("adaptive_phone_provider_enabled"),
+            DEFAULTS["adaptive_phone_provider_enabled"],
+        ),
         "verification_priority": _safe_verification_priority(
             raw.get("verification_priority"),
             DEFAULTS["verification_priority"],
@@ -320,6 +330,14 @@ def save_nyxify_config(updates):
         "continuous_mode_enabled": _safe_bool(
             updates.get("continuous_mode_enabled"),
             current["continuous_mode_enabled"],
+        ),
+        "adaptive_email_provider_enabled": _safe_bool(
+            updates.get("adaptive_email_provider_enabled"),
+            current["adaptive_email_provider_enabled"],
+        ),
+        "adaptive_phone_provider_enabled": _safe_bool(
+            updates.get("adaptive_phone_provider_enabled"),
+            current["adaptive_phone_provider_enabled"],
         ),
         "verification_priority": _safe_verification_priority(
             updates.get("verification_priority", current["verification_priority"]),
