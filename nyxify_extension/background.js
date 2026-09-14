@@ -2632,7 +2632,7 @@ async function mergeDetectedEntries(rows, sourceUrl) {
   try {
     const payload = await callLocalNyxify("GET", "/queue");
     const queueRows = Array.isArray(payload && payload.rows) ? payload.rows : [];
-    runnerQueueMap = new Map(queueRows.map((entry) => [String(entry.row_key || "").trim(), entry]));
+    runnerQueueMap = new Map(queueRows.map((entry) => [String(entry.row_key || "").trim().toLowerCase(), entry]));
   } catch (error) {
     runnerQueueMap = null;
   }
@@ -2662,6 +2662,16 @@ async function mergeDetectedEntries(rows, sourceUrl) {
         ip_address: existingProxy.split(":")[0] || row.ip_address,
       }
       : row;
+    if (isRunnerRowProxyLocked(runnerRow)) {
+      const lockedProxy = existingProxy || incomingProxy;
+      normalizedDetectedRows.push({
+        ...rowForMerge,
+        proxy_address: lockedProxy || rowForMerge.proxy_address,
+        ip_address: (lockedProxy && lockedProxy.split(":")[0]) || rowForMerge.ip_address,
+      });
+      mergedMap.delete(row.row_key);
+      continue;
+    }
     normalizedDetectedRows.push(rowForMerge);
     const sameAsPrevious = previousRow
       && previousRow.model === rowForMerge.model
@@ -2704,7 +2714,33 @@ async function mergeDetectedEntries(rows, sourceUrl) {
     [STORAGE_KEYS.lastSeen]: normalizedDetectedRows,
   });
   await updateBadge();
-  return addedCount;
+  return { count: addedCount, rows: normalizedDetectedRows, runnerQueueMap };
+}
+
+async function loadRunnerQueueMap() {
+  try {
+    const payload = await callLocalNyxify("GET", "/queue");
+    const queueRows = Array.isArray(payload && payload.rows) ? payload.rows : [];
+    return new Map(queueRows.map((entry) => [String(entry.row_key || "").trim().toLowerCase(), entry]));
+  } catch (_error) {
+    return null;
+  }
+}
+
+function isRunnerRowProxyLocked(runnerRow) {
+  if (!runnerRow) {
+    return false;
+  }
+  const status = String(runnerRow.status || "").trim().toUpperCase();
+  const profileId = String(
+    runnerRow.adspower_profile_id
+    || runnerRow.profile_id
+    || ""
+  ).trim();
+  if (profileId) {
+    return true;
+  }
+  return status === "RUNNING" || status === "DONE";
 }
 
 function sendMessageToTab(tabId, message) {
@@ -2775,7 +2811,7 @@ async function updateLocalDetectedProxy(rowKey, proxy) {
   return true;
 }
 
-async function prepareProxyRows(rows, config, tabId) {
+async function prepareProxyRows(rows, config, tabId, runnerQueueMap = null) {
   if (!await isBridgePowerOn()) {
     return { priorityPrepared: 0, blockedPrepared: 0 };
   }
@@ -2791,12 +2827,17 @@ async function prepareProxyRows(rows, config, tabId) {
     return { priorityPrepared: 0, blockedPrepared: 0 };
   }
   const sanitizedRows = sanitizeEntries(rows);
+  const queueMap = runnerQueueMap || await loadRunnerQueueMap();
   let priorityPrepared = 0;
   let blockedPrepared = 0;
   let priorityAttempted = 0;
   let blockedAttempted = 0;
   for (const row of sanitizedRows) {
     if (!row.row_key || !row.username || String(row.username).trim().toLowerCase().startsWith("temp")) {
+      continue;
+    }
+    const runnerRow = queueMap ? queueMap.get(row.row_key) : null;
+    if (isRunnerRowProxyLocked(runnerRow)) {
       continue;
     }
     const proxyValue = row.proxy_address || row.ip_address;
@@ -2874,8 +2915,14 @@ async function handleDetectedRows(message, sender) {
       || (config.proxyBlockerEnabled !== false && config.blockedProxies.length)
     );
     if (shouldPrepareProxy) {
-      const count = await mergeDetectedEntries(rows, sourceUrl);
-      const prep = await prepareProxyRows(rows, config, tabId);
+      const merge = await mergeDetectedEntries(rows, sourceUrl);
+      const count = Number(merge && merge.count || 0);
+      const prep = await prepareProxyRows(
+        (merge && merge.rows) || rows,
+        config,
+        tabId,
+        merge && merge.runnerQueueMap
+      );
       if (count > 0 || prep.priorityPrepared > 0 || prep.blockedPrepared > 0) {
         await appendEventLog(
           `Prepared ${prep.priorityPrepared} priority and ${prep.blockedPrepared} blocked proxy row(s) while Nyxify is off.`
@@ -2892,8 +2939,14 @@ async function handleDetectedRows(message, sender) {
     return { ok: true, count: 0, skipped: true };
   }
 
-  const count = await mergeDetectedEntries(rows, sourceUrl);
-  await prepareProxyRows(rows, config, tabId);
+  const merge = await mergeDetectedEntries(rows, sourceUrl);
+  const count = Number(merge && merge.count || 0);
+  await prepareProxyRows(
+    (merge && merge.rows) || rows,
+    config,
+    tabId,
+    merge && merge.runnerQueueMap
+  );
   await flushPendingEntries();
   await maybeRunFullAutoForRows(rows, config);
   if (count > 0) {

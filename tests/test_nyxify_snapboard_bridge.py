@@ -3,7 +3,12 @@ import tempfile
 import time
 import unittest
 
-from core.nyxify_local_api import NyxifyLocalApiServer, _ProxyRotateStore, PROXY_ROTATE_DISPATCH_LEASE_SECONDS
+from core.nyxify_local_api import (
+    NyxifyLocalApiServer,
+    _ProxyRotateStore,
+    PROXY_ROTATE_DISPATCH_LEASE_SECONDS,
+    _task_allows_proxy_rotate_result_update,
+)
 from core.nyxify_task_store import NyxifyTaskStore
 
 
@@ -113,6 +118,55 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
 
             row = store.list_tasks()[0]
             self.assertEqual(row["password"], "NewPassword2!")
+
+    def test_task_store_does_not_overwrite_running_proxy_on_extension_resync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = NyxifyTaskStore(Path(tmp) / "tasks.db")
+
+            task_id, _action = store.upsert_task(
+                row_key="snapboard:505811",
+                model="Clea",
+                ip_address="23.54.1.2",
+                proxy_address="23.54.1.2:9000:user:pass",
+                username="cleaopala",
+                password="KyotoRiver%12",
+            )
+            store.update_task_state(
+                task_id,
+                status="RUNNING",
+                last_step="creating_adspower_profile",
+                adspower_profile_id="k1valid",
+            )
+
+            store.upsert_task(
+                row_key="snapboard:505811",
+                model="Clea",
+                ip_address="45.10.1.1",
+                proxy_address="45.10.1.1:9000:user:pass",
+                username="cleaopala",
+                password="KyotoRiver%12",
+            )
+
+            row = store.list_tasks()[0]
+            self.assertEqual(row["ip_address"], "23.54.1.2")
+            self.assertEqual(row["proxy_address"], "23.54.1.2:9000:user:pass")
+
+    def test_proxy_rotate_result_update_is_blocked_after_adspower_create(self):
+        self.assertFalse(_task_allows_proxy_rotate_result_update({
+            "status": "RUNNING",
+            "last_step": "creating_adspower_profile",
+            "adspower_profile_id": "",
+        }))
+        self.assertFalse(_task_allows_proxy_rotate_result_update({
+            "status": "DONE",
+            "last_step": "signup_complete",
+            "adspower_profile_id": "k1valid",
+        }))
+        self.assertTrue(_task_allows_proxy_rotate_result_update({
+            "status": "RUNNING",
+            "last_step": "checking_proxy",
+            "adspower_profile_id": "",
+        }))
 
     def test_task_store_priority_claim_only_starts_matching_proxy_rows(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -7,6 +7,21 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.10
+
+- Nyxify now preserves a manually completed Snapchat signup when the browser is
+  already on a confirmed post-signup page during email fetch, replacement-email
+  fetch, or phone-switch recovery instead of failing and deleting the created
+  AdsPower profile.
+- SnapBoard proxy preparation now respects runner-owned rows that are already
+  running, done, or attached to an AdsPower profile, preventing late extension
+  rotations from changing the SnapBoard proxy after AdsPower was created with a
+  validated proxy.
+- Local queue sync and proxy rotation results now keep the runner's validated
+  proxy locked once the task reaches AdsPower creation or completion.
+- Added focused regression coverage for manual welcome recovery, locked-row
+  proxy preparation, local proxy resync locking, and stale rotate-result guards.
+
 ## NyxSuite v6.7.9
 
 - AdsPower GUI proxy checking now uses the v6.7.7 verdict behavior again while

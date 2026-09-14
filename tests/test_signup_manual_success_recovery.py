@@ -200,6 +200,100 @@ class SignupResultWiringTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result["reached_verification"])
         callback.assert_awaited_once_with("manualqueen")
 
+    async def test_fetching_email_sees_manual_welcome_before_failure_cleanup(self):
+        page = _page_with_context("https://accounts.snapchat.com/accounts/verify")
+        callback = mock.AsyncMock()
+        steps = []
+
+        async def fetch_email(*_args, **_kwargs):
+            page.url = "https://accounts.snapchat.com/v2/welcome"
+            page._username = "emailmanual"
+            return ""
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+                mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(return_value="email")), \
+                mock.patch.object(signup_flow, "_fetch_email_from_provider", fetch_email):
+            result = await signup_flow._handle_verification(
+                page,
+                "",
+                mock.AsyncMock(),
+                None,
+                "1",
+                username_detected_callback=callback,
+                email_fetcher=mock.AsyncMock(),
+                progress_callback=lambda step: steps.append(step),
+            )
+
+        self.assertEqual(result["final_username"], "emailmanual")
+        self.assertTrue(result["reached_verification"])
+        self.assertIn("fetching_email", steps)
+        self.assertIn("signup_complete", steps)
+        callback.assert_awaited_once_with("emailmanual")
+
+    async def test_fetching_replacement_email_sees_manual_welcome_before_retry_failure(self):
+        page = _page_with_context("https://accounts.snapchat.com/accounts/verify")
+        callback = mock.AsyncMock()
+        steps = []
+
+        async def fetch_replacement(*_args, **_kwargs):
+            page.url = "https://accounts.snapchat.com/accounts"
+            page._username = "replacementmanual"
+            return ""
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+                mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(return_value="email")), \
+                mock.patch.object(signup_flow, "_fill_and_submit_verification_email", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_is_email_already_verified_error_visible", mock.AsyncMock(return_value=True)), \
+                mock.patch.object(signup_flow, "_fetch_email_from_provider", fetch_replacement):
+            result = await signup_flow._handle_verification(
+                page,
+                "old@example.com",
+                mock.AsyncMock(),
+                None,
+                "1",
+                username_detected_callback=callback,
+                email_fetcher=mock.AsyncMock(),
+                progress_callback=lambda step: steps.append(step),
+            )
+
+        self.assertEqual(result["final_username"], "replacementmanual")
+        self.assertTrue(result["reached_verification"])
+        self.assertIn("fetching_replacement_email", steps)
+        self.assertIn("signup_complete", steps)
+        callback.assert_awaited_once_with("replacementmanual")
+
+    async def test_switching_to_phone_sees_manual_welcome_when_switch_fails(self):
+        page = _page_with_context("https://accounts.snapchat.com/accounts/verify")
+        callback = mock.AsyncMock()
+        steps = []
+
+        async def click_phone(*_args, **_kwargs):
+            page.url = "https://accounts.snapchat.com/v2/welcome"
+            page._username = "switchmanual"
+            return False
+
+        with mock.patch.object(signup_flow, "_resolve_active_signup_page", mock.AsyncMock(return_value=page)), \
+                mock.patch.object(signup_flow, "_wait_for_signup_progress", mock.AsyncMock(return_value="email")), \
+                mock.patch.object(signup_flow, "_click_use_phone_instead", click_phone):
+            result = await signup_flow._handle_verification(
+                page,
+                "old@example.com",
+                mock.AsyncMock(),
+                None,
+                "1",
+                username_detected_callback=callback,
+                progress_callback=lambda step: steps.append(step),
+                phone_fetcher=mock.Mock(),
+                sms_fetcher=mock.Mock(),
+                verification_priority="phone",
+            )
+
+        self.assertEqual(result["final_username"], "switchmanual")
+        self.assertTrue(result["reached_verification"])
+        self.assertIn("switching_to_phone", steps)
+        self.assertIn("signup_complete", steps)
+        callback.assert_awaited_once_with("switchmanual")
+
 
 if __name__ == "__main__":
     unittest.main()

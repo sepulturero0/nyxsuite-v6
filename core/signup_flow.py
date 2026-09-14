@@ -1942,6 +1942,26 @@ async def _read_success_username(page) -> str:
     return ""
 
 
+async def _has_confirmed_post_signup_page(page) -> bool:
+    try:
+        candidates = [page]
+        context = getattr(page, "context", None)
+        if context is not None:
+            for other_page in list(getattr(context, "pages", []) or []):
+                if other_page not in candidates:
+                    candidates.append(other_page)
+        for candidate in candidates:
+            try:
+                current_url = str(getattr(candidate, "url", "") or "")
+            except Exception:
+                current_url = ""
+            if _is_confirmed_post_signup_url(current_url):
+                return True
+    except Exception:
+        pass
+    return False
+
+
 async def _wait_for_final_success_username(page, logger=None, profile_id: str = "", timeout_ms: int = 300000) -> str:
     remaining_ms = max(1000, int(timeout_ms or 300000))
 
@@ -2627,7 +2647,26 @@ async def _handle_optional_phone_sms_verification(
     fallback_callback=None,
     max_attempts: int | None = None,
 ) -> dict:
+    async def finalize_visible_success(stage_confirmed: bool = False, timeout_ms: int = 240000) -> bool:
+        signup_success_visible = stage_confirmed or await _has_confirmed_post_signup_page(signup_page)
+        if not signup_success_visible:
+            return False
+        await _emit_signup_progress(progress_callback, "signup_complete", logger, profile_id)
+        result["reached_verification"] = True
+        result["final_username"] = await _read_success_username(signup_page)
+        if not str(result.get("final_username") or "").strip():
+            result["final_username"] = await _wait_for_final_success_username(
+                signup_page,
+                logger,
+                profile_id,
+                timeout_ms=timeout_ms,
+            )
+        await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        return True
+
     async def handle_failure(reason: str, error=None) -> dict:
+        if await finalize_visible_success(timeout_ms=120000):
+            return result
         if fallback_callback is not None:
             return await fallback_callback(reason, error)
         if error is not None:
@@ -2681,8 +2720,7 @@ async def _handle_optional_phone_sms_verification(
             entry_transition_grace_ms=5000,
         )
         if stage == "welcome":
-            result["final_username"] = await _read_success_username(signup_page)
-            await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+            await finalize_visible_success(stage_confirmed=True)
             return result
         if stage == "verification_unresponsive":
             return await handle_failure("verification became unresponsive after phone submission")
@@ -2734,6 +2772,8 @@ async def _handle_optional_phone_sms_verification(
             progress_callback=progress_callback,
         )
     if not sms_code:
+        if await finalize_visible_success(timeout_ms=120000):
+            return result
         logger and logger.warning(f"[{profile_id}] Could not retrieve SMS OTP from SnapBoard.")
         return await handle_failure("SnapBoard did not provide an SMS OTP")
 
@@ -2805,8 +2845,7 @@ async def _handle_optional_phone_sms_verification(
             stall_state=stall_state,
         )
         if final_stage == "welcome":
-            result["final_username"] = await _read_success_username(signup_page)
-            await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+            await finalize_visible_success(stage_confirmed=True)
         elif final_stage == "verification_unresponsive":
             return await handle_failure("verification became unresponsive after SMS OTP")
         if not str(result.get("final_username") or "").strip():
@@ -3038,6 +3077,23 @@ async def _handle_verification(
     signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
     await signup_page.wait_for_timeout(2000)
 
+    async def finalize_visible_success(stage_confirmed: bool = False, timeout_ms: int = 240000) -> bool:
+        signup_success_visible = stage_confirmed or await _has_confirmed_post_signup_page(signup_page)
+        if not signup_success_visible:
+            return False
+        await _emit_signup_progress(progress_callback, "signup_complete", logger, profile_id)
+        result["reached_verification"] = True
+        result["final_username"] = await _read_success_username(signup_page)
+        if not str(result.get("final_username") or "").strip():
+            result["final_username"] = await _wait_for_final_success_username(
+                signup_page,
+                logger,
+                profile_id,
+                timeout_ms=timeout_ms,
+            )
+        await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        return True
+
     async def switch_to_phone(reason: str) -> dict:
         """Email verification failed too many times — click "Use Phone Number
         Instead" and run the phone -> SMS OTP path instead of failing the account."""
@@ -3056,6 +3112,8 @@ async def _handle_verification(
                 f"[{profile_id}] Could not switch to phone verification after "
                 f"{EMAIL_SWITCH_MAX_ATTEMPTS} attempt(s)."
             )
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             return result
         result["reached_verification"] = True
         return await run_phone_verification(page)
@@ -3091,6 +3149,8 @@ async def _handle_verification(
                 f"[{profile_id}] Could not switch to email verification after "
                 f"{EMAIL_SWITCH_MAX_ATTEMPTS} attempt(s)."
             )
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             if error is not None:
                 raise error
             return result
@@ -3193,6 +3253,8 @@ async def _handle_verification(
                 f"[{profile_id}] Email verification was preferred, but Snapchat did not expose a usable "
                 "'Use email instead' switch. Continuing with the available phone verification path."
             )
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             return await run_phone_verification(
                 signup_page,
                 max_attempts=VERIFICATION_AVAILABLE_METHOD_MAX_ATTEMPTS,
@@ -3215,6 +3277,8 @@ async def _handle_verification(
             f"[{profile_id}] Phone verification was preferred, but Snapchat did not expose a usable "
             "'Use Phone Number Instead' switch. Continuing with the available email verification path."
         )
+        if await finalize_visible_success(timeout_ms=120000):
+            return result
         phone_switch_unavailable = True
         email_verify_max_attempts = max(
             email_verify_max_attempts,
@@ -3227,8 +3291,7 @@ async def _handle_verification(
 
     if stage == "welcome":
         result["reached_verification"] = True
-        result["final_username"] = await _read_success_username(signup_page)
-        await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        await finalize_visible_success(stage_confirmed=True)
         return result
     if stage == "phone":
         result["reached_verification"] = True
@@ -3264,10 +3327,14 @@ async def _handle_verification(
                 f"[{profile_id}] SnapBoard returned no verification email "
                 f"(likely \"no pending order\") — attempt {email_attempt}/{EMAIL_ORDER_MAX_ATTEMPTS}."
             )
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             signup_page = await _resolve_active_signup_page(signup_page, logger, profile_id)
             await signup_page.wait_for_timeout(3000)
         result["email"] = email
         if not _is_valid_email(email):
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             if verification_priority == "email" and allow_priority_fallback:
                 return await fail_email_path("email verification email was unavailable")
             raise RuntimeError(
@@ -3299,6 +3366,8 @@ async def _handle_verification(
                     signup_page, email, logger, profile_id
                 )
         if not submitted_email:
+            if await finalize_visible_success(timeout_ms=120000):
+                return result
             logger and logger.warning(f"[{profile_id}] Verification email could not be submitted.")
             if verification_priority == "email" and allow_priority_fallback:
                 return await fail_email_path("verification email could not be submitted")
@@ -3337,6 +3406,8 @@ async def _handle_verification(
                 profile_id=profile_id,
             )
             if not _is_valid_email(replacement_email):
+                if await finalize_visible_success(timeout_ms=120000):
+                    return result
                 logger and logger.warning(f"[{profile_id}] Replacement email request did not return a valid email.")
                 break
             if replacement_email.strip().lower() == email.strip().lower():
@@ -3375,8 +3446,7 @@ async def _handle_verification(
         return result
     if stage == "welcome":
         result["reached_verification"] = True
-        result["final_username"] = await _read_success_username(signup_page)
-        await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+        await finalize_visible_success(stage_confirmed=True)
         return result
     # Auto mode routes an email-path phone step to the phone -> SMS OTP handler.
     # Explicit Email priority uses the same phone path as its one-way fallback
@@ -3414,6 +3484,8 @@ async def _handle_verification(
             max_attempts=max(1, email_verify_max_attempts - 1),
         )
     if not otp:
+        if await finalize_visible_success(timeout_ms=120000):
+            return result
         logger and logger.warning(f"[{profile_id}] Could not retrieve OTP from SnapBoard.")
         if verification_priority == "email" and allow_priority_fallback:
             return await fail_email_path("email OTP was unavailable")
@@ -3499,8 +3571,7 @@ async def _handle_verification(
             stall_state=stall_state,
         )
         if final_stage == "welcome":
-            result["final_username"] = await _read_success_username(signup_page)
-            await _emit_username(username_detected_callback, result["final_username"], logger, profile_id)
+            await finalize_visible_success(stage_confirmed=True)
         elif final_stage == "verification_unresponsive":
             return result
         elif final_stage == "phone":

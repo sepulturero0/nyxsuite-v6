@@ -389,6 +389,153 @@ vm.runInContext(
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node is required for extension config tests")
+def test_extension_does_not_prepare_proxy_for_runner_locked_row():
+    script = r"""
+const fs = require("fs");
+const vm = require("vm");
+
+const backgroundPath = process.argv[1];
+const source = fs.readFileSync(backgroundPath, "utf8");
+const syncStore = {
+  nyxifyConfig: {
+    enabled: true,
+    localApiUrl: "http://127.0.0.1:8866",
+    proxyPriorityEnabled: true,
+    proxyPriorityPatterns: ["23.54"],
+    proxyBlockerEnabled: true,
+    blockedProxies: []
+  }
+};
+const localStore = { nyxsuiteBridgePower: true };
+const tabMessages = [];
+const fetchCalls = [];
+
+function pick(store, key) {
+  if (Array.isArray(key)) return Object.fromEntries(key.map((item) => [item, store[item]]));
+  if (typeof key === "string") return { [key]: store[key] };
+  return { ...store };
+}
+
+const chromeStub = {
+  storage: {
+    sync: {
+      get: async (key) => pick(syncStore, key),
+      set: async (value) => Object.assign(syncStore, value)
+    },
+    local: {
+      get: async (key) => pick(localStore, key),
+      set: async (value) => Object.assign(localStore, value)
+    },
+    onChanged: { addListener: () => {} }
+  },
+  runtime: {
+    onInstalled: { addListener: () => {} },
+    onStartup: { addListener: () => {} },
+    onConnect: { addListener: () => {} },
+    onMessage: { addListener: () => {} },
+    getURL: (path) => path,
+    lastError: null
+  },
+  alarms: {
+    create: () => {},
+    onAlarm: { addListener: () => {} }
+  },
+  tabs: {
+    onRemoved: { addListener: () => {} },
+    create: async () => ({ id: 1 }),
+    remove: async () => {},
+    get: async () => ({}),
+    sendMessage: (_tabId, message, callback) => {
+      tabMessages.push(message);
+      callback({ ok: true, proxy: "23.54.1.2:9000:u:p" });
+    }
+  },
+  action: {
+    setBadgeBackgroundColor: async () => {},
+    setBadgeText: async () => {}
+  }
+};
+
+const context = {
+  console,
+  chrome: chromeStub,
+  setTimeout,
+  clearTimeout,
+  Date,
+  fetch: async (url, options = {}) => {
+    const target = String(url);
+    fetchCalls.push({ url: target, method: options.method || "GET" });
+    if (target.endsWith("/queue")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          ok: true,
+          rows: [{
+            row_key: "snapboard:1",
+            model: "Clea",
+            ip_address: "23.54.1.2",
+            proxy_address: "23.54.1.2:9000:u:p",
+            username: "cleauser",
+            status: "RUNNING",
+            last_step: "creating_adspower_profile"
+          }]
+        })
+      };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true, rows: [] }) };
+  }
+};
+
+vm.createContext(context);
+vm.runInContext(
+  source + "\n" + `
+    globalThis.__test = { handleDetectedRows };
+  `,
+  context,
+  { filename: backgroundPath }
+);
+
+(async () => {
+  const result = await context.__test.handleDetectedRows({
+    rows: [{
+      row_key: "snapboard:1",
+      model: "Clea",
+      ip_address: "45.10.1.1",
+      proxy_address: "45.10.1.1:9000:u:p",
+      username: "cleauser",
+      password: "Password1!"
+    }]
+  }, { tab: { id: 77, url: "https://snapboard.test/" } });
+
+  process.stdout.write(JSON.stringify({
+    result,
+    pending: localStore.nyxifyPendingEntries || [],
+    lastSeen: localStore.nyxifyLastSeenEntries || [],
+    tabMessages,
+    queueUpserts: fetchCalls.filter((call) => String(call.url).endsWith("/queue/upsert")).length
+  }));
+})().catch((error) => {
+  console.error(error && error.stack || error);
+  process.exit(1);
+});
+"""
+    result = subprocess.run(
+        ["node", "-e", script, str(ROOT / "nyxify_extension" / "background.js")],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    data = json.loads(result.stdout)
+
+    assert data["result"]["count"] == 0
+    assert data["pending"] == []
+    assert data["queueUpserts"] == 0
+    assert data["tabMessages"] == []
+    assert data["lastSeen"][0]["proxy_address"] == "23.54.1.2:9000:u:p"
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node is required for extension config tests")
 def test_extension_prepares_blocked_proxy_rows_when_nyxify_is_off_and_priority_is_off():
     script = r"""
 const fs = require("fs");

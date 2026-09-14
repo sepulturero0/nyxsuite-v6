@@ -12,6 +12,50 @@ from core.local_http import apply_cors
 
 PROXY_ROTATE_DISPATCH_LEASE_SECONDS = 240.0
 
+POST_CREATE_PROXY_LOCK_STEPS = {
+    "creating_adspower_profile",
+    "opening_profile",
+    "extensions_disabled",
+    "extension_disable_skipped",
+    "whox_trust_check",
+    "cookie_warmup",
+    "signup_handoff",
+    "signup_opened",
+    "running_signup",
+    "awaiting_email_verification",
+    "awaiting_phone_verification",
+    "awaiting_otp",
+    "signup_form_submitted",
+    "awaiting_welcome_username",
+    "signup_complete",
+    "renaming_profile_for_nyx",
+    "renaming_profile_keep_open",
+    "profile_rename_failed",
+    "queueing_nyx",
+    "queued_for_nyx",
+    "nyx_handoff_failed",
+    "closing_profile",
+    "profile_closed",
+    "profile_close_failed",
+}
+
+
+def _task_allows_proxy_rotate_result_update(task):
+    if not task:
+        return False
+    status = str((task or {}).get("status") or "").strip().upper()
+    last_step = str((task or {}).get("last_step") or "").strip()
+    profile_id = str(
+        (task or {}).get("adspower_profile_id")
+        or (task or {}).get("profile_id")
+        or ""
+    ).strip()
+    if profile_id or status == "DONE":
+        return False
+    if status == "RUNNING" and last_step in POST_CREATE_PROXY_LOCK_STEPS:
+        return False
+    return status in {"PENDING", "RUNNING"}
+
 
 class _ProxyRotateStore:
     """Thread-safe store for proxy rotation requests/results."""
@@ -1615,7 +1659,8 @@ class NyxifyLocalApiServer:
                             tasks = outer.store.list_tasks(limit=500)
                             for task in tasks:
                                 if str(task.get("row_key") or "").strip() == row_key:
-                                    outer.store.update_task_proxy(task.get("id"), proxy)
+                                    if _task_allows_proxy_rotate_result_update(task):
+                                        outer.store.update_task_proxy(task.get("id"), proxy)
                                     break
                         except Exception:
                             pass

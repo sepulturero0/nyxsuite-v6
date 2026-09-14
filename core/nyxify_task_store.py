@@ -63,6 +63,16 @@ def _task_waiting_step(username="", full_auto_mode_enabled=False):
     return "waiting_for_" + "_and_".join(missing)
 
 
+def _is_proxy_locked_for_extension_resync(task_row):
+    if not task_row:
+        return False
+    status = _normalize_text(task_row["status"] if "status" in task_row.keys() else "").upper()
+    profile_id = _normalize_text(
+        task_row["adspower_profile_id"] if "adspower_profile_id" in task_row.keys() else ""
+    )
+    return bool(profile_id) or status in {"RUNNING", "DONE"}
+
+
 class NyxifyTaskStore:
 
     def __init__(self, db_path=None):
@@ -334,7 +344,7 @@ class NyxifyTaskStore:
         with self._connect() as conn:
             existing = conn.execute(
                 """
-                SELECT id, status, error, last_step
+                SELECT id, status, error, last_step, ip_address, proxy_address, adspower_profile_id
                 FROM tasks
                 WHERE row_key = ?
                 """,
@@ -352,6 +362,17 @@ class NyxifyTaskStore:
 
                 if next_status == "PENDING":
                     next_step = waiting_step
+                proxy_locked = _is_proxy_locked_for_extension_resync(existing)
+                next_ip = (
+                    str(existing["ip_address"] or "").strip()
+                    if proxy_locked and str(existing["ip_address"] or "").strip()
+                    else normalized_ip
+                )
+                next_proxy = (
+                    str(existing["proxy_address"] or "").strip()
+                    if proxy_locked and str(existing["proxy_address"] or "").strip()
+                    else normalized_proxy
+                )
 
                 conn.execute(
                     """
@@ -362,8 +383,8 @@ class NyxifyTaskStore:
                     """,
                     (
                         normalized_model,
-                        normalized_ip,
-                        normalized_proxy,
+                        next_ip,
+                        next_proxy,
                         normalized_username,
                         normalized_email,
                         normalized_password,
