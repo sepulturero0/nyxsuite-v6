@@ -1,5 +1,20 @@
 # Changelog
 
+## 6.7.13 - SnapBoard verification focus and warmup popup guard
+
+- OTP and SMS waits now bring the existing SnapBoard Chrome tab forward once,
+  then restore the previously active Chrome tab/window after all active code
+  waits finish.
+- Cookie warmup now keeps browsing inside its current tab by blocking warmup-only
+  popup windows and non-self navigation targets.
+- Adaptive email and phone provider switches now persist the provider that
+  successfully returned an order as the saved provider lock.
+- Snapchat blank signup shell recovery is more tolerant of logo-only or weak DOM
+  handoff pages before retrying the signup load.
+- Added regression coverage for SnapBoard focus, cookie warmup popup blocking,
+  adaptive provider persistence, AdsPower GUI launch ordering, and blank-shell
+  handoff recovery.
+
 ## 6.7.12 - Nyxify UI organization and signup shell recovery
 
 - Nyxify now refreshes the Snapchat signup page when AdsPower opens the blank

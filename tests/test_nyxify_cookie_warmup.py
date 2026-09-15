@@ -211,7 +211,7 @@ class CookieWarmupOrderingTests(unittest.IsolatedAsyncioTestCase):
         # confirm from a stray navigation click can't block the tab (or its
         # close) — the reported Windows hang.
         page = mock.AsyncMock()
-        page.is_closed.return_value = False
+        page.is_closed = mock.Mock(return_value=False)
         registered = []
         page.on = mock.Mock(side_effect=lambda event, _cb: registered.append(event))
         page.goto.side_effect = RuntimeError("stop early after dialog wiring")
@@ -224,6 +224,11 @@ class CookieWarmupOrderingTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertIn("dialog", registered)
+        self.assertIn("popup", registered)
+        page.add_init_script.assert_awaited_once()
+        self.assertIn("window.open = () => null", page.add_init_script.await_args.args[0])
+        self.assertIn('closest("a, area, form")', page.add_init_script.await_args.args[0])
+        self.assertIn('target !== "_self"', page.add_init_script.await_args.args[0])
 
 
 if __name__ == "__main__":

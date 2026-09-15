@@ -152,6 +152,8 @@ const phoneFetchesInFlight = new Set();
 const otpFetchesInFlight = new Set();
 const smsFetchesInFlight = new Set();
 const verificationCodeFetchesInFlight = new Set();
+const snapboardVerificationFocusTokens = new Set();
+let snapboardVerificationPreviousChromeTarget = null;
 let bridgeLoopPromise = null;
 const popupPorts = new Set();
 let popupStatusTimer = null;
@@ -1792,6 +1794,75 @@ async function findSnapboardTabId() {
   }
 }
 
+async function getActiveChromeTabTarget() {
+  try {
+    const tabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
+    const tab = (tabs || []).find((candidate) => candidate && candidate.id != null);
+    if (!tab) {
+      return null;
+    }
+    return {
+      tabId: tab.id,
+      windowId: tab.windowId != null ? tab.windowId : null,
+    };
+  } catch (_error) {
+    return null;
+  }
+}
+
+async function focusChromeTabTarget(target) {
+  if (!target || target.tabId == null) {
+    return false;
+  }
+  try {
+    let windowId = target.windowId;
+    if (windowId == null) {
+      const tab = await chrome.tabs.get(target.tabId);
+      windowId = tab && tab.windowId != null ? tab.windowId : null;
+    }
+    if (windowId != null && chrome.windows && chrome.windows.update) {
+      await chrome.windows.update(windowId, { focused: true });
+    }
+    await chrome.tabs.update(target.tabId, { active: true });
+    return true;
+  } catch (_error) {
+    return false;
+  }
+}
+
+async function focusSnapboardForVerificationWait(label, rowKey) {
+  const token = `${label || "verification"}:${rowKey || ""}:${Date.now()}:${Math.random()}`;
+  const wasIdle = snapboardVerificationFocusTokens.size === 0;
+  snapboardVerificationFocusTokens.add(token);
+  if (!wasIdle) {
+    return token;
+  }
+
+  try {
+    snapboardVerificationPreviousChromeTarget = await getActiveChromeTabTarget();
+    const tabId = await findSnapboardTabId();
+    if (tabId == null) {
+      await appendEventLog("Waiting for SnapBoard tab; OTP/SMS focus skipped.").catch(() => null);
+      return token;
+    }
+    await focusChromeTabTarget({ tabId });
+  } catch (_error) {
+  }
+  return token;
+}
+
+async function releaseSnapboardVerificationFocus(token) {
+  if (token != null) {
+    snapboardVerificationFocusTokens.delete(token);
+  }
+  if (snapboardVerificationFocusTokens.size) {
+    return;
+  }
+  const previousTarget = snapboardVerificationPreviousChromeTarget;
+  snapboardVerificationPreviousChromeTarget = null;
+  await focusChromeTabTarget(previousTarget);
+}
+
 async function sendMessageToSnapboardTab(message) {
   const tabId = getAvailableSnapboardTabId() ?? await findSnapboardTabId();
   if (tabId == null) {
@@ -2274,25 +2345,30 @@ async function processBridgeActionsOnce() {
     if (otpRequests.length) {
       otpRequests.forEach((otpRequest) => {
         startDetachedSnapboardFetch(otpFetchesInFlight, otpRequest.row_key, "OTP", async () => {
-          const otpResponsePromise = runVerificationCodeFetch({
-            type: "NYXIFY_SNAPBOARD_ACTION",
-            action: "otp",
-            row_key: otpRequest.row_key,
-            email: otpRequest.email || "",
-            timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
-          });
-          const otpResponse = await otpResponsePromise;
-          if (otpResponse.ok && otpResponse.code) {
-            await callLocalNyxify("POST", "/otp/result", {
+          const focusToken = await focusSnapboardForVerificationWait("OTP", otpRequest.row_key);
+          try {
+            const otpResponsePromise = runVerificationCodeFetch({
+              type: "NYXIFY_SNAPBOARD_ACTION",
+              action: "otp",
               row_key: otpRequest.row_key,
-              code: otpResponse.code,
+              email: otpRequest.email || "",
+              timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
             });
-          } else if (otpResponse && !otpResponse.ok) {
-            await callLocalNyxify("POST", "/otp/result", {
-              row_key: otpRequest.row_key,
-              code: "",
-              error: otpResponse.error || "SnapBoard OTP fetch failed.",
-            });
+            const otpResponse = await otpResponsePromise;
+            if (otpResponse.ok && otpResponse.code) {
+              await callLocalNyxify("POST", "/otp/result", {
+                row_key: otpRequest.row_key,
+                code: otpResponse.code,
+              });
+            } else if (otpResponse && !otpResponse.ok) {
+              await callLocalNyxify("POST", "/otp/result", {
+                row_key: otpRequest.row_key,
+                code: "",
+                error: otpResponse.error || "SnapBoard OTP fetch failed.",
+              });
+            }
+          } finally {
+            await releaseSnapboardVerificationFocus(focusToken);
           }
         });
       });
@@ -2306,19 +2382,24 @@ async function processBridgeActionsOnce() {
     if (smsRequests.length) {
       smsRequests.forEach((smsRequest) => {
         startDetachedSnapboardFetch(smsFetchesInFlight, smsRequest.row_key, "SMS", async () => {
-          const smsResponsePromise = runVerificationCodeFetch({
-            type: "NYXIFY_SNAPBOARD_ACTION",
-            action: "sms",
-            row_key: smsRequest.row_key,
-            phone: smsRequest.phone || "",
-            timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
-          });
-          const smsResponse = await smsResponsePromise;
-          await callLocalNyxify("POST", "/sms/result", {
-            row_key: smsRequest.row_key,
-            code: smsResponse.ok ? (smsResponse.code || "") : "",
-            error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
-          });
+          const focusToken = await focusSnapboardForVerificationWait("SMS", smsRequest.row_key);
+          try {
+            const smsResponsePromise = runVerificationCodeFetch({
+              type: "NYXIFY_SNAPBOARD_ACTION",
+              action: "sms",
+              row_key: smsRequest.row_key,
+              phone: smsRequest.phone || "",
+              timeout_ms: VERIFICATION_CODE_FETCH_TIMEOUT_MS,
+            });
+            const smsResponse = await smsResponsePromise;
+            await callLocalNyxify("POST", "/sms/result", {
+              row_key: smsRequest.row_key,
+              code: smsResponse.ok ? (smsResponse.code || "") : "",
+              error: smsResponse.ok ? "" : (smsResponse.error || "SnapBoard SMS fetch failed."),
+            });
+          } finally {
+            await releaseSnapboardVerificationFocus(focusToken);
+          }
         });
       });
     }

@@ -200,8 +200,11 @@ async def _is_blank_snapchat_signup_shell(page):
                         const rect = node.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
+                    // Do not treat the Snapchat logo link as a signup control.
+                    // The blank handoff shell commonly renders the logo inside
+                    // an anchor, even though the signup form has not mounted.
                     const controls = Array.from(document.querySelectorAll(
-                        "#firstname, #username, input, button, form, select, textarea, a[href], [role='button']"
+                        "#firstname, #day, #year, #username, #password, input, button, form, select, textarea, [role='button']"
                     ));
                     if (controls.some(isVisible)) {
                         return false;
@@ -211,7 +214,7 @@ async def _is_blank_snapchat_signup_shell(page):
                         .trim();
                     const visibleElements = Array.from(document.body ? document.body.querySelectorAll("*") : [])
                         .filter(isVisible);
-                    const hasSnapchatLogoOnly = visibleElements.some((node) => {
+                    const hasSnapchatBranding = visibleElements.some((node) => {
                         const attrs = [
                             node.getAttribute("alt"),
                             node.getAttribute("aria-label"),
@@ -220,11 +223,27 @@ async def _is_blank_snapchat_signup_shell(page):
                             node.id,
                             typeof node.className === "string" ? node.className : "",
                         ].join(" ").toLowerCase();
-                        return attrs.includes("snapchat") || attrs.includes("ghost");
+                        return attrs.includes("snapchat") || attrs.includes("ghost")
+                            || ["IMG", "SVG", "CANVAS"].includes(node.tagName);
                     });
-                    return bodyText.length <= 80 && (visibleElements.length <= 1 || hasSnapchatLogoOnly);
+                    // Snapchat may wrap a single logo in many layout nodes and
+                    // may omit all branding attributes. With no form controls
+                    // and almost no text, that is still the blank handoff shell.
+                    return bodyText.length <= 120
+                        && (hasSnapchatBranding || visibleElements.length <= 60);
                 }
                 """
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _is_signup_page_dom_ready(page):
+    try:
+        return bool(
+            await page.evaluate(
+                """() => ["interactive", "complete"].includes(document.readyState)"""
             )
         )
     except Exception:
@@ -264,6 +283,7 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
     next_log_at = 0
     last_stage = "waiting_for_signup_page"
     blank_shell_refresh_attempts = 0
+    unusable_signup_observations = 0
 
     while True:
         now = loop.time()
@@ -290,18 +310,33 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
 
             last_stage = f"signup_url_seen:{page_url[:120]}"
             if await _is_snapchat_signup_page_usable(page):
+                unusable_signup_observations = 0
                 if logger:
                     logger.info(
                         f"Detected usable Snapchat signup page for AdsPower profile {profile_id}. "
                         f"url={page_url}"
                     )
                 return page
+            unusable_signup_observations += 1
+            blank_shell_detected = await _is_blank_snapchat_signup_shell(page)
             if (
                 blank_shell_refresh_attempts < SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS
-                and await _is_blank_snapchat_signup_shell(page)
+                and (
+                    blank_shell_detected
+                    # Keep recovery effective when Snapchat renders an
+                    # otherwise-unrecognizable logo-only shell. The page is a
+                    # fresh signup handoff, so two non-usable polls are a
+                    # safe bounded signal to refresh it, but only after the
+                    # document finished loading.
+                    or (
+                        unusable_signup_observations >= 2
+                        and await _is_signup_page_dom_ready(page)
+                    )
+                )
             ):
                 blank_shell_refresh_attempts += 1
                 last_stage = f"blank_signup_shell_refresh:{blank_shell_refresh_attempts}"
+                unusable_signup_observations = 0
                 await _refresh_signup_after_blank_shell(
                     page, logger, profile_id, blank_shell_refresh_attempts
                 )
@@ -772,11 +807,63 @@ async def accept_cookie_consent_if_present(page, logger=None, profile_id="", sit
     return bool(clicked)
 
 
+async def _install_cookie_warmup_popup_guard(page):
+    """Keep warm-up browsing inside its current tab.
+
+    Warm-up intentionally clicks a small number of page controls. Some sites
+    turn those clicks into ``window.open`` or ``target=_blank`` popups, which
+    are distracting and can leave extra browser windows behind. This guard is
+    installed only on warm-up pages; signup and all other browser flows keep
+    their normal popup behavior.
+    """
+    try:
+        await page.add_init_script(
+            """
+            (() => {
+                window.open = () => null;
+                document.addEventListener("click", (event) => {
+                    const node = event.target && event.target.closest
+                        ? event.target.closest("a, area, form")
+                        : null;
+                    if (!node) return;
+                    const target = String(node.getAttribute("target") || "").trim().toLowerCase();
+                    if (target && target !== "_self") {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                    }
+                }, true);
+                document.addEventListener("submit", (event) => {
+                    const form = event.target;
+                    const target = form && String(form.getAttribute("target") || "").trim().toLowerCase();
+                    if (target && target !== "_self") {
+                        event.preventDefault();
+                        event.stopImmediatePropagation();
+                    }
+                }, true);
+            })();
+            """
+        )
+    except Exception:
+        pass
+
+    def close_popup(popup):
+        try:
+            asyncio.ensure_future(_safe_close_page(popup))
+        except Exception:
+            pass
+
+    try:
+        page.on("popup", close_popup)
+    except Exception:
+        pass
+
+
 async def _warm_one_cookie_site(context, url, duration_seconds, logger, profile_id):
     page = await context.new_page()
     # Never let a beforeunload/alert/confirm from a stray navigation click block
     # the tab (and its close) — the Windows warm-up hang.
     _auto_dismiss_dialogs(page, logger=logger, profile_id=profile_id, site_url=url)
+    await _install_cookie_warmup_popup_guard(page)
     try:
         await apply_dark_mode_to_page(page, logger=logger)
     except Exception:

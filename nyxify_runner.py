@@ -29,6 +29,7 @@ from core.nyxify_cleanup import (
     close_and_delete_profile,
 )
 from core.nyx_handoff import NYX_TASK_DB_PATH, enqueue_profile_for_nyx
+from core.developer_settings import load_developer_settings
 from core.nyxify_runtime_config import load_nyxify_config
 from core.whox_check import run_whox_trust_check
 from core.nyxify_task_store import NyxifyTaskStore
@@ -1620,6 +1621,11 @@ async def process_task(task, store, adspower):
     push_adspower_id_enabled = bool(config.get("push_adspower_id_enabled", True))
     full_auto_mode_enabled = bool(config.get("full_auto_mode_enabled", False))
     continuous_mode_enabled = bool(config.get("continuous_mode_enabled", False))
+    developer_settings = load_developer_settings()
+    parallel_continuous_pipeline_enabled = bool(
+        continuous_mode_enabled
+        and developer_settings.get("parallel_continuous_pipeline_enabled", False)
+    )
     verification_priority = str(config.get("verification_priority") or "auto").strip().lower()
     if verification_priority not in {"email", "phone", "auto"}:
         verification_priority = "auto"
@@ -1802,16 +1808,28 @@ async def process_task(task, store, adspower):
             )
             return new_proxy
 
-        created = await asyncio.to_thread(
-            adspower.create_profile,
-            name=temporary_name,
-            proxy_value=proxy_value,
-            group_reference=adspower_group,
-            tags=tags,
-            user_proxy_config=proxy_check.get("proxy"),
-            extension_category_reference=extension_category,
-            proxy_rotator=gui_proxy_rotator,
-        )
+        if parallel_continuous_pipeline_enabled:
+            created, _launch_endpoint = await asyncio.to_thread(
+                adspower.create_and_open_profile_transaction,
+                name=temporary_name,
+                proxy_value=proxy_value,
+                group_reference=adspower_group,
+                tags=tags,
+                user_proxy_config=proxy_check.get("proxy"),
+                extension_category_reference=extension_category,
+                proxy_rotator=gui_proxy_rotator,
+            )
+        else:
+            created = await asyncio.to_thread(
+                adspower.create_profile,
+                name=temporary_name,
+                proxy_value=proxy_value,
+                group_reference=adspower_group,
+                tags=tags,
+                user_proxy_config=proxy_check.get("proxy"),
+                extension_category_reference=extension_category,
+                proxy_rotator=gui_proxy_rotator,
+            )
 
         tag_result = created.get("tag_confirmation") or {
             "confirmed": True,
@@ -2475,8 +2493,17 @@ async def main():
 
                 config = load_nyxify_config()
                 continuous_mode_enabled = bool(config.get("continuous_mode_enabled", False))
+                developer_settings = load_developer_settings()
+                parallel_continuous_pipeline_enabled = bool(
+                    continuous_mode_enabled
+                    and developer_settings.get("parallel_continuous_pipeline_enabled", False)
+                )
                 configured_max_parallel = max(1, int(config.get("max_parallel_profiles") or 1))
-                max_parallel = 1 if continuous_mode_enabled else configured_max_parallel
+                parallel_slots = max(2, min(5, int(developer_settings.get("parallel_continuous_slots") or 2)))
+                max_parallel = (
+                    parallel_slots if parallel_continuous_pipeline_enabled
+                    else (1 if continuous_mode_enabled else configured_max_parallel)
+                )
                 open_slots = max_parallel - len(active_tasks)
                 priority_patterns = _priority_patterns_from_config(config)
                 blocked_patterns = (
@@ -2492,7 +2519,11 @@ async def main():
                     )
 
                 if open_slots > 0:
-                    if continuous_mode_enabled and _continuous_nyx_handoff_active():
+                    if (
+                        continuous_mode_enabled
+                        and not parallel_continuous_pipeline_enabled
+                        and _continuous_nyx_handoff_active()
+                    ):
                         marked = _mark_pending_tasks_waiting_for_continuous_nyx(store)
                         suffix = f" Marked {marked} ready row(s) waiting." if marked else ""
                         logger.info(

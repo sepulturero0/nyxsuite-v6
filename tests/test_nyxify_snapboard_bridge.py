@@ -749,6 +749,8 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("setAdaptiveProviderOverride(kind, provider, ADAPTIVE_PROVIDER_LOCK_HOLD_MS);", content)
         self.assertIn("async function requestEmailFetchOnce(rowId, forceNew)", content)
         self.assertIn("async function requestPhoneFetchOnce(rowId, forceNew)", content)
+        self.assertIn('persistManualProviderLock("email", provider);', content)
+        self.assertIn('persistManualProviderLock("phone", provider);', content)
         self.assertIn("config.adaptiveEmailProviderEnabled !== true", content)
         self.assertIn("config.adaptivePhoneProviderEnabled !== true", content)
         self.assertIn("All adaptive email providers exhausted.", content)
@@ -897,6 +899,45 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("startDetachedSnapboardFetch(smsFetchesInFlight", bridge_loop)
         self.assertNotIn("const otpResponse = await runVerificationCodeFetch", bridge_loop)
         self.assertNotIn("const smsResponse = await runVerificationCodeFetch", bridge_loop)
+
+    def test_background_focuses_existing_snapboard_during_otp_sms_wait(self):
+        background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
+        focus_helper = background.split("async function focusSnapboardForVerificationWait", 1)[1].split(
+            "async function releaseSnapboardVerificationFocus", 1
+        )[0]
+        release_helper = background.split("async function releaseSnapboardVerificationFocus", 1)[1].split(
+            "async function sendMessageToSnapboardTab", 1
+        )[0]
+        bridge_loop = background.split("async function processBridgeActionsOnce()", 1)[1].split(
+            "function ensureBridgeLoop()", 1
+        )[0]
+        otp_worker = bridge_loop.split('startDetachedSnapboardFetch(otpFetchesInFlight', 1)[1].split(
+            'startDetachedSnapboardFetch(smsFetchesInFlight', 1
+        )[0]
+        sms_worker = bridge_loop.split('startDetachedSnapboardFetch(smsFetchesInFlight', 1)[1].split(
+            "await processSnapboardRefreshRequest();", 1
+        )[0]
+
+        self.assertIn("const snapboardVerificationFocusTokens = new Set();", background)
+        self.assertIn("let snapboardVerificationPreviousChromeTarget = null;", background)
+        self.assertIn("await getActiveChromeTabTarget();", focus_helper)
+        self.assertIn("const tabId = await findSnapboardTabId();", focus_helper)
+        self.assertIn("await focusChromeTabTarget({ tabId });", focus_helper)
+        self.assertIn("Waiting for SnapBoard tab; OTP/SMS focus skipped.", focus_helper)
+        self.assertNotIn("chrome.tabs.create", focus_helper)
+        self.assertIn("if (snapboardVerificationFocusTokens.size)", release_helper)
+        self.assertIn("await focusChromeTabTarget(previousTarget);", release_helper)
+
+        self.assertLess(
+            otp_worker.index('focusSnapboardForVerificationWait("OTP", otpRequest.row_key)'),
+            otp_worker.index('action: "otp"'),
+        )
+        self.assertIn("await releaseSnapboardVerificationFocus(focusToken);", otp_worker)
+        self.assertLess(
+            sms_worker.index('focusSnapboardForVerificationWait("SMS", smsRequest.row_key)'),
+            sms_worker.index('action: "sms"'),
+        )
+        self.assertIn("await releaseSnapboardVerificationFocus(focusToken);", sms_worker)
 
     def test_background_does_not_drop_new_port_after_snapboard_reload(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")

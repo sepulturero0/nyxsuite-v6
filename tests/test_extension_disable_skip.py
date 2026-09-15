@@ -88,6 +88,22 @@ class _BlankSignupPage(_FakePage):
         self.waits.append(ms)
 
 
+class _UndetectableLogoShellPage(_BlankSignupPage):
+    """Models a logo-only shell whose DOM does not match the detector."""
+
+    async def evaluate(self, script, *_a, **_k):
+        if "const controls" in script:
+            return False
+        # The DOM is ready even though the logo markup is not recognizable.
+        # This is the condition under which the handoff fallback may refresh.
+        return True
+
+
+class _LoadingSignupPage(_BlankSignupPage):
+    async def evaluate(self, *_a, **_k):
+        return False
+
+
 class _FakeContext:
     def __init__(self):
         self.new_pages = []
@@ -193,6 +209,37 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
         page = _BlankSignupPage()
 
         self.assertTrue(await cleanup._is_blank_snapchat_signup_shell(page))
+
+    async def test_unusable_signup_handoff_refreshes_without_logo_dom_match(self):
+        page = _UndetectableLogoShellPage()
+        context = types.SimpleNamespace(pages=[page])
+
+        result = await cleanup._wait_for_usable_signup_page(
+            context,
+            page,
+            logger=None,
+            profile_id="k1undetectable",
+            deadline=asyncio.get_running_loop().time() + 5,
+        )
+
+        self.assertIs(result, page)
+        self.assertEqual(page.reload_calls, 1)
+        self.assertIn(1500, page.waits)
+
+    async def test_loading_signup_handoff_does_not_refresh(self):
+        page = _LoadingSignupPage()
+        context = types.SimpleNamespace(pages=[page])
+
+        with self.assertRaises(RuntimeError):
+            await cleanup._wait_for_usable_signup_page(
+                context,
+                page,
+                logger=None,
+                profile_id="k1stillloading",
+                deadline=asyncio.get_running_loop().time() + 0.1,
+            )
+
+        self.assertEqual(page.reload_calls, 0)
 
 
 if __name__ == "__main__":

@@ -910,8 +910,11 @@ async def _is_blank_signup_shell(page) -> bool:
                         const rect = node.getBoundingClientRect();
                         return rect.width > 0 && rect.height > 0;
                     };
+                    // The blank handoff shell can render the Snapchat logo as
+                    // an anchor. That anchor is not evidence that the signup
+                    // form is available, so only count actual form controls.
                     const controls = Array.from(document.querySelectorAll(
-                        "#firstname, #username, input, button, form, select, textarea, a[href], [role='button']"
+                        "#firstname, #day, #year, #username, #password, input, button, form, select, textarea, [role='button']"
                     ));
                     if (controls.some(isVisible)) {
                         return false;
@@ -921,7 +924,7 @@ async def _is_blank_signup_shell(page) -> bool:
                         .trim();
                     const visibleElements = Array.from(document.body ? document.body.querySelectorAll("*") : [])
                         .filter(isVisible);
-                    const hasSnapchatLogoOnly = visibleElements.some((node) => {
+                    const hasSnapchatBranding = visibleElements.some((node) => {
                         const attrs = [
                             node.getAttribute("alt"),
                             node.getAttribute("aria-label"),
@@ -930,9 +933,11 @@ async def _is_blank_signup_shell(page) -> bool:
                             node.id,
                             typeof node.className === "string" ? node.className : "",
                         ].join(" ").toLowerCase();
-                        return attrs.includes("snapchat") || attrs.includes("ghost");
+                        return attrs.includes("snapchat") || attrs.includes("ghost")
+                            || ["IMG", "SVG", "CANVAS"].includes(node.tagName);
                     });
-                    return bodyText.length <= 80 && (visibleElements.length <= 1 || hasSnapchatLogoOnly);
+                    return bodyText.length <= 120
+                        && (hasSnapchatBranding || visibleElements.length <= 60);
                 }
                 """
             )

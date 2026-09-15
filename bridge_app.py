@@ -18,7 +18,10 @@ Closing the bridge does NOT stop the runners (same as the old UI's behaviour);
 use the tray/dashboard Stop to halt a runner.
 """
 
+import hashlib
+import hmac
 import os
+import secrets
 import socket
 import sys
 import threading
@@ -28,6 +31,7 @@ import webbrowser
 from pathlib import Path
 
 from core.bridge_runtime_config import load_bridge_config, save_bridge_config
+from core.developer_settings import load_developer_settings, save_developer_settings
 from core.agent_token import get_or_create_token
 from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
@@ -47,6 +51,8 @@ NYX_API_PORT = int(os.getenv("NYX_LOCAL_API_PORT", "8865"))
 NYXIFY_API_PORT = int(os.getenv("NYXIFY_LOCAL_API_PORT", "8866"))
 DASHBOARD_PORT = int(os.getenv("NYXSUITE_DASHBOARD_PORT", "8870"))
 DASHBOARD_URL = f"http://127.0.0.1:{DASHBOARD_PORT}/"
+_DEVELOPER_PIN_SHA256 = "a8378a74c9f57b9c701659f319ff9cb0e6f90813d69f860b95eb896eb467f4a0"
+_DEVELOPER_SESSION_SECONDS = 15 * 60
 
 
 def _env_truthy(name: str) -> bool:
@@ -97,6 +103,10 @@ class BridgeApp:
         self._nyxify_alarm_tracker = NyxifyAlarmTracker()
         self._stop = threading.Event()
         self.token = ""
+        self._developer_session = ""
+        self._developer_session_expires_at = 0.0
+        self._developer_unlock_failures = 0
+        self._developer_unlock_not_before = 0.0
 
     # ------------------------------------------------------------------ build
     def _version(self) -> str:
@@ -201,12 +211,55 @@ class BridgeApp:
             "tray_icon": self._action_tray_icon,
             "set_tray_icon": self._action_set_tray_icon,
             "set_nyxify_failure_alarm": self._action_set_nyxify_failure_alarm,
+            "developer_unlock": self._action_developer_unlock,
+            "developer_settings": self._action_developer_settings,
+            "save_developer_settings": self._action_save_developer_settings,
             "sync_extensions": self._action_sync_extensions,
             "hotkey_product": self._action_hotkey_product,
             "adspower_test": self._action_adspower_test,
             "clear_cache_logs": self._action_clear_cache_logs,
             "shutdown": self._action_shutdown,
         }
+
+    def _developer_session_valid(self, payload=None) -> bool:
+        candidate = str((payload or {}).get("developer_session") or "")
+        return bool(
+            self._developer_session
+            and time.monotonic() < self._developer_session_expires_at
+            and hmac.compare_digest(candidate, self._developer_session)
+        )
+
+    def _action_developer_unlock(self, payload=None) -> dict:
+        now = time.monotonic()
+        if now < self._developer_unlock_not_before:
+            return {"ok": False, "error": "Please wait before trying the developer PIN again."}
+        pin = str((payload or {}).get("pin") or "")
+        pin_hash = hashlib.sha256(pin.encode("utf-8")).hexdigest()
+        if not hmac.compare_digest(pin_hash, _DEVELOPER_PIN_SHA256):
+            self._developer_unlock_failures += 1
+            self._developer_unlock_not_before = now + min(30, 2 * self._developer_unlock_failures)
+            return {"ok": False, "error": "Invalid developer PIN."}
+        self._developer_unlock_failures = 0
+        self._developer_unlock_not_before = 0.0
+        self._developer_session = secrets.token_urlsafe(32)
+        self._developer_session_expires_at = now + _DEVELOPER_SESSION_SECONDS
+        return {
+            "ok": True,
+            "developer_session": self._developer_session,
+            "expires_in_seconds": _DEVELOPER_SESSION_SECONDS,
+            "settings": load_developer_settings(),
+        }
+
+    def _action_developer_settings(self, payload=None) -> dict:
+        if not self._developer_session_valid(payload):
+            return {"ok": False, "error": "Developer PIN required.", "locked": True}
+        return {"ok": True, "settings": load_developer_settings()}
+
+    def _action_save_developer_settings(self, payload=None) -> dict:
+        if not self._developer_session_valid(payload):
+            return {"ok": False, "error": "Developer PIN required.", "locked": True}
+        settings = save_developer_settings(payload or {})
+        return {"ok": True, "settings": settings, "message": "Developer settings saved."}
 
     def _bridge_settings_snapshot(self) -> dict:
         return {

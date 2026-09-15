@@ -2524,6 +2524,52 @@ class AdsPowerManager:
                 proxy_rotator=proxy_rotator,
             )
 
+    def create_and_open_profile_transaction(
+        self,
+        name,
+        proxy_value,
+        group_reference="",
+        tags=None,
+        user_proxy_config=None,
+        extension_category_reference="",
+        proxy_rotator=None,
+    ):
+        """Create and launch one profile without yielding AdsPower GUI control.
+
+        The global GUI lock stays held through the CDP endpoint confirmation.
+        This lets signup automation run in parallel after launch, while a second
+        task cannot alter the AdsPower dashboard during this transaction.
+        """
+        if not self._is_gui_control_mode():
+            return self.create_profile(
+                name, proxy_value, group_reference, tags, user_proxy_config,
+                extension_category_reference, proxy_rotator,
+            ), ""
+
+        from core.adspower_ui import _GUI_LOCK
+
+        controller = self._ui_controller()
+        with _GUI_LOCK:
+            # Keep the saved foreground window until the browser/CDP endpoint is
+            # confirmed, then restore it once. Nested GUI calls are reentrant.
+            controller._a11y_enter()
+            try:
+                created = self.create_profile(
+                    name, proxy_value, group_reference, tags, user_proxy_config,
+                    extension_category_reference, proxy_rotator,
+                )
+                profile_id = str(created.get("profile_id") or "").strip()
+                if not profile_id:
+                    raise AdsPowerError("AdsPower create did not return a profile id.")
+                endpoint = self.open_profile(profile_id)
+                logger.info(
+                    "AdsPower GUI launch transaction confirmed browser for "
+                    f"{profile_id}; releasing dashboard control."
+                )
+                return created, endpoint
+            finally:
+                controller._a11y_exit()
+
     def _create_profile_via_ui(self, name, proxy_value, group_reference,
                                user_proxy_config, api_error, tags=None,
                                extension_category_reference="",

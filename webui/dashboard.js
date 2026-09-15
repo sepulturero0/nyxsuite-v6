@@ -98,6 +98,7 @@ const state = {
   update: { checked: false, available: false, current: "", latest: "", latest_name: "", notes: "", backups: [], availableVersions: [] },
 };
 let active = "nyxify";
+let developerSession = "";
 const selected = { suite: null, nyx: null, nyxify: null };
 
 const el = id => document.getElementById(id);
@@ -890,9 +891,62 @@ function setActive(p) {
   if (p === "fullauto") renderFullAuto();
   if (p === "nyxconfig") refreshConfig("nyx").then(renderNyxAdvanced);
   if (p === "nyxifyconfig") refreshConfig("nyxify").then(renderNyxifyAdvanced);
+  if (p === "developer") renderDeveloperSettings();
   if (p === "suite") {
     render();
   }
+}
+
+async function developerBridge(action, payload) {
+  return callBridge(action, { ...(payload || {}), developer_session: developerSession });
+}
+
+async function renderDeveloperSettings() {
+  const body = el("developer-settings-body");
+  if (!body) return;
+  const result = developerSession ? await developerBridge("developer_settings") : { ok: false, locked: true };
+  if (!result.ok) {
+    developerSession = "";
+    body.innerHTML = `
+      <div class="card settings-card" style="max-width:480px">
+        <h2>Developer Settings</h2>
+        <p class="hint">Enter the developer PIN to access private runtime controls.</p>
+        <div class="adv-field"><span>Developer PIN</span><input id="developer-pin" class="input" type="password" inputmode="numeric" maxlength="6" autocomplete="off"></div>
+        <div class="btn-row"><button id="developer-unlock" class="btn primary" type="button">Unlock</button></div>
+        <span id="developer-feedback" class="feedback"></span>
+      </div>`;
+    const unlock = async () => {
+      const feedback = el("developer-feedback");
+      const reply = await callBridge("developer_unlock", { pin: el("developer-pin").value });
+      if (!reply.ok) { feedback.textContent = reply.error || "Could not unlock Developer Settings."; return; }
+      developerSession = reply.developer_session || "";
+      renderDeveloperSettings();
+    };
+    el("developer-unlock").addEventListener("click", unlock);
+    el("developer-pin").addEventListener("keydown", e => { if (e.key === "Enter") unlock(); });
+    return;
+  }
+  const settings = result.settings || {};
+  const slots = Math.min(5, Math.max(2, parseInt(settings.parallel_continuous_slots) || 2));
+  body.innerHTML = `
+    <div class="config-topbar"><h2>Developer Settings</h2><div class="config-actions"><span id="developer-feedback" class="feedback"></span><button id="developer-save" class="btn primary" type="button">Save Changes</button></div></div>
+    <section class="config-section">
+      <h3>Parallel Continuous Pipeline</h3>
+      <p class="hint">Lets Continuous Mode run multiple signup browsers. AdsPower GUI create-and-launch actions remain one at a time and keep AdsPower in front until each browser is confirmed running.</p>
+      <div class="adv-grid">
+        <div class="adv-field toggle-row"><span class="toggle-text">Enable Parallel Continuous Pipeline</span><label class="toggle-switch"><input id="developer-parallel-enabled" type="checkbox" ${settings.parallel_continuous_pipeline_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>Parallel slots</span><select id="developer-parallel-slots" class="input">${[2,3,4,5].map(value => `<option value="${value}" ${slots === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+      </div>
+    </section>`;
+  el("developer-save").addEventListener("click", async () => {
+    const feedback = el("developer-feedback");
+    const reply = await developerBridge("save_developer_settings", {
+      parallel_continuous_pipeline_enabled: el("developer-parallel-enabled").checked,
+      parallel_continuous_slots: parseInt(el("developer-parallel-slots").value) || 2,
+    });
+    if (!reply.ok) { developerSession = ""; feedback.textContent = reply.error || "Developer session expired."; return; }
+    feedback.textContent = "Developer settings saved. New slots apply on the next scheduler check.";
+  });
 }
 
 function renderBannedPanel() {

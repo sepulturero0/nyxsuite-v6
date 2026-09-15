@@ -1973,6 +1973,10 @@
         if (lastResult && lastResult.ok && lastResult.email) {
           lastResult.adaptive_provider = providerLabel(provider);
           lastResult.adaptive_attempts = index + 1;
+          // Keep the provider that actually succeeded as the new default.
+          // The adaptive override is cleared in finally, so persist the lock
+          // before leaving this fetch cycle.
+          persistManualProviderLock("email", provider);
           return lastResult;
         }
         errors.push(providerLabel(provider) + ": " + ((lastResult && lastResult.error) || "Email fetch failed."));
@@ -2078,6 +2082,8 @@
         if (lastResult && lastResult.ok && lastResult.phone) {
           lastResult.adaptive_provider = providerLabel(provider);
           lastResult.adaptive_attempts = index + 1;
+          // Keep the provider that actually succeeded as the new default.
+          persistManualProviderLock("phone", provider);
           return lastResult;
         }
         errors.push(providerLabel(provider) + ": " + ((lastResult && lastResult.error) || "Phone fetch failed."));

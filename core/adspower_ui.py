@@ -600,13 +600,16 @@ class AdsPowerUIController:
                 self._prev_fg = self._backend.current_foreground()
             else:
                 self._prev_fg = ctypes.windll.user32.GetForegroundWindow()
-            self._connect()      # ensure UIA is connected
-            if not self._a11y_available():
-                if self._backend is not None:
-                    self._backend.foreground()
-                else:
-                    win_focus.ensure_foreground(_WINDOW_TITLE_SUBSTR)
-                self._connect()
+        # Reconnect on every dashboard operation, including nested operations
+        # inside a launch transaction. _connect() explicitly foregrounds
+        # AdsPower on Windows and macOS before reading or clicking its UI.
+        self._connect()
+        if not self._a11y_available():
+            if self._backend is not None:
+                self._backend.foreground()
+            else:
+                win_focus.ensure_foreground(_WINDOW_TITLE_SUBSTR)
+            self._connect()
         self._a11y_depth += 1
 
     def _a11y_exit(self):
