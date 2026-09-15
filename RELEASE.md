@@ -7,6 +7,22 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.12
+
+- Nyxify now refreshes the Snapchat signup page when AdsPower opens a blank
+  logo-only shell before the signup form is ready, with bounded retries and a
+  direct navigation fallback.
+- Reorganized Nyxify Config into separate Profile, Proxy, Automation,
+  Verification, Warm-up and Trust, and Lists panels with responsive sizing.
+- Added shared dashboard controls for Keep Profile Open, Auto-Fill Row, and Top
+  rows to detect, synchronized through the runner and extension.
+- Dashboard now defaults to dark mode and uses a subtle green/red glowing
+  connection dot instead of the live/offline pill.
+- Removed the Remove banned panel and Banned Proxies editor from the Nyxify
+  extension popup while preserving dashboard/backend banned-row workflows.
+- Added focused regression coverage for signup blank-shell recovery and shared
+  Nyxify configuration fields.
+
 ## NyxSuite v6.7.11
 
 - Nyxify now has Adaptive Email Provider and Adaptive Phone Provider toggles in

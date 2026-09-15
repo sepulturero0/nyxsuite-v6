@@ -68,7 +68,7 @@
       </nav>
       <div class="sidebar-footer">
         <button id="update-indicator" class="pill pill-update" type="button" style="display:none" title="An update is available — open Settings">update ready</button>
-        <span id="conn" class="pill pill-bad">connecting…</span>
+        <span id="conn" class="status-dot status-dot-bad" role="status" aria-label="Connecting" title="Connecting"></span>
         <span id="version" class="pill pill-muted">v…</span>
       </div>
     </aside>
@@ -193,14 +193,12 @@
         <section class="panel hidden" id="panel-nyxconfig">
           <div id="nyx-advanced" class="advanced-panel">
             <div id="nyx-advanced-body"></div>
-            <span id="config-feedback" class="feedback"></span>
           </div>
         </section>
 
         <section class="panel hidden" id="panel-nyxifyconfig">
           <div id="nyxify-advanced" class="advanced-panel">
             <div id="nyxify-advanced-body"></div>
-            <span id="nyxify-config-feedback" class="feedback"></span>
           </div>
         </section>
 

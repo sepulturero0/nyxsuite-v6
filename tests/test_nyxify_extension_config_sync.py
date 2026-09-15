@@ -96,6 +96,8 @@ const backendConfig = {
   push_adspower_id_enabled: true,
   full_auto_mode_enabled: true,
   continuous_mode_enabled: true,
+  auto_fill_row: true,
+  top_rows_to_detect: 42,
   adaptive_email_provider_enabled: true,
   adaptive_phone_provider_enabled: true,
   keep_profile_open_after_signup: true,
@@ -170,6 +172,8 @@ vm.runInContext(
     assert data["mapped"]["adspowerTagsEnabled"] is False
     assert data["mapped"]["fullAutoModeEnabled"] is True
     assert data["mapped"]["continuousModeEnabled"] is True
+    assert data["mapped"]["autoFillRow"] is True
+    assert data["mapped"]["topRowsToDetect"] == 42
     assert data["mapped"]["adaptiveEmailProviderEnabled"] is True
     assert data["mapped"]["adaptivePhoneProviderEnabled"] is True
     assert data["mapped"]["keepProfileOpenAfterSignup"] is True
@@ -177,6 +181,8 @@ vm.runInContext(
     assert data["payload"]["tag_one"] == ""
     assert data["payload"]["adspower_tags_enabled"] is False
     assert data["payload"]["continuous_mode_enabled"] is True
+    assert data["payload"]["auto_fill_row"] is True
+    assert data["payload"]["top_rows_to_detect"] == 42
     assert data["payload"]["adaptive_email_provider_enabled"] is True
     assert data["payload"]["adaptive_phone_provider_enabled"] is True
     assert data["payload"]["keep_profile_open_after_signup"] is True
@@ -184,12 +190,14 @@ vm.runInContext(
     assert data["statusConfig"]["tagOne"] == ""
     assert data["statusConfig"]["adspowerTagsEnabled"] is False
     assert data["statusConfig"]["continuousModeEnabled"] is True
+    assert data["statusConfig"]["autoFillRow"] is True
     assert data["statusConfig"]["adaptiveEmailProviderEnabled"] is True
     assert data["statusConfig"]["adaptivePhoneProviderEnabled"] is True
     assert data["statusConfig"]["keepProfileOpenAfterSignup"] is True
     assert data["statusConfig"]["verificationPriority"] == "phone"
     assert data["savedConfig"]["tagOne"] == ""
     assert data["savedConfig"]["adaptiveEmailProviderEnabled"] is True
+    assert data["savedConfig"]["autoFillRow"] is True
     assert data["savedConfig"]["adaptivePhoneProviderEnabled"] is True
     assert data["savedConfig"]["keepProfileOpenAfterSignup"] is True
     assert data["savedConfig"]["verificationPriority"] == "phone"
@@ -241,13 +249,22 @@ def test_nyxify_popup_and_options_expose_synced_runner_controls():
     assert 'id="ncfg-proxy_checker_enabled"' in dashboard_js
     assert 'id="ncfg-adaptive_email_provider_enabled"' in dashboard_js
     assert 'id="ncfg-adaptive_phone_provider_enabled"' in dashboard_js
+    assert 'id="ncfg-keep_profile_open_after_signup"' in dashboard_js
+    assert 'id="ncfg-auto_fill_row"' in dashboard_js
+    assert 'id="ncfg-top_rows_to_detect"' in dashboard_js
     assert 'id="ncfg-proxy_priority_enabled"' in dashboard_js
     assert 'id="ncfg-proxy_priority_patterns"' in dashboard_js
-    assert "v.adspower_tags_enabled === true" in dashboard_js
+    assert "Apply AdsPower tags" not in dashboard_js
+    assert "Push AdsPower ID to SnapBoard" not in dashboard_js
+    assert "adspower_tags_enabled: false" in dashboard_js
+    assert "push_adspower_id_enabled: true" in dashboard_js
     assert 'proxy_blocker_enabled: el("ncfg-proxy_blocker_enabled").checked' in dashboard_js
     assert 'proxy_checker_enabled: el("ncfg-proxy_checker_enabled").checked' in dashboard_js
     assert 'adaptive_email_provider_enabled: el("ncfg-adaptive_email_provider_enabled").checked' in dashboard_js
     assert 'adaptive_phone_provider_enabled: el("ncfg-adaptive_phone_provider_enabled").checked' in dashboard_js
+    assert 'keep_profile_open_after_signup: el("ncfg-keep_profile_open_after_signup").checked' in dashboard_js
+    assert 'auto_fill_row: el("ncfg-auto_fill_row").checked' in dashboard_js
+    assert 'top_rows_to_detect: parseInt(el("ncfg-top_rows_to_detect").value) || 20' in dashboard_js
     assert 'proxy_priority_enabled: el("ncfg-proxy_priority_enabled").checked' in dashboard_js
     assert 'proxy_priority_patterns: el("ncfg-proxy_priority_patterns").value.split' in dashboard_js
 

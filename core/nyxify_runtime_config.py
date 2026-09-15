@@ -60,6 +60,7 @@ DEFAULT_COOKIE_WARMUP_SITES = [
 
 DEFAULTS = {
     "max_parallel_profiles": 1,
+    "top_rows_to_detect": 20,
     "temporary_profile_name": "Snapchat:",
     "adspower_group": "Snapchat",
     "extension_category": "Snap",
@@ -75,6 +76,7 @@ DEFAULTS = {
     "push_adspower_id_enabled": True,
     "full_auto_mode_enabled": False,
     "continuous_mode_enabled": False,
+    "auto_fill_row": False,
     "adaptive_email_provider_enabled": False,
     "adaptive_phone_provider_enabled": False,
     "verification_priority": "auto",
@@ -192,6 +194,7 @@ def load_nyxify_config():
 
     return {
         "max_parallel_profiles": _safe_int(raw.get("max_parallel_profiles"), DEFAULTS["max_parallel_profiles"]),
+        "top_rows_to_detect": _safe_int(raw.get("top_rows_to_detect"), DEFAULTS["top_rows_to_detect"]),
         "temporary_profile_name": _stored_str(raw, "temporary_profile_name", DEFAULTS["temporary_profile_name"]),
         "adspower_group": _stored_str(raw, "adspower_group", DEFAULTS["adspower_group"]),
         "extension_category": _stored_str(raw, "extension_category", DEFAULTS["extension_category"]),
@@ -221,6 +224,10 @@ def load_nyxify_config():
         "continuous_mode_enabled": _safe_bool(
             raw.get("continuous_mode_enabled"),
             DEFAULTS["continuous_mode_enabled"],
+        ),
+        "auto_fill_row": _safe_bool(
+            raw.get("auto_fill_row"),
+            DEFAULTS["auto_fill_row"],
         ),
         "adaptive_email_provider_enabled": _safe_bool(
             raw.get("adaptive_email_provider_enabled"),
@@ -273,6 +280,10 @@ def save_nyxify_config(updates):
         "max_parallel_profiles": _safe_int(
             updates.get("max_parallel_profiles", current["max_parallel_profiles"]),
             current["max_parallel_profiles"],
+        ),
+        "top_rows_to_detect": _safe_int(
+            updates.get("top_rows_to_detect", current["top_rows_to_detect"]),
+            current["top_rows_to_detect"],
         ),
         "temporary_profile_name": _updated_str(
             updates,
@@ -330,6 +341,10 @@ def save_nyxify_config(updates):
         "continuous_mode_enabled": _safe_bool(
             updates.get("continuous_mode_enabled"),
             current["continuous_mode_enabled"],
+        ),
+        "auto_fill_row": _safe_bool(
+            updates.get("auto_fill_row"),
+            current["auto_fill_row"],
         ),
         "adaptive_email_provider_enabled": _safe_bool(
             updates.get("adaptive_email_provider_enabled"),

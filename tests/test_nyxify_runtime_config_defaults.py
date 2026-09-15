@@ -20,6 +20,8 @@ def test_nyxify_defaults_keep_tags_blank_and_disabled():
     # Extension turn-off during account creation is OFF by default now.
     assert config["disable_extensions_enabled"] is False
     assert config["keep_profile_open_after_signup"] is False
+    assert config["auto_fill_row"] is False
+    assert config["top_rows_to_detect"] == 20
     assert config["proxy_priority_enabled"] is False
     assert config["proxy_priority_patterns"] == []
     assert config["proxy_type"] == "off"
@@ -81,6 +83,31 @@ def test_keep_profile_open_after_signup_flag_round_trips_through_save():
             nrc.save_nyxify_config({"keep_profile_open_after_signup": False})
             reloaded = nrc.load_nyxify_config()
             assert reloaded["keep_profile_open_after_signup"] is False
+
+
+def test_auto_fill_row_flag_round_trips_through_save():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            nrc.save_nyxify_config({"auto_fill_row": True})
+            reloaded = nrc.load_nyxify_config()
+            assert reloaded["auto_fill_row"] is True
+
+            nrc.save_nyxify_config({"auto_fill_row": False})
+            reloaded = nrc.load_nyxify_config()
+            assert reloaded["auto_fill_row"] is False
+
+
+def test_top_rows_to_detect_round_trips_through_save():
+    with tempfile.TemporaryDirectory() as tmp:
+        with patch.object(nrc, "DATA_DIR", Path(tmp)), patch.object(
+            nrc, "CONFIG_PATH", Path(tmp) / "nyxify_config.json"
+        ):
+            nrc.save_nyxify_config({"top_rows_to_detect": 42})
+            assert nrc.load_nyxify_config()["top_rows_to_detect"] == 42
 
 
 def test_verification_priority_defaults_to_auto_and_round_trips():

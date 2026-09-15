@@ -177,7 +177,13 @@ function startPolling() {
   }, 1500);
 }
 function stopPolling() { if (pollTimer) { clearInterval(pollTimer); pollTimer = null; } }
-function setConn(ok) { const c = el("conn"); c.textContent = ok ? "live" : "offline"; c.className = "pill " + (ok ? "pill-ok" : "pill-bad"); }
+function setConn(ok) {
+  const c = el("conn");
+  if (!c) return;
+  c.className = "status-dot " + (ok ? "status-dot-ok" : "status-dot-bad");
+  c.setAttribute("aria-label", ok ? "Connected" : "Offline");
+  c.title = ok ? "Connected" : "Offline";
+}
 
 async function callAction(p, path, payload) {
   try {
@@ -1158,32 +1164,41 @@ function renderNyxAdvanced() {
   const mode = currentAdsPowerControlMode();
   const modeOpt = (val, label) => `<option value="${val}" ${mode === val ? "selected" : ""}>${label}</option>`;
   body.innerHTML = `
-    <div class="adv-section-label">Automation and appearance</div>
-    <div class="adv-grid">
-      <label class="adv-field"><span>Pending threshold</span><input id="cfg-pending_threshold" class="input" value="${escapeAttr(v.pending_threshold || 1)}"></label>
-      <label class="adv-field"><span>Max parallel</span><input id="cfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 5)}"></label>
-      <label class="adv-field"><span>Automation speed (%)</span><input id="cfg-automation_speed" class="input" type="number" min="5" max="100" value="${escapeAttr(Math.round((Number(v.automation_speed) || 1) * 50))}"></label>
-      <label class="adv-field"><span>Outfit style</span><select id="cfg-outfit_style" class="input">
-        ${opt("default", "Default")}${opt("mix", "Mix")}${opt("casual", "Casual")}${opt("sexy", "Sexy")}${opt("custom", "Custom")}
-      </select></label>
-      <div class="adv-field toggle-row"><span class="toggle-text">Hair randomizer</span><label class="toggle-switch"><input id="cfg-hair_randomizer_enabled" type="checkbox" ${v.hair_randomizer_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-
+    <div class="config-topbar">
+      <h2>Nyx Config</h2>
+      <div class="config-actions">
+        <span id="config-feedback" class="feedback"></span>
+        <button id="cfg-reset-btn" class="btn btn-ghost" type="button">Reset</button>
+        <button id="cfg-save-btn" class="btn primary" type="button">Save Changes</button>
+      </div>
     </div>
-    <div class="adv-section-label">AdsPower Local API</div>
-    <p class="adv-note">NyxSuite connects to AdsPower automatically — just keep the AdsPower app open and logged in. No API key needed. The fields below are optional, only for a custom host/port or an AdsPower that requires a key.</p>
-    <div class="adv-grid">
-      <label class="adv-field"><span>Control mode</span><select id="cfg-adspower_control_mode" class="input">
-        ${modeOpt("auto", "Auto")}${modeOpt("api", "API only")}${modeOpt("gui", "GUI first")}
-      </select></label>
-      <label class="adv-field"><span>API key (optional)</span><input id="cfg-adspower_api_key" class="input" type="password" autocomplete="off" placeholder="${v.adspower_api_key_set ? "•••••• (saved — leave blank to keep)" : "optional — only if AdsPower requires one"}"></label>
-      <label class="adv-field"><span>Host (optional)</span><input id="cfg-adspower_host" class="input" value="${escapeAttr(v.adspower_host || "")}" placeholder="127.0.0.1"></label>
-      <label class="adv-field"><span>Port (optional)</span><input id="cfg-adspower_port" class="input" value="${escapeAttr(v.adspower_port || "")}" placeholder="50325"></label>
-    </div>
-    <div class="adv-actions">
-      <button id="cfg-adspower-test-btn" class="btn" type="button">Test AdsPower connection</button>
-      <span id="cfg-adspower-test-result" class="muted"></span>
-    </div>
-    <button id="cfg-save-btn" class="btn primary" type="button">Save Config</button>
+    <section class="config-section">
+      <h3>Automation</h3>
+      <div class="adv-grid">
+        <label class="adv-field"><span>Pending threshold</span><input id="cfg-pending_threshold" class="input" value="${escapeAttr(v.pending_threshold || 1)}"></label>
+        <label class="adv-field"><span>Max parallel</span><input id="cfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 5)}"></label>
+        <label class="adv-field"><span>Automation speed</span><input id="cfg-automation_speed" class="input" type="number" min="5" max="100" value="${escapeAttr(Math.round((Number(v.automation_speed) || 1) * 50))}"></label>
+        <label class="adv-field"><span>Outfit style</span><select id="cfg-outfit_style" class="input">
+          ${opt("default", "Default")}${opt("mix", "Mix")}${opt("casual", "Casual")}${opt("sexy", "Sexy")}${opt("custom", "Custom")}
+        </select></label>
+        <div class="adv-field toggle-row"><span class="toggle-text">Hair randomizer</span><label class="toggle-switch"><input id="cfg-hair_randomizer_enabled" type="checkbox" ${v.hair_randomizer_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+      </div>
+    </section>
+    <section class="config-section">
+      <h3>AdsPower Local API</h3>
+      <div class="adv-grid">
+        <label class="adv-field"><span>Control mode</span><select id="cfg-adspower_control_mode" class="input">
+          ${modeOpt("auto", "Auto")}${modeOpt("api", "API only")}${modeOpt("gui", "GUI first")}
+        </select></label>
+        <label class="adv-field"><span>API key</span><input id="cfg-adspower_api_key" class="input" type="password" autocomplete="off" placeholder="${v.adspower_api_key_set ? "Saved key" : "Optional"}"></label>
+        <label class="adv-field"><span>Host</span><input id="cfg-adspower_host" class="input" value="${escapeAttr(v.adspower_host || "")}" placeholder="127.0.0.1"></label>
+        <label class="adv-field"><span>Port</span><input id="cfg-adspower_port" class="input" value="${escapeAttr(v.adspower_port || "")}" placeholder="50325"></label>
+      </div>
+      <div class="adv-actions">
+        <button id="cfg-adspower-test-btn" class="btn" type="button">Test AdsPower connection</button>
+        <span id="cfg-adspower-test-result" class="muted"></span>
+      </div>
+    </section>
   `;
 }
 
@@ -1205,44 +1220,84 @@ function renderNyxifyAdvanced() {
   const proxyPriorityPatterns = Array.isArray(v.proxy_priority_patterns) ? v.proxy_priority_patterns : [];
   const proxyType = ["off", "socks5", "http"].includes(v.proxy_type) ? v.proxy_type : "off";
   body.innerHTML = `
-    <div class="adv-section-label">Profile and SnapBoard</div>
-    <div class="adv-grid">
-      <label class="adv-field"><span>Max parallel</span><input id="ncfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 1)}"></label>
-      <label class="adv-field"><span>Temporary name</span><input id="ncfg-temporary_profile_name" class="input" value="${escapeAttr(v.temporary_profile_name || "")}"></label>
-      <label class="adv-field"><span>AdsPower group</span><input id="ncfg-adspower_group" class="input" value="${escapeAttr(v.adspower_group || "")}"></label>
-      <label class="adv-field"><span>Extension category</span><input id="ncfg-extension_category" class="input" value="${escapeAttr(v.extension_category || "")}"></label>
-      <label class="adv-field"><span>Tag 1</span><input id="ncfg-tag_one" class="input" value="${escapeAttr(v.tag_one || "")}"></label>
-      <label class="adv-field"><span>Tag 2</span><input id="ncfg-tag_two" class="input" value="${escapeAttr(v.tag_two || "")}"></label>
-      <div class="adv-field toggle-row"><span class="toggle-text">Apply AdsPower tags <span class="muted">(off = no tags on created profiles)</span></span><label class="toggle-switch"><input id="ncfg-adspower_tags_enabled" type="checkbox" ${v.adspower_tags_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Push AdsPower ID to SnapBoard</span><label class="toggle-switch"><input id="ncfg-push_adspower_id_enabled" type="checkbox" ${v.push_adspower_id_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Proxy Blocker</span><label class="toggle-switch"><input id="ncfg-proxy_blocker_enabled" type="checkbox" ${v.proxy_blocker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Proxy Checker <span class="muted">(uses AdsPower check)</span></span><label class="toggle-switch"><input id="ncfg-proxy_checker_enabled" type="checkbox" ${v.proxy_checker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Proxy Priority <span class="muted">(only use matching prefixes)</span></span><label class="toggle-switch"><input id="ncfg-proxy_priority_enabled" type="checkbox" ${v.proxy_priority_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <label class="adv-field"><span>Proxy type <span class="muted">(Off keeps any type)</span></span><select id="ncfg-proxy_type" class="input">
-        <option value="off" ${proxyType === "off" ? "selected" : ""}>Off</option>
-        <option value="socks5" ${proxyType === "socks5" ? "selected" : ""}>SOCKS5</option>
-        <option value="http" ${proxyType === "http" ? "selected" : ""}>HTTP</option>
-      </select></label>
-      <div class="adv-field toggle-row"><span class="toggle-text">Full Auto Mode</span><label class="toggle-switch"><input id="ncfg-full_auto_mode_enabled" type="checkbox" ${v.full_auto_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Continuous Mode <span class="muted">(send completed signups to Nyx)</span></span><label class="toggle-switch"><input id="ncfg-continuous_mode_enabled" type="checkbox" ${v.continuous_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Email Provider <span class="muted">(AM/G5/5M fallback)</span></span><label class="toggle-switch"><input id="ncfg-adaptive_email_provider_enabled" type="checkbox" ${v.adaptive_email_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Phone Provider <span class="muted">(SP/TV fallback)</span></span><label class="toggle-switch"><input id="ncfg-adaptive_phone_provider_enabled" type="checkbox" ${v.adaptive_phone_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <label class="adv-field"><span>Verification priority</span><select id="ncfg-verification_priority" class="input">
-        <option value="email" ${verificationPriority === "email" ? "selected" : ""}>Email</option>
-        <option value="phone" ${verificationPriority === "phone" ? "selected" : ""}>Phone</option>
-        <option value="auto" ${verificationPriority === "auto" ? "selected" : ""}>Auto</option>
-      </select></label>
-      <div class="adv-field toggle-row"><span class="toggle-text">Disable extensions on create <span class="muted">(off = leave extensions on during signup)</span></span><label class="toggle-switch"><input id="ncfg-disable_extensions_enabled" type="checkbox" ${v.disable_extensions_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">Cookie Warm-up <span class="muted">(browse sites before signup)</span></span><label class="toggle-switch"><input id="ncfg-cookie_warmup_enabled" type="checkbox" ${v.cookie_warmup_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <div class="adv-field toggle-row"><span class="toggle-text">whox Trust Check <span class="muted">(deep-scan whox.com before warm-up)</span></span><label class="toggle-switch"><input id="ncfg-whox_check_enabled" type="checkbox" ${v.whox_check_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-      <label class="adv-field"><span>whox min trust score <span class="muted">(below = delete + recreate)</span></span><input id="ncfg-whox_min_trust_score" class="input" type="number" min="1" max="100" value="${escapeAttr(v.whox_min_trust_score || 70)}"></label>
-      <label class="adv-field"><span>whox URL</span><input id="ncfg-whox_url" class="input" value="${escapeAttr(v.whox_url || "https://whox.com/")}"></label>
+    <div class="config-topbar">
+      <h2>Nyxify Config</h2>
+      <div class="config-actions">
+        <span id="nyxify-config-feedback" class="feedback"></span>
+        <button id="ncfg-reset-btn" class="btn btn-ghost" type="button">Reset</button>
+        <button id="ncfg-save-btn" class="btn primary" type="button">Save Changes</button>
+      </div>
     </div>
-    <div class="adv-section-label">Proxy and warm-up lists</div>
-    <label class="adv-field adv-field-wide"><span>Priority proxy prefixes (one per line)</span><textarea id="ncfg-proxy_priority_patterns" class="input textarea-full" placeholder="23&#10;23.54">${escapeHtml(proxyPriorityPatterns.join("\n"))}</textarea></label>
-    <label class="adv-field adv-field-wide"><span>Cookie warm-up sites (one per line — edit or remove; clear all to restore the built-in list)</span><textarea id="ncfg-cookie_warmup_sites" class="input textarea-full" placeholder="https://wikipedia.org/&#10;https://cnn.com/">${escapeHtml(warmupSites.join("\n"))}</textarea></label>
-    <label class="adv-field adv-field-wide"><span>Banned proxies (one per line)</span><textarea id="ncfg-banned_proxies" class="input textarea-full">${escapeHtml(banned.join("\n"))}</textarea></label>
-    <button id="ncfg-save-btn" class="btn primary" type="button">Save Config</button>
+    <section class="config-section config-section-profile">
+      <h3>Profile</h3>
+      <div class="adv-grid">
+        <label class="adv-field"><span>Max parallel</span><input id="ncfg-max_parallel_profiles" class="input" value="${escapeAttr(v.max_parallel_profiles || 1)}"></label>
+        <label class="adv-field"><span>Temporary name</span><input id="ncfg-temporary_profile_name" class="input" value="${escapeAttr(v.temporary_profile_name || "")}"></label>
+        <label class="adv-field"><span>AdsPower group</span><input id="ncfg-adspower_group" class="input" value="${escapeAttr(v.adspower_group || "")}"></label>
+        <label class="adv-field"><span>Extension category</span><input id="ncfg-extension_category" class="input" value="${escapeAttr(v.extension_category || "")}"></label>
+        <label class="adv-field"><span>Tag 1</span><input id="ncfg-tag_one" class="input" value="${escapeAttr(v.tag_one || "")}"></label>
+        <label class="adv-field"><span>Tag 2</span><input id="ncfg-tag_two" class="input" value="${escapeAttr(v.tag_two || "")}"></label>
+      </div>
+    </section>
+    <section class="config-section">
+      <h3>Proxy</h3>
+      <div class="adv-grid">
+        <div class="adv-field toggle-row"><span class="toggle-text">Proxy Checker</span><label class="toggle-switch"><input id="ncfg-proxy_checker_enabled" type="checkbox" ${v.proxy_checker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>Proxy type</span><select id="ncfg-proxy_type" class="input">
+          <option value="off" ${proxyType === "off" ? "selected" : ""}>Off</option>
+          <option value="socks5" ${proxyType === "socks5" ? "selected" : ""}>SOCKS5</option>
+          <option value="http" ${proxyType === "http" ? "selected" : ""}>HTTP</option>
+        </select></label>
+      </div>
+    </section>
+    <section class="config-section config-section-automation">
+      <h3>Automation</h3>
+      <div class="adv-grid adv-grid-max-3">
+        <div class="adv-field toggle-row"><span class="toggle-text">Full Auto Mode</span><label class="toggle-switch"><input id="ncfg-full_auto_mode_enabled" type="checkbox" ${v.full_auto_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <div class="adv-field toggle-row"><span class="toggle-text">Continuous Mode</span><label class="toggle-switch"><input id="ncfg-continuous_mode_enabled" type="checkbox" ${v.continuous_mode_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <div class="adv-field toggle-row"><span class="toggle-text">Disable extensions on create</span><label class="toggle-switch"><input id="ncfg-disable_extensions_enabled" type="checkbox" ${v.disable_extensions_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <div class="adv-field toggle-row"><span class="toggle-text">Keep Profile Open</span><label class="toggle-switch"><input id="ncfg-keep_profile_open_after_signup" type="checkbox" ${v.keep_profile_open_after_signup === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <div class="adv-field toggle-row"><span class="toggle-text">Auto-Fill Row</span><label class="toggle-switch toggle-switch-warning"><input id="ncfg-auto_fill_row" type="checkbox" ${v.auto_fill_row === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>Top rows to detect</span><input id="ncfg-top_rows_to_detect" class="input" type="number" min="1" max="200" step="1" value="${escapeAttr(v.top_rows_to_detect || 20)}"></label>
+      </div>
+    </section>
+    <section class="config-section">
+      <h3>Warm-up and Trust</h3>
+      <div class="adv-grid">
+        <div class="adv-field toggle-row"><span class="toggle-text">WhoX Trust Check</span><label class="toggle-switch"><input id="ncfg-whox_check_enabled" type="checkbox" ${v.whox_check_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>WhoX min trust score</span><input id="ncfg-whox_min_trust_score" class="input" type="number" min="1" max="100" value="${escapeAttr(v.whox_min_trust_score || 70)}"></label>
+        <label class="adv-field"><span>WhoX URL</span><input id="ncfg-whox_url" class="input" value="${escapeAttr(v.whox_url || "https://whox.com/")}"></label>
+      </div>
+    </section>
+    <section class="config-section">
+      <h3>Verification</h3>
+      <div class="adv-grid">
+        <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Email Provider</span><label class="toggle-switch"><input id="ncfg-adaptive_email_provider_enabled" type="checkbox" ${v.adaptive_email_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <div class="adv-field toggle-row"><span class="toggle-text">Adaptive Phone Provider</span><label class="toggle-switch"><input id="ncfg-adaptive_phone_provider_enabled" type="checkbox" ${v.adaptive_phone_provider_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>Verification priority</span><select id="ncfg-verification_priority" class="input">
+          <option value="email" ${verificationPriority === "email" ? "selected" : ""}>Email</option>
+          <option value="phone" ${verificationPriority === "phone" ? "selected" : ""}>Phone</option>
+          <option value="auto" ${verificationPriority === "auto" ? "selected" : ""}>Auto</option>
+        </select></label>
+      </div>
+    </section>
+    <section class="config-section config-section-lists">
+      <h3>Lists</h3>
+      <div class="adv-list-grid">
+        <div class="adv-field adv-field-wide list-field">
+          <div class="list-field-head"><label class="list-toggle"><span class="toggle-text">Proxy Priority</span><span class="toggle-switch"><input id="ncfg-proxy_priority_enabled" type="checkbox" ${v.proxy_priority_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></span></label></div>
+          <textarea id="ncfg-proxy_priority_patterns" class="input textarea-full" placeholder="23&#10;23.54">${escapeHtml(proxyPriorityPatterns.join("\n"))}</textarea>
+        </div>
+        <div class="adv-field adv-field-wide list-field">
+          <div class="list-field-head"><label class="list-toggle"><span class="toggle-text">Cookie Warm-up</span><span class="toggle-switch"><input id="ncfg-cookie_warmup_enabled" type="checkbox" ${v.cookie_warmup_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></span></label></div>
+          <textarea id="ncfg-cookie_warmup_sites" class="input textarea-full" placeholder="https://wikipedia.org/&#10;https://cnn.com/">${escapeHtml(warmupSites.join("\n"))}</textarea>
+        </div>
+        <div class="adv-field adv-field-wide list-field">
+          <div class="list-field-head"><label class="list-toggle"><span class="toggle-text">Proxy Blocker</span><span class="toggle-switch"><input id="ncfg-proxy_blocker_enabled" type="checkbox" ${v.proxy_blocker_enabled !== false ? "checked" : ""}><span class="toggle-slider"></span></span></label></div>
+          <textarea id="ncfg-banned_proxies" class="input textarea-full">${escapeHtml(banned.join("\n"))}</textarea>
+        </div>
+      </div>
+    </section>
   `;
 }
 
@@ -1421,6 +1476,11 @@ el("update-rollback-btn").addEventListener("click", async () => {
 });
 
 document.addEventListener("click", async (e) => {
+  if (e.target.id === "cfg-reset-btn") {
+    await refreshConfig("nyx");
+    renderNyxAdvanced();
+    el("config-feedback").textContent = "Changes reset.";
+  }
   if (e.target.id === "cfg-save-btn") {
     const speedPct = Math.max(5, Math.min(100, parseInt(el("cfg-automation_speed").value) || 50));
     const cfg = {
@@ -1473,16 +1533,22 @@ document.addEventListener("click", async (e) => {
       e.target.dataset.busy = "";
     }
   }
+  if (e.target.id === "ncfg-reset-btn") {
+    await refreshConfig("nyxify");
+    renderNyxifyAdvanced();
+    el("nyxify-config-feedback").textContent = "Changes reset.";
+  }
   if (e.target.id === "ncfg-save-btn") {
     const cfg = {
       max_parallel_profiles: parseInt(el("ncfg-max_parallel_profiles").value) || 1,
+      top_rows_to_detect: parseInt(el("ncfg-top_rows_to_detect").value) || 20,
       temporary_profile_name: el("ncfg-temporary_profile_name").value,
       adspower_group: el("ncfg-adspower_group").value,
       extension_category: el("ncfg-extension_category").value,
       tag_one: el("ncfg-tag_one").value,
       tag_two: el("ncfg-tag_two").value,
-      adspower_tags_enabled: el("ncfg-adspower_tags_enabled").checked,
-      push_adspower_id_enabled: el("ncfg-push_adspower_id_enabled").checked,
+      adspower_tags_enabled: false,
+      push_adspower_id_enabled: true,
       proxy_blocker_enabled: el("ncfg-proxy_blocker_enabled").checked,
       proxy_checker_enabled: el("ncfg-proxy_checker_enabled").checked,
       proxy_priority_enabled: el("ncfg-proxy_priority_enabled").checked,
@@ -1490,6 +1556,8 @@ document.addEventListener("click", async (e) => {
       proxy_priority_patterns: el("ncfg-proxy_priority_patterns").value.split(/\r?\n/).map(s => s.trim()).filter(Boolean),
       full_auto_mode_enabled: el("ncfg-full_auto_mode_enabled").checked,
       continuous_mode_enabled: el("ncfg-continuous_mode_enabled").checked,
+      keep_profile_open_after_signup: el("ncfg-keep_profile_open_after_signup").checked,
+      auto_fill_row: el("ncfg-auto_fill_row").checked,
       adaptive_email_provider_enabled: el("ncfg-adaptive_email_provider_enabled").checked,
       adaptive_phone_provider_enabled: el("ncfg-adaptive_phone_provider_enabled").checked,
       verification_priority: el("ncfg-verification_priority").value,
@@ -1574,8 +1642,8 @@ function applyTheme(dark) {
   const label = el("theme-label");
   if (label) label.textContent = dark ? "Light Mode" : "Dark Mode";
 }
-let themeDark = false;
-try { themeDark = localStorage.getItem("nyxsuite-theme") === "dark"; } catch (_) {}
+let themeDark = true;
+try { themeDark = localStorage.getItem("nyxsuite-theme") !== "light"; } catch (_) {}
 applyTheme(themeDark);
 el("theme-toggle").addEventListener("click", () => {
   const dark = !document.body.classList.contains("dark");

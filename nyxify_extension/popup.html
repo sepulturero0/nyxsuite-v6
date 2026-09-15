@@ -127,18 +127,6 @@
               <button id="deleteOrphanProfilesButton" class="button button-secondary" type="button">Delete Orphans</button>
               <button id="clearQueueButton" class="button button-danger" type="button">Clear Queue</button>
             </div>
-            <div class="replace-banned-panel">
-              <div>
-                <strong>Remove banned</strong>
-                <p id="replaceBannedStatus" class="muted"></p>
-                <textarea id="bannedAdspowerIds" class="input banned-adspower-ids" rows="3" readonly></textarea>
-              </div>
-              <div class="button-row button-row-compact replace-banned-actions">
-                <button id="scanBannedButton" class="button button-secondary" type="button">Scan banned</button>
-                <button id="removeBannedButton" class="button button-danger" type="button" disabled>Remove banned</button>
-                <button id="warmupBannedButton" class="button button-secondary" type="button" disabled>Warm Up banned</button>
-              </div>
-            </div>
             <div class="inline-settings">
               <div class="settings-grid">
                 <div class="setting-field">
@@ -167,17 +155,6 @@
                 </div>
               </div>
             </div>
-          </div>
-        </section>
-
-        <section class="card">
-          <h2>Banned Proxies</h2>
-          <p class="muted">One pattern per line. Matches by host prefix, full prefix, or substring (e.g. <code>130</code> blocks all <code>130.x.x.x</code> proxies).</p>
-          <textarea id="popupBlockedProxies" class="input textarea-input" placeholder="e.g. 130&#10;82.26&#10;109.176.200.39:57813"></textarea>
-          <p id="popupBlockedProxiesCount" class="muted">No proxies are banned.</p>
-          <div class="button-row button-row-compact button-row-two">
-            <button id="savePopupBlockedProxiesButton" class="button" type="button">Save</button>
-            <button id="clearPopupBlockedProxiesButton" class="button button-danger" type="button">Clear All</button>
           </div>
         </section>
 

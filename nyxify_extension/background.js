@@ -246,6 +246,7 @@ function normalizeConfig(config) {
     tagTwo: String(safeConfig.tagTwo || "").trim(),
     adspowerTagsEnabled: safeConfig.adspowerTagsEnabled === true,
     maxParallelProfiles: parsedMaxParallel,
+    topRowsToDetect: normalizePositiveInteger(safeConfig.topRowsToDetect, 20),
     bannedProxies: bannedProxies.map((item) => String(item || "").trim()).filter(Boolean),
     blockedProxies: bannedProxies.map((item) => String(item || "").trim()).filter(Boolean),
     proxyBlockerEnabled: safeConfig.proxyBlockerEnabled !== false,
@@ -277,6 +278,7 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
   return normalizeConfig({
     ...base,
     maxParallelProfiles: runner.max_parallel_profiles,
+    topRowsToDetect: runner.top_rows_to_detect,
     temporaryProfileName: runner.temporary_profile_name,
     adspowerGroup: runner.adspower_group,
     extensionCategory: runner.extension_category,
@@ -295,6 +297,7 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
     pushAdspowerIdEnabled: runner.push_adspower_id_enabled !== false,
     fullAutoModeEnabled: runner.full_auto_mode_enabled === true,
     continuousModeEnabled: runner.continuous_mode_enabled === true,
+    autoFillRow: runner.auto_fill_row === true,
     adaptiveEmailProviderEnabled: runner.adaptive_email_provider_enabled === true,
     adaptivePhoneProviderEnabled: runner.adaptive_phone_provider_enabled === true,
     keepProfileOpenAfterSignup: runner.keep_profile_open_after_signup === true,
@@ -306,6 +309,7 @@ function runnerConfigPayloadFromExtensionConfig(config, replaceBlocked = false) 
   const safe = normalizeConfig(config || {});
   const payload = {
     max_parallel_profiles: safe.maxParallelProfiles,
+    top_rows_to_detect: safe.topRowsToDetect,
     temporary_profile_name: safe.temporaryProfileName,
     adspower_group: safe.adspowerGroup,
     extension_category: safe.extensionCategory,
@@ -320,6 +324,7 @@ function runnerConfigPayloadFromExtensionConfig(config, replaceBlocked = false) 
     push_adspower_id_enabled: safe.pushAdspowerIdEnabled,
     full_auto_mode_enabled: safe.fullAutoModeEnabled,
     continuous_mode_enabled: safe.continuousModeEnabled,
+    auto_fill_row: safe.autoFillRow,
     adaptive_email_provider_enabled: safe.adaptiveEmailProviderEnabled,
     adaptive_phone_provider_enabled: safe.adaptivePhoneProviderEnabled,
     keep_profile_open_after_signup: safe.keepProfileOpenAfterSignup,

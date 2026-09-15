@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.12 - Nyxify UI organization and signup shell recovery
+
+- Nyxify now refreshes the Snapchat signup page when AdsPower opens the blank
+  logo-only shell before the signup form becomes available, with bounded retry
+  attempts and direct navigation fallback.
+- Nyxify Config now separates Profile, Proxy, Automation, Verification,
+  Warm-up and Trust, and Lists into organized panels with responsive sizing.
+- Added shared dashboard controls for Keep Profile Open, Auto-Fill Row, and Top
+  rows to detect, including runner and extension configuration synchronization.
+- The dashboard now defaults to dark mode and shows a subtle green/red glowing
+  connection dot instead of the live/offline pill.
+- Removed the Remove banned panel and Banned Proxies editor from the Nyxify
+  extension popup; the dashboard and backend workflows remain available.
+- Added focused regression coverage for blank-shell recovery and the new
+  Nyxify configuration fields.
+
 ## 6.7.8 - Account success recovery and proxy rotation hardening
 
 - Nyxify now recognizes a completed Snapchat account even when the user takes

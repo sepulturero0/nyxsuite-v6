@@ -6,6 +6,7 @@ visit chrome://extensions/ or toggle anything, but still open the profile,
 attach the context, and (optionally) open the signup page.
 """
 
+import asyncio
 import sys
 import types
 import unittest
@@ -48,6 +49,43 @@ class _FakePage:
 
     def on(self, *_a, **_k):
         return None
+
+
+class _FakeLocator:
+    def __init__(self, visible=False):
+        self._visible = visible
+        self.first = self
+
+    async def is_visible(self):
+        return bool(self._visible)
+
+
+class _BlankSignupPage(_FakePage):
+    url = "https://accounts.snapchat.com/v2/signup"
+
+    def __init__(self):
+        super().__init__()
+        self.reload_calls = 0
+        self.waits = []
+
+    def locator(self, selector):
+        form_visible = self.reload_calls > 0 and (
+            "#firstname" in selector
+            or "InitialSignupForm" in selector
+        )
+        return _FakeLocator(form_visible)
+
+    def get_by_role(self, *_a, **_k):
+        return _FakeLocator(False)
+
+    async def evaluate(self, *_a, **_k):
+        return self.reload_calls == 0
+
+    async def reload(self, **_kwargs):
+        self.reload_calls += 1
+
+    async def wait_for_timeout(self, ms):
+        self.waits.append(ms)
 
 
 class _FakeContext:
@@ -134,6 +172,27 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
 
         visited = [url for page in context.new_pages for url in page.goto_calls]
         self.assertIn("chrome://extensions/", visited)
+
+    async def test_blank_signup_shell_refreshes_during_initial_handoff(self):
+        page = _BlankSignupPage()
+        context = types.SimpleNamespace(pages=[page])
+
+        result = await cleanup._wait_for_usable_signup_page(
+            context,
+            page,
+            logger=None,
+            profile_id="k1blank",
+            deadline=asyncio.get_running_loop().time() + 5,
+        )
+
+        self.assertIs(result, page)
+        self.assertEqual(page.reload_calls, 1)
+        self.assertIn(1500, page.waits)
+
+    async def test_logo_only_signup_shell_detector_accepts_initial_shell(self):
+        page = _BlankSignupPage()
+
+        self.assertTrue(await cleanup._is_blank_snapchat_signup_shell(page))
 
 
 if __name__ == "__main__":

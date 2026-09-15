@@ -5,7 +5,6 @@ let popupLiveReconnectTimer = null;
 let scrapeInputSaveTimer = null;
 let popupSettingsSaveTimer = null;
 let popupSettingsDirty = false;
-let latestBannedRows = [];
 let latestPopupConfig = {};
 
 const POPUP_VIEW_STORAGE_KEY = "nyxifyPopupView";
@@ -357,15 +356,6 @@ function applyPopupStatusSnapshot(status) {
       : "Unlimited"
   );
 
-  const banned = Array.isArray(config.bannedProxies) ? config.bannedProxies : [];
-  setTextAreaValue("popupBlockedProxies", banned.join("\n"));
-  const countLabel = document.getElementById("popupBlockedProxiesCount");
-  if (countLabel) {
-    countLabel.textContent = banned.length
-      ? `${banned.length} banned ${banned.length === 1 ? "proxy" : "proxies"}.`
-      : "No proxies are banned.";
-  }
-
   applyPrimaryStatus(
     config.enabled === false
       ? "Nyxify is off."
@@ -582,103 +572,6 @@ function runBotAction(action, loadingMessage, fallbackMessage) {
   });
 }
 
-function setReplaceBannedStatus(message, rows) {
-  const status = document.getElementById("replaceBannedStatus");
-  const removeButton = document.getElementById("removeBannedButton");
-  const warmupButton = document.getElementById("warmupBannedButton");
-  const ids = document.getElementById("bannedAdspowerIds");
-  latestBannedRows = Array.isArray(rows) ? rows : latestBannedRows;
-  if (status) {
-    status.textContent = String(message || "");
-  }
-  if (ids) {
-    ids.value = formatBannedAdspowerIds(latestBannedRows);
-  }
-  if (removeButton) {
-    removeButton.disabled = latestBannedRows.length === 0;
-  }
-  if (warmupButton) {
-    warmupButton.disabled = latestBannedRows.length === 0;
-  }
-}
-
-function formatBannedAdspowerIds(rows) {
-  const seen = new Set();
-  return (Array.isArray(rows) ? rows : [])
-    .map((row) => String((row && (row.adspower_id || row.adspower_profile_id || row.profile_id)) || "").trim())
-    .filter((id) => {
-      if (!id || seen.has(id)) return false;
-      seen.add(id);
-      return true;
-    })
-    .join("\n");
-}
-
-function scanBannedRows() {
-  setReplaceBannedStatus("Scanning active SnapBoard tab...", []);
-  chrome.runtime.sendMessage({ type: "NYXIFY_SCAN_BANNED_ROWS", count: 100000 }, (response) => {
-    if (!response || !response.ok) {
-      setReplaceBannedStatus((response && response.error) || "Could not scan banned rows.", []);
-      return;
-    }
-    const rows = response.rows || [];
-    setReplaceBannedStatus(
-      rows.length
-        ? `Found ${rows.length} banned row(s).`
-        : "No banned rows found.",
-      rows
-    );
-  });
-}
-
-function removeBannedRows() {
-  if (!latestBannedRows.length) {
-    setReplaceBannedStatus("Scan banned rows first.", []);
-    return;
-  }
-  const removeButton = document.getElementById("removeBannedButton");
-  if (removeButton) {
-    removeButton.disabled = true;
-  }
-  setReplaceBannedStatus(`Removing ${latestBannedRows.length} banned row(s)...`, latestBannedRows);
-  chrome.runtime.sendMessage({ type: "NYXIFY_REMOVE_BANNED_ROWS", rows: latestBannedRows }, (response) => {
-    if (!response || !response.ok) {
-      setReplaceBannedStatus((response && response.error) || "Remove banned failed.", latestBannedRows);
-      return;
-    }
-    const payload = response.payload || {};
-    setReplaceBannedStatus(
-      payload.message || `Remove banned finished for ${Number(payload.count || 0)} row(s).`,
-      []
-    );
-    refreshPopupStatus("Remove banned finished.", true);
-  });
-}
-
-function warmupBannedRows() {
-  if (!latestBannedRows.length) {
-    setReplaceBannedStatus("Scan banned rows first.", []);
-    return;
-  }
-  const warmupButton = document.getElementById("warmupBannedButton");
-  if (warmupButton) {
-    warmupButton.disabled = true;
-  }
-  setReplaceBannedStatus(`Changing ${latestBannedRows.length} banned row(s) to Warm Up...`, latestBannedRows);
-  chrome.runtime.sendMessage({ type: "NYXIFY_WARMUP_BANNED_ROWS", rows: latestBannedRows }, (response) => {
-    if (!response || !response.ok) {
-      setReplaceBannedStatus((response && response.error) || "Warm Up update failed.", latestBannedRows);
-      return;
-    }
-    const payload = response.payload || {};
-    setReplaceBannedStatus(
-      payload.message || `Warm Up status updated for ${Number(payload.count || 0)} row(s).`,
-      latestBannedRows
-    );
-    refreshPopupStatus("Warm Up banned finished.", true);
-  });
-}
-
 function scheduleLiveStatusReconnect() {
   if (popupLiveReconnectTimer) {
     window.clearTimeout(popupLiveReconnectTimer);
@@ -890,9 +783,6 @@ document.getElementById("deleteOrphanProfilesButton").addEventListener("click", 
 document.getElementById("clearQueueButton").addEventListener("click", () => {
   runBotAction("clear_queue", "Clearing Nyxify queue...", "Nyxify queue cleared.");
 });
-document.getElementById("scanBannedButton").addEventListener("click", scanBannedRows);
-document.getElementById("removeBannedButton").addEventListener("click", removeBannedRows);
-document.getElementById("warmupBannedButton").addEventListener("click", warmupBannedRows);
 
 [
   "popupTemporaryName",
@@ -912,42 +802,6 @@ document.getElementById("warmupBannedButton").addEventListener("click", warmupBa
     element.addEventListener("change", flushPopupSettingsSave);
     element.addEventListener("blur", flushPopupSettingsSave);
   }
-});
-
-document.getElementById("savePopupBlockedProxiesButton").addEventListener("click", () => {
-  const raw = document.getElementById("popupBlockedProxies").value || "";
-  const bannedProxies = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  chrome.runtime.sendMessage({
-    type: "NYXIFY_SAVE_CONFIG",
-    bannedProxies,
-    blockedProxiesReplace: true,
-  }, (response) => {
-    if (!response || !response.ok) {
-      setPrimaryStatus((response && response.error) || "Could not save banned proxies.", 2500);
-      return;
-    }
-    refreshPopupStatus(
-      bannedProxies.length
-        ? `Saved ${bannedProxies.length} banned proxy pattern(s).`
-        : "Banned proxy list cleared.",
-      true
-    );
-  });
-});
-
-document.getElementById("clearPopupBlockedProxiesButton").addEventListener("click", () => {
-  document.getElementById("popupBlockedProxies").value = "";
-  chrome.runtime.sendMessage({
-    type: "NYXIFY_SAVE_CONFIG",
-    bannedProxies: [],
-    blockedProxiesReplace: true,
-  }, (response) => {
-    if (!response || !response.ok) {
-      setPrimaryStatus((response && response.error) || "Could not clear banned proxies.", 2500);
-      return;
-    }
-    refreshPopupStatus("Banned proxy list cleared.", true);
-  });
 });
 
 document.querySelectorAll(".popup-tab").forEach((button) => {

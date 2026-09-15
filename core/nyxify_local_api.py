@@ -1945,6 +1945,7 @@ class NyxifyLocalApiServer:
                     updates = {}
                     for key in (
                         "max_parallel_profiles",
+                        "top_rows_to_detect",
                         "temporary_profile_name",
                         "adspower_group",
                         "extension_category",
@@ -1959,6 +1960,7 @@ class NyxifyLocalApiServer:
                         "push_adspower_id_enabled",
                         "full_auto_mode_enabled",
                         "continuous_mode_enabled",
+                        "auto_fill_row",
                         "adaptive_email_provider_enabled",
                         "adaptive_phone_provider_enabled",
                         "verification_priority",

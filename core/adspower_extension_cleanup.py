@@ -17,6 +17,9 @@ def _env_int(name, default):
         return int(default)
 
 
+SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS = max(
+    0, _env_int("NYXIFY_SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS", 3)
+)
 COOKIE_WARMUP_ENABLED = str(os.getenv("NYXIFY_COOKIE_WARMUP_ENABLED", "1")).strip().lower() not in {
     "0",
     "false",
@@ -171,12 +174,96 @@ async def _is_snapchat_signup_page_usable(page):
     return False
 
 
+async def _is_blank_snapchat_signup_shell(page):
+    try:
+        current_url = str(page.url or "").strip().lower()
+    except Exception:
+        current_url = ""
+    if not _is_snapchat_signup_url(current_url):
+        return False
+
+    try:
+        return bool(
+            await page.evaluate(
+                """
+                () => {
+                    if (!["interactive", "complete"].includes(document.readyState)) {
+                        return false;
+                    }
+                    const isVisible = (node) => {
+                        if (!node) return false;
+                        const style = window.getComputedStyle(node);
+                        if (!style) return false;
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const controls = Array.from(document.querySelectorAll(
+                        "#firstname, #username, input, button, form, select, textarea, a[href], [role='button']"
+                    ));
+                    if (controls.some(isVisible)) {
+                        return false;
+                    }
+                    const bodyText = String((document.body && document.body.innerText) || "")
+                        .replace(/\\s+/g, " ")
+                        .trim();
+                    const visibleElements = Array.from(document.body ? document.body.querySelectorAll("*") : [])
+                        .filter(isVisible);
+                    const hasSnapchatLogoOnly = visibleElements.some((node) => {
+                        const attrs = [
+                            node.getAttribute("alt"),
+                            node.getAttribute("aria-label"),
+                            node.getAttribute("title"),
+                            node.getAttribute("src"),
+                            node.id,
+                            typeof node.className === "string" ? node.className : "",
+                        ].join(" ").toLowerCase();
+                        return attrs.includes("snapchat") || attrs.includes("ghost");
+                    });
+                    return bodyText.length <= 80 && (visibleElements.length <= 1 || hasSnapchatLogoOnly);
+                }
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
+async def _refresh_signup_after_blank_shell(page, logger, profile_id, attempt):
+    if logger:
+        logger.warning(
+            f"Snapchat signup opened to a blank logo shell for AdsPower profile {profile_id}; "
+            f"refreshing signup page (attempt {attempt}/{SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS})."
+        )
+    try:
+        await page.reload(wait_until="domcontentloaded", timeout=45000)
+        return True
+    except Exception as exc:
+        if logger:
+            logger.warning(
+                f"Snapchat signup blank-shell refresh failed for AdsPower profile {profile_id}: {exc}. "
+                "Trying direct signup navigation."
+            )
+        try:
+            await page.goto(SNAPCHAT_SIGNUP_URL, wait_until="domcontentloaded", timeout=45000)
+            return True
+        except Exception as exc2:
+            if logger:
+                logger.warning(
+                    f"Snapchat signup blank-shell re-navigation failed for AdsPower profile {profile_id}: {exc2}"
+                )
+    return False
+
+
 async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_id, deadline=None):
     loop = asyncio.get_running_loop()
     if deadline is None:
         deadline = loop.time() + SNAPCHAT_HANDOFF_TIMEOUT_SECONDS
     next_log_at = 0
     last_stage = "waiting_for_signup_page"
+    blank_shell_refresh_attempts = 0
 
     while True:
         now = loop.time()
@@ -209,6 +296,17 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
                         f"url={page_url}"
                     )
                 return page
+            if (
+                blank_shell_refresh_attempts < SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS
+                and await _is_blank_snapchat_signup_shell(page)
+            ):
+                blank_shell_refresh_attempts += 1
+                last_stage = f"blank_signup_shell_refresh:{blank_shell_refresh_attempts}"
+                await _refresh_signup_after_blank_shell(
+                    page, logger, profile_id, blank_shell_refresh_attempts
+                )
+                await page.wait_for_timeout(1500)
+                break
 
         if logger and now >= next_log_at:
             logger.info(
@@ -222,6 +320,7 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
 
 async def _wait_for_snapchat_signup_ready(signup_page):
     remaining_ms = SNAPCHAT_PAGE_READY_TIMEOUT_MS
+    blank_shell_refresh_attempts = 0
 
     while remaining_ms > 0:
         try:
@@ -250,6 +349,18 @@ async def _wait_for_snapchat_signup_ready(signup_page):
 
             if form_visible or cookie_visible:
                 return
+
+            if (
+                blank_shell_refresh_attempts < SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS
+                and await _is_blank_snapchat_signup_shell(signup_page)
+            ):
+                blank_shell_refresh_attempts += 1
+                await _refresh_signup_after_blank_shell(
+                    signup_page, logger=None, profile_id="", attempt=blank_shell_refresh_attempts
+                )
+                await signup_page.wait_for_timeout(1500)
+                remaining_ms -= 1500
+                continue
 
         await signup_page.wait_for_timeout(SNAPCHAT_POLL_INTERVAL_MS)
         remaining_ms -= SNAPCHAT_POLL_INTERVAL_MS
