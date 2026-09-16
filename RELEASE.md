@@ -9,9 +9,6 @@ repo, and downloads the newest non-draft release asset matching
 
 ## NyxSuite v6.7.14
 
-- Continuous Mode now starts the next account only after the current AdsPower
-  profile is successfully renamed, while the previous task can finish its
-  remaining post-rename handoff in the background.
 - Bitmoji outfit selection now keeps scanning the active outfit panel until the
   bottom is reached, including virtualized lists that briefly report no scroll
   movement, so lower outfits are not skipped.
