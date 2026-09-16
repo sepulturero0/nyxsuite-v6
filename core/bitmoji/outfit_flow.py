@@ -53,7 +53,7 @@ _OUTFIT_ALLOW_CATALOG_FALLBACK = os.getenv("NYX_OUTFIT_FALLBACK_CATALOG", "0").s
 # Bound the full panel walk for one outfit selector. The selector scan should
 # keep walking until the active outfit panel reports bottom; this cap only
 # prevents a broken/looping panel from stalling signup indefinitely.
-_OUTFIT_PANEL_SCAN_MAX_STEPS = _env_int("BITMOJI_OUTFIT_PANEL_SCAN_MAX_STEPS", 14)
+_OUTFIT_PANEL_SCAN_MAX_STEPS = _env_int("BITMOJI_OUTFIT_PANEL_SCAN_MAX_STEPS", 24)
 
 
 # Every garment path resolves one active editor panel before inspecting tiles.
@@ -324,11 +324,22 @@ class BitmojiOutfitMixin:
                 const delta = direction === 'down' ? deltaBase : -deltaBase;
                 const before = panel.scrollTop;
                 panel.scrollTop += delta;
+                // Some virtualized outfit lists temporarily report no scroll
+                // movement while more tiles are being mounted. Do not leave
+                // the scan stranded above the last row; force the panel to its
+                // real end so the next scan sees the final outfit tiles.
+                let moved = Math.abs(panel.scrollTop - before) > 4;
+                let atBottom = (panel.scrollTop + panel.clientHeight) >= (panel.scrollHeight - 4);
+                if (direction === 'down' && !moved && !atBottom && panel.scrollHeight > panel.clientHeight) {
+                    panel.scrollTop = panel.scrollHeight;
+                    moved = Math.abs(panel.scrollTop - before) > 4;
+                    atBottom = (panel.scrollTop + panel.clientHeight) >= (panel.scrollHeight - 4);
+                }
                 return {
                     found: true,
-                    moved: Math.abs(panel.scrollTop - before) > 4,
+                    moved,
                     atTop: panel.scrollTop <= 4,
-                    atBottom: (panel.scrollTop + panel.clientHeight) >= (panel.scrollHeight - 4),
+                    atBottom,
                 };
             }""",
             {"direction": direction, "amount": amount}
@@ -993,7 +1004,7 @@ class BitmojiOutfitMixin:
         if target is not None:
             return target
 
-        for _ in range(max(steps, 14)):
+        for _ in range(max(steps, _OUTFIT_PANEL_SCAN_MAX_STEPS)):
             panel_state = await self.scroll_editor_panel(ctx, "down", step_size)
             if not panel_state or not panel_state.get("found"):
                 break
@@ -1006,7 +1017,7 @@ class BitmojiOutfitMixin:
             if target is not None:
                 return target
 
-            if panel_state.get("atBottom") or not panel_state.get("moved"):
+            if panel_state.get("atBottom"):
                 break
 
         return None

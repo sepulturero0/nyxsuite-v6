@@ -1589,7 +1589,7 @@ async def _rotate_proxy_until_usable(
         await asyncio.sleep(min(5.0, 1.0 + attempt * 0.5))
 
 
-async def process_task(task, store, adspower):
+async def process_task(task, store, adspower, pipeline_release_callback=None):
     task_id = task["id"]
     proxy_value = str(task.get("proxy_address") or task.get("ip_address") or "").strip()
     initial_last_step = str(task.get("last_step") or "").strip()
@@ -2085,6 +2085,13 @@ async def process_task(task, store, adspower):
                     task_id,
                     adspower_name=final_adspower_name,
                 )
+                if pipeline_release_callback is not None and continuous_mode_enabled:
+                    # In the rename-gated continuous pipeline, this is the
+                    # handoff point for the next account.  The current task
+                    # may still be finishing SnapBoard/Nyx bookkeeping, but
+                    # its AdsPower profile is already safely identified and
+                    # renamed.
+                    pipeline_release_callback(task_id)
                 suffix = f" {reason}" if reason else ""
                 logger.info(
                     f"Task {task_id}: renamed AdsPower profile {profile_id_value} "
@@ -2474,6 +2481,8 @@ async def main():
             logger.warning(f"Could not requeue orphaned RUNNING Nyxify tasks at startup: {exc}")
 
         active_tasks: set[asyncio.Task] = set()
+        task_ids_by_future = {}
+        pipeline_released_task_ids = set()
 
         while True:
             try:
@@ -2485,6 +2494,9 @@ async def main():
                 finished = {t for t in active_tasks if t.done()}
                 for t in finished:
                     active_tasks.discard(t)
+                    finished_task_id = task_ids_by_future.pop(t, None)
+                    if finished_task_id is not None:
+                        pipeline_released_task_ids.discard(finished_task_id)
                     try:
                         t.result()
                     except Exception as task_exc:
@@ -2499,12 +2511,21 @@ async def main():
                     and developer_settings.get("parallel_continuous_pipeline_enabled", False)
                 )
                 configured_max_parallel = max(1, int(config.get("max_parallel_profiles") or 1))
-                parallel_slots = max(2, min(5, int(developer_settings.get("parallel_continuous_slots") or 2)))
+                # Continuous GUI creation is intentionally rename-gated:
+                # only one account may own the pipeline's create/start slot,
+                # and that slot is released when the account is successfully
+                # renamed.  This prevents the next AdsPower GUI transaction
+                # from starting immediately after browser launch while still
+                # allowing the prior task's post-rename handoff to finish.
                 max_parallel = (
-                    parallel_slots if parallel_continuous_pipeline_enabled
+                    1 if parallel_continuous_pipeline_enabled
                     else (1 if continuous_mode_enabled else configured_max_parallel)
                 )
-                open_slots = max_parallel - len(active_tasks)
+                occupied_slots = sum(
+                    1 for active_task in active_tasks
+                    if task_ids_by_future.get(active_task) not in pipeline_released_task_ids
+                )
+                open_slots = max_parallel - occupied_slots
                 priority_patterns = _priority_patterns_from_config(config)
                 blocked_patterns = (
                     config.get("blocked_proxies", [])
@@ -2538,11 +2559,19 @@ async def main():
                         proxy_priority_patterns=priority_patterns,
                     )
                     for task in new_tasks:
-                        t = asyncio.create_task(process_task(task, store, adspower))
+                        t = asyncio.create_task(
+                            process_task(
+                                task,
+                                store,
+                                adspower,
+                                pipeline_release_callback=pipeline_released_task_ids.add,
+                            )
+                        )
                         active_tasks.add(t)
+                        task_ids_by_future[t] = task["id"]
                         logger.info(
                             f"Task {task['id']} started "
-                            f"({len(active_tasks)}/{max_parallel} active)"
+                            f"({occupied_slots + 1}/{max_parallel} pipeline slots active)"
                         )
 
                 await asyncio.sleep(2)

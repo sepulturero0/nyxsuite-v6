@@ -7,6 +7,15 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.14
+
+- Continuous Mode now starts the next account only after the current AdsPower
+  profile is successfully renamed, while the previous task can finish its
+  remaining post-rename handoff in the background.
+- Bitmoji outfit selection now keeps scanning the active outfit panel until the
+  bottom is reached, including virtualized lists that briefly report no scroll
+  movement, so lower outfits are not skipped.
+
 ## NyxSuite v6.7.13
 
 - OTP and SMS waits now bring the existing SnapBoard Chrome tab forward once,

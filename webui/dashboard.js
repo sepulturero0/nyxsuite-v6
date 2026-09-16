@@ -931,21 +931,20 @@ async function renderDeveloperSettings() {
   body.innerHTML = `
     <div class="config-topbar"><h2>Developer Settings</h2><div class="config-actions"><span id="developer-feedback" class="feedback"></span><button id="developer-save" class="btn primary" type="button">Save Changes</button></div></div>
     <section class="config-section">
-      <h3>Parallel Continuous Pipeline</h3>
-      <p class="hint">Lets Continuous Mode run multiple signup browsers. AdsPower GUI create-and-launch actions remain one at a time and keep AdsPower in front until each browser is confirmed running.</p>
+      <h3>Rename-Gated Continuous Pipeline</h3>
+      <p class="hint">Continuous Mode starts the next account only after the current account has been successfully renamed. The previous task may finish its remaining handoff in the background.</p>
       <div class="adv-grid">
-        <div class="adv-field toggle-row"><span class="toggle-text">Enable Parallel Continuous Pipeline</span><label class="toggle-switch"><input id="developer-parallel-enabled" type="checkbox" ${settings.parallel_continuous_pipeline_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-        <label class="adv-field"><span>Parallel slots</span><select id="developer-parallel-slots" class="input">${[2,3,4,5].map(value => `<option value="${value}" ${slots === value ? "selected" : ""}>${value}</option>`).join("")}</select></label>
+        <div class="adv-field toggle-row"><span class="toggle-text">Enable Rename-Gated Continuous Pipeline</span><label class="toggle-switch"><input id="developer-parallel-enabled" type="checkbox" ${settings.parallel_continuous_pipeline_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       </div>
     </section>`;
   el("developer-save").addEventListener("click", async () => {
     const feedback = el("developer-feedback");
     const reply = await developerBridge("save_developer_settings", {
       parallel_continuous_pipeline_enabled: el("developer-parallel-enabled").checked,
-      parallel_continuous_slots: parseInt(el("developer-parallel-slots").value) || 2,
+      parallel_continuous_slots: slots,
     });
     if (!reply.ok) { developerSession = ""; feedback.textContent = reply.error || "Developer session expired."; return; }
-    feedback.textContent = "Developer settings saved. New slots apply on the next scheduler check.";
+    feedback.textContent = "Developer settings saved. The new behavior applies on the next scheduler check.";
   });
 }
 

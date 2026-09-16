@@ -1,5 +1,14 @@
 # Changelog
 
+## 6.7.14 - Rename-gated continuous mode and outfit scan completion
+
+- Continuous Mode now starts the next account only after the current AdsPower
+  profile is successfully renamed, while the previous task can finish its
+  remaining post-rename handoff in the background.
+- Bitmoji outfit selection now keeps scanning the active outfit panel until the
+  bottom is reached, including virtualized lists that briefly report no scroll
+  movement, so lower outfits are not skipped.
+
 ## 6.7.13 - SnapBoard verification focus and warmup popup guard
 
 - OTP and SMS waits now bring the existing SnapBoard Chrome tab forward once,
