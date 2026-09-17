@@ -104,6 +104,17 @@ class _LoadingSignupPage(_BlankSignupPage):
         return False
 
 
+class _StuckLoadingSignupPage(_BlankSignupPage):
+    """Models Snapchat's Next.js loading card after the document has settled."""
+
+    async def evaluate(self, script, *_a, **_k):
+        if "LoadingCard" in script:
+            return self.reload_calls == 0
+        if "const controls" in script:
+            return False
+        return True
+
+
 class _FakeContext:
     def __init__(self):
         self.new_pages = []
@@ -240,6 +251,23 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(page.reload_calls, 0)
+
+    async def test_stuck_loading_signup_shell_refreshes_after_grace_period(self):
+        page = _StuckLoadingSignupPage()
+        context = types.SimpleNamespace(pages=[page])
+
+        with mock.patch.object(cleanup, "SNAPCHAT_LOADING_SHELL_STUCK_SECONDS", 0):
+            result = await cleanup._wait_for_usable_signup_page(
+                context,
+                page,
+                logger=None,
+                profile_id="k1loading",
+                deadline=asyncio.get_running_loop().time() + 5,
+            )
+
+        self.assertIs(result, page)
+        self.assertEqual(page.reload_calls, 1)
+        self.assertIn(1500, page.waits)
 
 
 if __name__ == "__main__":

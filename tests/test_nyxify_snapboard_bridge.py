@@ -985,6 +985,41 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn("var readyWithoutCountdown = authState.mode === \"ready\"", check_fn)
         self.assertIn("&& !readyWithoutCountdown", check_fn)
 
+    def test_disabled_check_without_visible_countdown_does_not_arm_full_wait(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        ack_fn = content.split("async function waitForAuthClickAcknowledgement", 1)[1].split(
+            "function waitlessOtpCode", 1
+        )[0]
+        check_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split(
+            "async function rotateProxyUntilChanged", 1
+        )[0]
+
+        self.assertIn('reason: "visible_countdown"', ack_fn)
+        self.assertIn('reason: "disabled_no_countdown"', ack_fn)
+        self.assertIn('if (ack.reason === "visible_countdown")', check_fn)
+        self.assertIn('memory.reason = ack.reason || "clicked_no_countdown";', check_fn)
+        self.assertIn("memory.activeUntil = 0;", check_fn)
+        self.assertIn('memory.reason = "reclicks_exhausted_no_countdown";', check_fn)
+        self.assertIn("var reclicksExhaustedNoCountdown =", check_fn)
+        self.assertIn("refresh_required: !reclicksExhaustedNoCountdown", check_fn)
+
+    def test_verification_checks_are_keyed_by_submitted_email_or_phone(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        pending_otp = content.split("var codeResult = await runSnapboardVerificationCheck", 1)[1].split(
+            'await fetch(apiConfig.localApiUrl + "/otp/result"', 1
+        )[0]
+        message_handler = content.split('if (message.action === "otp")', 1)[1].split(
+            'if (message.action === "email_fetch")', 1
+        )[0]
+        sms_handler = content.split('if (message.action === "sms")', 1)[1].split(
+            'if (message.action === "username_update")', 1
+        )[0]
+
+        self.assertIn("function verificationStateKey(rowId, kind, expectedValue)", content)
+        self.assertIn("payload.request.email", pending_otp)
+        self.assertIn("message.email || message.expected_email", message_handler)
+        self.assertIn("message.phone || message.expected_phone", sms_handler)
+
     def test_background_refreshes_verification_after_message_channel_error(self):
         background = (ROOT / "nyxify_extension" / "background.js").read_text(encoding="utf-8")
         fetch_fn = background.split("async function snapboardFetchVerificationCode", 1)[1].split(

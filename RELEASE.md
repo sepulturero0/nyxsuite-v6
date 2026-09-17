@@ -7,6 +7,19 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.15
+
+- Replacement email and phone verification now keys SnapBoard check state by the
+  submitted value, preventing stale countdown/wait state from carrying into a
+  new email or phone.
+- Check Code and Check SMS now call SnapBoard's page handlers directly before
+  click fallback, and retry every ten seconds for up to sixty seconds when no
+  visible countdown appears.
+- No-countdown retries now exit into normal replacement recovery after the
+  bounded reclick window instead of starting the full OTP wait.
+- Snapchat loading-card signup shells refresh after a bounded grace period, with
+  focused regression coverage for the recovery behavior.
+
 ## NyxSuite v6.7.14
 
 - Bitmoji outfit selection now keeps scanning the active outfit panel until the

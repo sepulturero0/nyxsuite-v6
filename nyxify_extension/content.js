@@ -53,7 +53,7 @@
   var VERIFICATION_RECLICK_INTERVAL_MS = 10000;
   var VERIFICATION_IGNORED_RECLICK_INTERVAL_MS = 1500;
   var VERIFICATION_CLICK_ACK_TIMEOUT_MS = 2200;
-  var VERIFICATION_RECLICK_LIMIT = 3;
+  var VERIFICATION_RECLICK_LIMIT = 6;
   var PROXY_ROTATE_WAIT_MS = 22000;
   var PROXY_ROTATE_CLICK_ATTEMPTS = 1;
   var bridgePort = null;
@@ -97,12 +97,15 @@
     } catch (e) { /* timing is best-effort */ }
   }
 
-  function verificationStateKey(rowId, kind) {
-    return String(kind || "code") + ":" + String(rowId || "").trim();
+  function verificationStateKey(rowId, kind, expectedValue) {
+    var normalizedExpected = kind === "sms"
+      ? normalizeComparablePhone(expectedValue)
+      : normalizeComparableEmail(expectedValue);
+    return String(kind || "code") + ":" + String(rowId || "").trim() + ":" + normalizedExpected;
   }
 
-  function verificationCheckMemory(rowId, kind) {
-    var key = verificationStateKey(rowId, kind);
+  function verificationCheckMemory(rowId, kind, expectedValue) {
+    var key = verificationStateKey(rowId, kind, expectedValue);
     if (!verificationCheckStateByKey[key]) {
       verificationCheckStateByKey[key] = {
         activeUntil: 0,
@@ -157,11 +160,11 @@
     return pruned;
   }
 
-  async function loadVerificationCheckMemory(rowId, kind) {
-    var key = verificationStateKey(rowId, kind);
+  async function loadVerificationCheckMemory(rowId, kind, expectedValue) {
+    var key = verificationStateKey(rowId, kind, expectedValue);
     var stored = pruneExpiringStateMap(await chromeLocalGet(SNAPBOARD_VERIFICATION_STATE_KEY), Date.now());
     verificationCheckStateByKey = stored;
-    return verificationCheckMemory(rowId, kind);
+    return verificationCheckMemory(rowId, kind, expectedValue);
   }
 
   async function persistVerificationCheckMemory() {
@@ -1465,12 +1468,19 @@
     };
   }
 
-  // Click a page control with scroll/focus + a full mousedown/mouseup/click
-  // sequence (reaching the page's handlers), falling back to the native .click().
+  // Click a page control with native activation plus a full pointer/mouse
+  // sequence. Some SnapBoard controls report a successful HTMLElement.click()
+  // from the content script without starting the request; the acknowledgement
+  // loop below decides whether the activation actually changed state.
   function clickAuthElement(node) {
     if (!node || !_isClickableControl(node)) {
       return false;
     }
+    var activated = false;
+    var target = node;
+    var rect = null;
+    var clientX = 0;
+    var clientY = 0;
     try {
       if (typeof node.scrollIntoView === "function") {
         node.scrollIntoView({ block: "center", inline: "nearest" });
@@ -1481,35 +1491,78 @@
         node.focus();
       }
     } catch (_err) {}
-    // Use the native activation path first. SnapBoard's handlers can ignore a
-    // synthetic mouse sequence even though dispatchEvent reports success.
     try {
       if (typeof node.click === "function") {
         node.click();
-        return true;
+        activated = true;
+      }
+    } catch (_err) {}
+    try {
+      rect = node.getBoundingClientRect && node.getBoundingClientRect();
+      if (rect && rect.width > 0 && rect.height > 0) {
+        clientX = rect.left + rect.width / 2;
+        clientY = rect.top + rect.height / 2;
+        target = document.elementFromPoint(clientX, clientY) || node;
       }
     } catch (_err) {
-      // Fall through to the event sequence for non-standard controls.
+      target = node;
     }
-    try {
-      var opts = { bubbles: true, cancelable: true, view: window };
-      node.dispatchEvent(new MouseEvent("mousedown", opts));
-      node.dispatchEvent(new MouseEvent("mouseup", opts));
-      node.dispatchEvent(new MouseEvent("click", opts));
-      return true;
-    } catch (_err) {
+    [target, node].forEach(function (dispatchTarget) {
+      if (!dispatchTarget) {
+        return;
+      }
+      try {
+        var opts = { bubbles: true, cancelable: true, view: window, clientX: clientX, clientY: clientY };
+        if (typeof PointerEvent === "function") {
+          dispatchTarget.dispatchEvent(new PointerEvent("pointerdown", opts));
+          dispatchTarget.dispatchEvent(new PointerEvent("pointerup", opts));
+        }
+        dispatchTarget.dispatchEvent(new MouseEvent("mousedown", opts));
+        dispatchTarget.dispatchEvent(new MouseEvent("mouseup", opts));
+        dispatchTarget.dispatchEvent(new MouseEvent("click", opts));
+        activated = true;
+      } catch (_err) {}
+    });
+    return activated;
+  }
+
+  function invokeSnapboardAuthFunction(rowId, kind) {
+    if (!rowId || !document || !document.documentElement) {
       return false;
     }
+    var functionName = kind === "sms" ? "checkSms" : "check2faCode";
+    var markerName = "data-nyxify-auth-invoke-" + Date.now() + "-" + Math.floor(Math.random() * 1000000);
+    var script = document.createElement("script");
+    script.textContent = "(function(){"
+      + "var result='missing';"
+      + "try{"
+      + "var fn=window[" + JSON.stringify(functionName) + "];"
+      + "if(typeof fn==='function'){fn(" + JSON.stringify(String(rowId)) + ");result='called';}"
+      + "}catch(_err){result='error';}"
+      + "try{document.documentElement.setAttribute(" + JSON.stringify(markerName) + ",result);}catch(_err){}"
+      + "})();";
+    try {
+      (document.head || document.documentElement).appendChild(script);
+      script.remove();
+      var result = document.documentElement.getAttribute(markerName);
+      document.documentElement.removeAttribute(markerName);
+      return result === "called";
+    } catch (_err) {
+      try { script.remove(); } catch (_removeErr) {}
+    }
+    return false;
   }
 
   function clickCheckCode(rowId) {
     var state = _authCheckState(rowId, "code");
-    return { clicked: clickAuthElement(state.button), state: state };
+    var invoked = state.rowPresent && state.mode !== "disabled" && invokeSnapboardAuthFunction(rowId, "code");
+    return { clicked: invoked || clickAuthElement(state.button), state: state };
   }
 
   function clickCheckSms(rowId) {
     var state = _authCheckState(rowId, "sms");
-    return { clicked: clickAuthElement(state.button), state: state };
+    var invoked = state.rowPresent && state.mode !== "disabled" && invokeSnapboardAuthFunction(rowId, "sms");
+    return { clicked: invoked || clickAuthElement(state.button), state: state };
   }
 
   async function waitForAuthClickAcknowledgement(rowId, kind, previousState, popupSnapshot, previousCode, timeoutMs) {
@@ -1523,16 +1576,15 @@
         return { acknowledged: true, code: code, state: latestState, reason: "code" };
       }
       latestState = _authCheckState(rowId, kind);
+      if (Number(latestState.countdown_ms || 0) > 0 || latestState.mode === "waiting") {
+        return { acknowledged: true, code: "", state: latestState, reason: "visible_countdown" };
+      }
       if (
-        Number(latestState.countdown_ms || 0) > 0
-        || latestState.mode === "waiting"
-        || (
-          latestState.rowPresent
-          && Number(latestState.candidates || 0) > 0
-          && Number(latestState.clickable || 0) === 0
-        )
+        latestState.rowPresent
+        && Number(latestState.candidates || 0) > 0
+        && Number(latestState.clickable || 0) === 0
       ) {
-        return { acknowledged: true, code: "", state: latestState, reason: latestState.mode || "state_changed" };
+        return { acknowledged: true, code: "", state: latestState, reason: "disabled_no_countdown" };
       }
       await sleep(250);
     }
@@ -2807,19 +2859,19 @@
     });
   }
 
-  async function clickCheckCodeUntilOtp(rowId, timeoutMs) {
-    return clickAuthCodeUntilFound(rowId, timeoutMs, false);
+  async function clickCheckCodeUntilOtp(rowId, timeoutMs, expectedEmail) {
+    return clickAuthCodeUntilFound(rowId, timeoutMs, false, expectedEmail);
   }
 
-  async function clickCheckSmsUntilOtp(rowId, timeoutMs) {
-    return clickAuthCodeUntilFound(rowId, timeoutMs, true);
+  async function clickCheckSmsUntilOtp(rowId, timeoutMs, expectedPhone) {
+    return clickAuthCodeUntilFound(rowId, timeoutMs, true, expectedPhone);
   }
 
-  async function clickAuthCodeUntilFound(rowId, timeoutMs, sms) {
+  async function clickAuthCodeUntilFound(rowId, timeoutMs, sms, expectedValue) {
     var startedAt = Date.now();
     var diagStart = performance.now();
     var kind = sms ? "sms" : "code";
-    var memory = await loadVerificationCheckMemory(rowId, kind);
+    var memory = await loadVerificationCheckMemory(rowId, kind, expectedValue);
     var fallbackTimeoutMs = Math.max(1000, Number(timeoutMs) || OTP_FETCH_TIMEOUT_MS);
     var hardDeadline = startedAt + Math.max(fallbackTimeoutMs, OTP_FETCH_MAX_TIMEOUT_MS);
     var deadline = Math.max(startedAt + fallbackTimeoutMs, Number(memory.activeUntil || 0));
@@ -2921,8 +2973,13 @@
           } else if (ack.acknowledged) {
             successfulClicks += 1;
             memory.lastClickAt = Date.now();
-            rememberActiveWindow(VERIFICATION_CHECK_ACTIVE_MS, lastClickState.mode === "retry" ? "retry_clicked" : "clicked");
-            observeCountdown(true);
+            if (ack.reason === "visible_countdown") {
+              rememberActiveWindow(VERIFICATION_CHECK_ACTIVE_MS, "visible_countdown");
+              observeCountdown(true);
+            } else {
+              memory.reason = ack.reason || "clicked_no_countdown";
+              memory.activeUntil = 0;
+            }
             await persistVerificationCheckMemory();
             memoryDirty = false;
           } else {
@@ -2983,6 +3040,19 @@
             : "No pending email order for this account. Get email first.",
         };
       }
+      if (
+        (clickAttempts >= VERIFICATION_RECLICK_LIMIT || successfulClicks >= VERIFICATION_RECLICK_LIMIT)
+        && lastClickState.rowPresent
+        && Number(lastClickState.candidates || 0) > 0
+        && Number(lastClickState.countdown_ms || 0) === 0
+        && lastClickState.mode !== "waiting"
+      ) {
+        memory.activeUntil = 0;
+        memory.reason = "reclicks_exhausted_no_countdown";
+        await persistVerificationCheckMemory();
+        memoryDirty = false;
+        break;
+      }
       observeCountdown(false);
       if (memoryDirty) {
         await persistVerificationCheckMemory();
@@ -2999,9 +3069,14 @@
       && Number(lastClickState.clickable || 0) > 0
       && Number(lastClickState.countdown_ms || 0) === 0
       && lastClickState.mode === "ready";
+    var reclicksExhaustedNoCountdown = (clickAttempts >= VERIFICATION_RECLICK_LIMIT || successfulClicks >= VERIFICATION_RECLICK_LIMIT)
+      && lastClickState.rowPresent
+      && Number(lastClickState.candidates || 0) > 0
+      && Number(lastClickState.countdown_ms || 0) === 0
+      && lastClickState.mode !== "waiting";
     return {
       ok: false,
-      refresh_required: controlMissing || controlUnresponsive || clickIgnoredReady,
+      refresh_required: !reclicksExhaustedNoCountdown && (controlMissing || controlUnresponsive || clickIgnoredReady),
       error: (sms ? "SMS code not found on SnapBoard row." : "OTP code not found on SnapBoard row.")
         + " [check_attempts=" + clickAttempts
         + ", successful_clicks=" + successfulClicks
@@ -3118,7 +3193,11 @@
       }
 
       var codeResult = await runSnapboardVerificationCheck(async function () {
-        return clickCheckCodeUntilOtp(rowId, normalizeOtpFetchTimeoutMs(payload.request.timeout_ms));
+        return clickCheckCodeUntilOtp(
+          rowId,
+          normalizeOtpFetchTimeoutMs(payload.request.timeout_ms),
+          payload.request.email
+        );
       });
       if (!codeResult.ok || !codeResult.code) {
         headers["Content-Type"] = "application/json";
@@ -3510,7 +3589,11 @@
             sendResponse({ ok: false, error: "SnapBoard row email does not match pending OTP account." });
             return;
           }
-          var codeResult = await clickCheckCodeUntilOtp(rowId, normalizeOtpFetchTimeoutMs(message.timeout_ms));
+          var codeResult = await clickCheckCodeUntilOtp(
+            rowId,
+            normalizeOtpFetchTimeoutMs(message.timeout_ms),
+            message.email || message.expected_email
+          );
           if (!codeResult.ok || !codeResult.code) {
             sendResponse({
               ok: false,
@@ -3543,7 +3626,11 @@
             sendResponse({ ok: false, error: "SnapBoard row phone does not match pending SMS account." });
             return;
           }
-          var smsResult = await clickCheckSmsUntilOtp(rowId, normalizeOtpFetchTimeoutMs(message.timeout_ms));
+          var smsResult = await clickCheckSmsUntilOtp(
+            rowId,
+            normalizeOtpFetchTimeoutMs(message.timeout_ms),
+            message.phone || message.expected_phone
+          );
           if (!smsResult.ok || !smsResult.code) {
             sendResponse({
               ok: false,

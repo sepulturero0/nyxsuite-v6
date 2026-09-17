@@ -1,5 +1,22 @@
 # Changelog
 
+## 6.7.15 - SnapBoard verification reclick recovery
+
+- Replacement email and phone verification now scopes SnapBoard check memory to
+  the submitted value, so a new email or phone does not reuse stale wait state
+  from the prior value.
+- Check Code and Check SMS now invoke SnapBoard's page handlers directly before
+  falling back to DOM clicks, and retry every ten seconds for up to sixty
+  seconds when no visible countdown appears.
+- Successful clicks without a visible countdown no longer arm the full OTP wait;
+  after bounded retries, Nyxify falls back to the normal replacement recovery
+  path.
+- Snapchat signup loading-card shells now refresh after a bounded grace period,
+  matching the existing blank-shell recovery behavior.
+- Added focused regression coverage for replacement-value verification state,
+  SnapBoard handler invocation, no-countdown reclick exhaustion, and stuck
+  loading-shell recovery.
+
 ## 6.7.14 - Outfit scan completion
 
 - Bitmoji outfit selection now keeps scanning the active outfit panel until the

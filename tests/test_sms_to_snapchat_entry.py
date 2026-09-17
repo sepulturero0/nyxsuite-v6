@@ -27,7 +27,10 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("function _isClickableControl", content)
         # Page-world click with scroll/focus + mousedown/mouseup/click sequence.
         self.assertIn("function clickAuthElement", content)
+        self.assertIn("function invokeSnapboardAuthFunction", content)
         self.assertIn("scrollIntoView", content)
+        self.assertIn("document.elementFromPoint", content)
+        self.assertIn('new PointerEvent("pointerdown"', content)
         self.assertIn('new MouseEvent("mousedown"', content)
         self.assertIn('new MouseEvent("click"', content)
         # Tolerant attribute / text variants for the SMS control.
@@ -39,11 +42,11 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("function rowMatchesExpectedPhone", content)
         self.assertIn("expected.slice(-10)", content)
 
-    def test_check_code_and_sms_use_bounded_twenty_second_reclicks(self):
+    def test_check_code_and_sms_use_bounded_sixty_second_reclicks(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
 
         self.assertIn("VERIFICATION_RECLICK_INTERVAL_MS = 10000", content)
-        self.assertIn("VERIFICATION_RECLICK_LIMIT = 3", content)
+        self.assertIn("VERIFICATION_RECLICK_LIMIT = 6", content)
         self.assertIn("nextAllowedClickAt", content)
         self.assertIn("successfulClicks < VERIFICATION_RECLICK_LIMIT", content)
         self.assertIn("Date.now() >= nextAllowedClickAt", content)
@@ -66,6 +69,21 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("authState.mode === \"retry\"", retrieval_fn)
         self.assertIn("countdown_ms=", retrieval_fn)
 
+    def test_replacement_verification_memory_is_scoped_to_submitted_value(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        key_fn = content.split("function verificationStateKey", 1)[1].split(
+            "function verificationCheckMemory", 1
+        )[0]
+        retrieval_fn = content.split("async function clickAuthCodeUntilFound", 1)[1].split(
+            "async function rotateProxyUntilChanged", 1
+        )[0]
+
+        self.assertIn("expectedValue", key_fn)
+        self.assertIn("normalizeComparablePhone(expectedValue)", key_fn)
+        self.assertIn("normalizeComparableEmail(expectedValue)", key_fn)
+        self.assertIn("+ normalizedExpected", key_fn)
+        self.assertIn("loadVerificationCheckMemory(rowId, kind, expectedValue)", retrieval_fn)
+
     def test_countdown_parser_accepts_minute_labels(self):
         content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
         countdown_fn = content.split("function _countdownMsFromText", 1)[1].split(
@@ -87,6 +105,27 @@ class SmsCheckDetectionSourceTests(unittest.TestCase):
         self.assertIn("if (!node || !_isClickableControl(node))", click_fn)
         self.assertIn("getOtpTextForRow(rowId)", retrieval_fn)
         self.assertIn("getSmsTextForRow(rowId)", retrieval_fn)
+
+    def test_check_controls_invoke_snapboard_page_functions_before_click_fallback(self):
+        content = (ROOT / "nyxify_extension" / "content.js").read_text(encoding="utf-8")
+        invoke_fn = content.split("function invokeSnapboardAuthFunction", 1)[1].split(
+            "function clickCheckCode", 1
+        )[0]
+        click_code_fn = content.split("function clickCheckCode", 1)[1].split(
+            "function clickCheckSms", 1
+        )[0]
+        click_sms_fn = content.split("function clickCheckSms", 1)[1].split(
+            "async function waitForAuthClickAcknowledgement", 1
+        )[0]
+
+        self.assertIn('"check2faCode"', invoke_fn)
+        self.assertIn('"checkSms"', invoke_fn)
+        self.assertIn("document.createElement(\"script\")", invoke_fn)
+        self.assertIn("document.documentElement.setAttribute", invoke_fn)
+        self.assertIn("invokeSnapboardAuthFunction(rowId, \"code\")", click_code_fn)
+        self.assertIn("invokeSnapboardAuthFunction(rowId, \"sms\")", click_sms_fn)
+        self.assertIn("invoked || clickAuthElement(state.button)", click_code_fn)
+        self.assertIn("invoked || clickAuthElement(state.button)", click_sms_fn)
 
     def test_signup_flow_gates_submit_on_typed_otp(self):
         flow = (ROOT / "core" / "signup_flow.py").read_text(encoding="utf-8")

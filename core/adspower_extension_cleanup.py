@@ -20,6 +20,12 @@ def _env_int(name, default):
 SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS = max(
     0, _env_int("NYXIFY_SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS", 3)
 )
+SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS = max(
+    0, _env_int("NYXIFY_SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS", 2)
+)
+SNAPCHAT_LOADING_SHELL_STUCK_SECONDS = max(
+    3, _env_int("NYXIFY_SNAPCHAT_LOADING_SHELL_STUCK_SECONDS", 20)
+)
 COOKIE_WARMUP_ENABLED = str(os.getenv("NYXIFY_COOKIE_WARMUP_ENABLED", "1")).strip().lower() not in {
     "0",
     "false",
@@ -239,6 +245,56 @@ async def _is_blank_snapchat_signup_shell(page):
         return False
 
 
+async def _is_snapchat_signup_loading_shell(page):
+    try:
+        current_url = str(page.url or "").strip().lower()
+    except Exception:
+        current_url = ""
+    if not _is_snapchat_signup_url(current_url):
+        return False
+
+    try:
+        return bool(
+            await page.evaluate(
+                """
+                () => {
+                    if (!["interactive", "complete"].includes(document.readyState)) {
+                        return false;
+                    }
+                    const isVisible = (node) => {
+                        if (!node) return false;
+                        const style = window.getComputedStyle(node);
+                        if (!style) return false;
+                        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") {
+                            return false;
+                        }
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0;
+                    };
+                    const controls = Array.from(document.querySelectorAll(
+                        "#firstname, #day, #year, #username, #password, input, button, form, select, textarea, [role='button']"
+                    ));
+                    if (controls.some(isVisible)) {
+                        return false;
+                    }
+                    const loadingMarkers = Array.from(document.querySelectorAll(
+                        "[data-testid='LoadingCard'], [class*='LoadingCard'], [class*='loadingCard'], [class*='UnauthenticatedRouteHandler_loadingCard']"
+                    ));
+                    if (!loadingMarkers.some(isVisible)) {
+                        return false;
+                    }
+                    const bodyText = String((document.body && document.body.innerText) || "")
+                        .replace(/\\s+/g, " ")
+                        .trim();
+                    return bodyText.length <= 200;
+                }
+                """
+            )
+        )
+    except Exception:
+        return False
+
+
 async def _is_signup_page_dom_ready(page):
     try:
         return bool(
@@ -250,11 +306,20 @@ async def _is_signup_page_dom_ready(page):
         return False
 
 
-async def _refresh_signup_after_blank_shell(page, logger, profile_id, attempt):
+async def _refresh_signup_after_blank_shell(
+    page,
+    logger,
+    profile_id,
+    attempt,
+    reason="a blank logo shell",
+    max_attempts=None,
+):
+    if max_attempts is None:
+        max_attempts = SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS
     if logger:
         logger.warning(
-            f"Snapchat signup opened to a blank logo shell for AdsPower profile {profile_id}; "
-            f"refreshing signup page (attempt {attempt}/{SNAPCHAT_BLANK_SHELL_MAX_REFRESH_ATTEMPTS})."
+            f"Snapchat signup opened to {reason} for AdsPower profile {profile_id}; "
+            f"refreshing signup page (attempt {attempt}/{max_attempts})."
         )
     try:
         await page.reload(wait_until="domcontentloaded", timeout=45000)
@@ -262,7 +327,7 @@ async def _refresh_signup_after_blank_shell(page, logger, profile_id, attempt):
     except Exception as exc:
         if logger:
             logger.warning(
-                f"Snapchat signup blank-shell refresh failed for AdsPower profile {profile_id}: {exc}. "
+                f"Snapchat signup refresh after {reason} failed for AdsPower profile {profile_id}: {exc}. "
                 "Trying direct signup navigation."
             )
         try:
@@ -271,7 +336,7 @@ async def _refresh_signup_after_blank_shell(page, logger, profile_id, attempt):
         except Exception as exc2:
             if logger:
                 logger.warning(
-                    f"Snapchat signup blank-shell re-navigation failed for AdsPower profile {profile_id}: {exc2}"
+                    f"Snapchat signup re-navigation after {reason} failed for AdsPower profile {profile_id}: {exc2}"
                 )
     return False
 
@@ -283,6 +348,8 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
     next_log_at = 0
     last_stage = "waiting_for_signup_page"
     blank_shell_refresh_attempts = 0
+    loading_shell_refresh_attempts = 0
+    loading_shell_first_seen_at = None
     unusable_signup_observations = 0
 
     while True:
@@ -343,6 +410,32 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
                 await page.wait_for_timeout(1500)
                 break
 
+            loading_shell_detected = await _is_snapchat_signup_loading_shell(page)
+            if loading_shell_detected:
+                if loading_shell_first_seen_at is None:
+                    loading_shell_first_seen_at = now
+                loading_shell_age = now - loading_shell_first_seen_at
+                if (
+                    loading_shell_refresh_attempts < SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS
+                    and loading_shell_age >= SNAPCHAT_LOADING_SHELL_STUCK_SECONDS
+                ):
+                    loading_shell_refresh_attempts += 1
+                    last_stage = f"loading_signup_shell_refresh:{loading_shell_refresh_attempts}"
+                    loading_shell_first_seen_at = None
+                    unusable_signup_observations = 0
+                    await _refresh_signup_after_blank_shell(
+                        page,
+                        logger,
+                        profile_id,
+                        loading_shell_refresh_attempts,
+                        reason="the Snapchat loading shell",
+                        max_attempts=SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS,
+                    )
+                    await page.wait_for_timeout(1500)
+                    break
+            else:
+                loading_shell_first_seen_at = None
+
         if logger and now >= next_log_at:
             logger.info(
                 f"Waiting for Snapchat signup handoff for AdsPower profile {profile_id}. "
@@ -356,6 +449,8 @@ async def _wait_for_usable_signup_page(context, preferred_page, logger, profile_
 async def _wait_for_snapchat_signup_ready(signup_page):
     remaining_ms = SNAPCHAT_PAGE_READY_TIMEOUT_MS
     blank_shell_refresh_attempts = 0
+    loading_shell_refresh_attempts = 0
+    loading_shell_seen_ms = 0
 
     while remaining_ms > 0:
         try:
@@ -396,6 +491,28 @@ async def _wait_for_snapchat_signup_ready(signup_page):
                 await signup_page.wait_for_timeout(1500)
                 remaining_ms -= 1500
                 continue
+
+            if await _is_snapchat_signup_loading_shell(signup_page):
+                loading_shell_seen_ms += SNAPCHAT_POLL_INTERVAL_MS
+                if (
+                    loading_shell_refresh_attempts < SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS
+                    and loading_shell_seen_ms >= SNAPCHAT_LOADING_SHELL_STUCK_SECONDS * 1000
+                ):
+                    loading_shell_refresh_attempts += 1
+                    loading_shell_seen_ms = 0
+                    await _refresh_signup_after_blank_shell(
+                        signup_page,
+                        logger=None,
+                        profile_id="",
+                        attempt=loading_shell_refresh_attempts,
+                        reason="the Snapchat loading shell",
+                        max_attempts=SNAPCHAT_LOADING_SHELL_MAX_REFRESH_ATTEMPTS,
+                    )
+                    await signup_page.wait_for_timeout(1500)
+                    remaining_ms -= 1500
+                    continue
+            else:
+                loading_shell_seen_ms = 0
 
         await signup_page.wait_for_timeout(SNAPCHAT_POLL_INTERVAL_MS)
         remaining_ms -= SNAPCHAT_POLL_INTERVAL_MS
