@@ -7,6 +7,15 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.7.16
+
+- Added Dashboard Daily Report, Proxy Ranking reset, and version-aware What's
+  New release notes.
+- Updated both extensions for the production SnapBoard host and synchronized
+  Nyxify row limits with the runner.
+- Improved AdsPower GUI failure diagnostics, forced proxy-rotation recovery,
+  and continuous Nyxify-to-Nyx handoff persistence.
+
 ## NyxSuite v6.7.15
 
 - Replacement email and phone verification now keys SnapBoard check state by the

@@ -1,5 +1,21 @@
 # Changelog
 
+## 6.7.16 - Dashboard and workflow resilience
+
+- Added a full Dashboard Daily Report workspace, a Proxy Ranking reset action,
+  and a version-aware What's New dialog that reads bundled release notes.
+- Moved Nyx and Nyxify extension SnapBoard permissions to the production
+  SnapBoard host, simplified the Nyx popup, and keep Nyxify row-limit settings
+  synchronized with the runner.
+- AdsPower GUI preflight and profile-open failures now expose clearer stages,
+  while forced proxy rotation stops and requeues safely if SnapBoard's rotate
+  control is unavailable.
+- Continuous Nyxify-to-Nyx handoffs now retain their slot correctly when
+  parallel mode is disabled, and Full Auto username retries persist to the
+  Nyxify task store.
+- Added focused regression coverage for release notes, AdsPower GUI failure
+  stages, proxy-rotation recovery, and continuous-mode handoff behavior.
+
 ## 6.7.15 - SnapBoard verification reclick recovery
 
 - Replacement email and phone verification now scopes SnapBoard check memory to
