@@ -1,5 +1,14 @@
 # Changelog
 
+## 6.8.1 - Windows AdsPower focus correction
+
+- Windows AdsPower GUI preflight now checks for an available dashboard without
+  foregrounding AdsPower or minimizing an already-open profile browser.
+- Existing AdsPower profiles can be attached through CDP without stealing focus;
+  AdsPower is foregrounded only when a real GUI interaction is required.
+- Added regression coverage for passive Windows preflight and its no-focus
+  connection path.
+
 ## 6.8.0 - Release notes and workflow resilience
 
 - The dashboard now automatically opens the bundled What's New release notes

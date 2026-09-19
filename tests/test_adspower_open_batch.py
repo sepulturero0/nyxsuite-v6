@@ -187,6 +187,43 @@ class DashboardRefreshTests(unittest.TestCase):
         ctrl._connect.assert_called()
 
 
+class AdsPowerPreflightFocusTests(unittest.TestCase):
+    def test_windows_preflight_uses_non_foregrounding_connect(self):
+        """Readiness checks must not steal focus from an open profile/browser."""
+        ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
+        ctrl._backend = None
+        ctrl._connect = mock.Mock(return_value=object())
+
+        with mock.patch.object(aui.sys, "platform", "win32"):
+            self.assertTrue(ctrl.preflight_check())
+
+        ctrl._connect.assert_called_once_with(focus=False)
+
+    def test_windows_non_foregrounding_connect_skips_window_raise_and_minimize(self):
+        """The passive Windows path must not invoke any focus side effects."""
+        ctrl = AdsPowerUIController.__new__(AdsPowerUIController)
+        ctrl._backend = None
+        ctrl._hwnd = None
+        ctrl._app = None
+        ctrl._a11y_depth = 0
+        ctrl._prev_fg = None
+        ctrl._minimize_overlapping_browsers = mock.Mock()
+        fake_app = mock.Mock()
+        fake_app.connect.return_value = fake_app
+        fake_app.window.return_value = "ads-power-window"
+
+        with mock.patch.object(aui.sys, "platform", "win32"), \
+             mock.patch.object(aui.win_focus, "find_window", return_value=1234), \
+             mock.patch.object(aui.win_focus, "ensure_foreground") as ensure_foreground, \
+             mock.patch.object(aui, "Application", return_value=fake_app, create=True):
+            self.assertTrue(ctrl.preflight_check())
+
+        ensure_foreground.assert_not_called()
+        ctrl._minimize_overlapping_browsers.assert_not_called()
+        self.assertEqual(ctrl._hwnd, 1234)
+        self.assertEqual(ctrl._win, "ads-power-window")
+
+
 class _Rect:
     def __init__(self, left, top, right, bottom):
         self.left = left

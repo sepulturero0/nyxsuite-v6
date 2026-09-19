@@ -519,9 +519,15 @@ class AdsPowerUIController:
     # Window / connection
     # ------------------------------------------------------------------
 
-    def _connect(self):
-        """Locate AdsPower, bring it foreground so Chromium exposes the UIA tree,
-        and return its top window."""
+    def _connect(self, *, focus: bool = True):
+        """Locate AdsPower and return its top window.
+
+        Actual GUI operations use the default ``focus=True`` path because
+        Windows UIA/coordinate clicks need the AdsPower dashboard in front.
+        Readiness checks can pass ``focus=False`` so merely checking that the
+        app exists never steals focus from an already-open profile or the
+        user's current app.
+        """
         if self._backend is not None:
             self._win = self._backend.connect()
             self._hwnd = getattr(self._backend, "window_id", None)
@@ -530,8 +536,9 @@ class AdsPowerUIController:
         if not hwnd:
             raise AdsPowerWindowNotFoundError(
                 "AdsPower desktop app not found. Launch AdsPower and sign in.")
-        win_focus.ensure_foreground(_WINDOW_TITLE_SUBSTR)
-        self._minimize_overlapping_browsers(hwnd)
+        if focus:
+            win_focus.ensure_foreground(_WINDOW_TITLE_SUBSTR)
+            self._minimize_overlapping_browsers(hwnd)
         # Defensive: __init__ may not have been called (e.g. bare mock controllers
         # in tests) — ensure all instance attributes exist before using them.
         if not hasattr(self, "_hwnd"):
@@ -546,12 +553,12 @@ class AdsPowerUIController:
         return self._win
 
     def preflight_check(self):
-        """Check Accessibility and a usable AdsPower window without a click."""
+        """Check that AdsPower is available without changing foreground focus."""
         if self._backend is not None:
             checker = getattr(self._backend, "preflight_check", None)
             if callable(checker):
                 return checker()
-        self._connect()
+        self._connect(focus=False)
         return True
 
     def _refresh_window(self) -> bool:

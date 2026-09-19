@@ -7,6 +7,15 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.8.1
+
+- Windows AdsPower GUI preflight now checks for an available dashboard without
+  foregrounding AdsPower or minimizing an already-open profile browser.
+- Existing AdsPower profiles can be attached through CDP without stealing focus;
+  AdsPower is foregrounded only when a real GUI interaction is required.
+- Added focused regression coverage for passive Windows preflight and its
+  no-focus connection path.
+
 ## NyxSuite v6.8.0
 
 - The dashboard now automatically opens the bundled What's New release notes
