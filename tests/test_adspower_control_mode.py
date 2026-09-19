@@ -97,9 +97,13 @@ def test_gui_mode_preflight_allows_permission_gated_status():
     manager.session.get = mock.Mock(
         return_value=_FakeResponse({"code": 9110, "msg": "No local API permission"})
     )
+    fake_ui = mock.Mock()
+    fake_ui.preflight_check.return_value = True
+    manager._ui_controller = mock.Mock(return_value=fake_ui)
 
     result = manager.preflight_check()
 
     assert result["ok"] is True
     assert result["code"] == "ok"
-    assert "GUI" in result["message"]
+    assert "Accessibility" in result["message"]
+    manager.session.get.assert_not_called()

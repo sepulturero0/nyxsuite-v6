@@ -31,7 +31,12 @@ import webbrowser
 from pathlib import Path
 
 from core.bridge_runtime_config import load_bridge_config, save_bridge_config
-from core.developer_settings import load_developer_settings, save_developer_settings
+from core.developer_settings import (
+    load_developer_settings,
+    public_developer_settings,
+    save_developer_settings,
+)
+from core.device_fleet import HEARTBEAT_INTERVAL_SECONDS, fetch_devices, send_heartbeat
 from core.agent_token import get_or_create_token
 from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
@@ -107,6 +112,7 @@ class BridgeApp:
         self._developer_session_expires_at = 0.0
         self._developer_unlock_failures = 0
         self._developer_unlock_not_before = 0.0
+        self._device_fleet_thread = None
 
     # ------------------------------------------------------------------ build
     def _version(self) -> str:
@@ -195,11 +201,13 @@ class BridgeApp:
         except Exception as exc:
             log(f"Ctrl+F7/F8 stop/start hotkeys unavailable: {exc}")
         self._start_nyxify_alarm_watcher()
+        self._start_device_fleet_heartbeat()
         log_timing("bridge.start_servers", start, "bridge")
 
     def _bridge_actions(self) -> dict:
         return {
             "check_update": self._action_check_update,
+            "whats_new": self._action_whats_new,
             "apply_update": self._action_apply_update,
             "rollback": self._action_rollback,
             "list_backups": self._action_list_backups,
@@ -214,6 +222,8 @@ class BridgeApp:
             "developer_unlock": self._action_developer_unlock,
             "developer_settings": self._action_developer_settings,
             "save_developer_settings": self._action_save_developer_settings,
+            "device_fleet_status": self._action_device_fleet_status,
+            "device_fleet_ping": self._action_device_fleet_ping,
             "sync_extensions": self._action_sync_extensions,
             "hotkey_product": self._action_hotkey_product,
             "adspower_test": self._action_adspower_test,
@@ -247,19 +257,33 @@ class BridgeApp:
             "ok": True,
             "developer_session": self._developer_session,
             "expires_in_seconds": _DEVELOPER_SESSION_SECONDS,
-            "settings": load_developer_settings(),
+            "settings": public_developer_settings(load_developer_settings()),
         }
 
     def _action_developer_settings(self, payload=None) -> dict:
         if not self._developer_session_valid(payload):
             return {"ok": False, "error": "Developer PIN required.", "locked": True}
-        return {"ok": True, "settings": load_developer_settings()}
+        return {"ok": True, "settings": public_developer_settings(load_developer_settings())}
 
     def _action_save_developer_settings(self, payload=None) -> dict:
         if not self._developer_session_valid(payload):
             return {"ok": False, "error": "Developer PIN required.", "locked": True}
         settings = save_developer_settings(payload or {})
-        return {"ok": True, "settings": settings, "message": "Developer settings saved."}
+        return {
+            "ok": True,
+            "settings": public_developer_settings(settings),
+            "message": "Developer settings saved.",
+        }
+
+    def _action_device_fleet_status(self, payload=None) -> dict:
+        if not self._developer_session_valid(payload):
+            return {"ok": False, "error": "Developer PIN required.", "locked": True}
+        return fetch_devices(load_developer_settings())
+
+    def _action_device_fleet_ping(self, payload=None) -> dict:
+        if not self._developer_session_valid(payload):
+            return {"ok": False, "error": "Developer PIN required.", "locked": True}
+        return send_heartbeat(load_developer_settings(), version=self._version())
 
     def _bridge_settings_snapshot(self) -> dict:
         return {
@@ -320,6 +344,31 @@ class BridgeApp:
                 self._stop.wait(1.0)
 
         threading.Thread(target=loop, name="nyxify-alarm", daemon=True).start()
+
+    def _start_device_fleet_heartbeat(self):
+        if self._device_fleet_thread is not None:
+            return
+
+        def loop():
+            while not self._stop.is_set():
+                try:
+                    settings = load_developer_settings()
+                    if bool(settings.get("device_heartbeat_enabled")):
+                        result = send_heartbeat(settings, version=self._version())
+                        if result.get("ok"):
+                            log("Device fleet heartbeat sent.")
+                        elif not result.get("skipped"):
+                            log(f"Device fleet heartbeat failed: {result.get('error') or 'unknown error'}")
+                except Exception as exc:
+                    log(f"Device fleet heartbeat failed: {exc}")
+                self._stop.wait(HEARTBEAT_INTERVAL_SECONDS)
+
+        self._device_fleet_thread = threading.Thread(
+            target=loop,
+            name="device-fleet-heartbeat",
+            daemon=True,
+        )
+        self._device_fleet_thread.start()
 
     def _is_nyxify_running(self) -> bool:
         """Check if the Nyxify runner is actually running (not just a
@@ -439,6 +488,14 @@ class BridgeApp:
             "message": (f"Update {rel.tag_name} available (current {current})." if available
                         else f"Up to date ({current})."),
         }
+
+    def _action_whats_new(self, payload=None) -> dict:
+        try:
+            from core.release_updater import get_current_release_notes
+
+            return {"ok": True, **get_current_release_notes(self._version())}
+        except Exception as exc:
+            return {"ok": False, "message": f"Release notes unavailable: {exc}"}
 
     def _action_apply_update(self, payload=None) -> dict:
         try:

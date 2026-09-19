@@ -109,6 +109,9 @@ class _FakeAdsPower:
             )
         return {"profile_id": "k1new", "name": "Snapchat:"}
 
+    def create_and_open_profile_transaction(self, **kwargs):
+        return self.create_profile(**kwargs), "http://127.0.0.1:9222"
+
     def close_profile(self, profile_id):
         self.closed.append(profile_id)
         return {"code": 0}
@@ -219,6 +222,9 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
         capture_handoff_state=False,
         capture_events=False,
         snapboard_wait_side_effect=None,
+        parallel_continuous_pipeline=False,
+        capture_pipeline_release=False,
+        full_auto_mode=False,
     ):
         store = _FakeStore()
         events = []
@@ -234,6 +240,7 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
         )
         handoffs = []
         handoff_observations = []
+        pipeline_releases = []
         adspower_id_update = adspower_id_update or (lambda *_args, **_kwargs: True)
         config = {
             "blocked_proxies": [],
@@ -244,7 +251,7 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
             "adspower_group": "Snapchat",
             "extension_category": "Snap",
             "push_adspower_id_enabled": True,
-            "full_auto_mode_enabled": False,
+            "full_auto_mode_enabled": full_auto_mode,
             "continuous_mode_enabled": continuous_mode,
             "keep_profile_open_after_signup": keep_profile_open_after_signup,
             "names_dir": "",
@@ -300,6 +307,13 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
 
         with mock.patch.object(nyxify_runner, "logger", _FakeLogger()), \
                 mock.patch.object(nyxify_runner, "load_nyxify_config", return_value=config), \
+                mock.patch.object(
+                    nyxify_runner,
+                    "load_developer_settings",
+                    return_value={
+                        "parallel_continuous_pipeline_enabled": parallel_continuous_pipeline,
+                    },
+                ), \
                 mock.patch.object(nyxify_runner, "_rotate_proxy_until_usable", side_effect=_fake_rotate_proxy), \
                 mock.patch.object(nyxify_runner, "disable_profile_extensions", side_effect=fake_disable_extensions), \
                 mock.patch.object(nyxify_runner, "warm_ads_profile_cookies", side_effect=fake_warmup), \
@@ -318,12 +332,25 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
                 mock.patch.object(nyxify_runner, "_request_snapboard_rotation", side_effect=fake_snapboard_rotation), \
                 mock.patch.object(nyxify_runner, "_play_completion_sound"), \
                 mock.patch.object(nyxify_runner, "enqueue_profile_for_nyx", side_effect=fake_handoff):
-            await nyxify_runner.process_task(task, store, adspower)
+            await nyxify_runner.process_task(
+                task,
+                store,
+                adspower,
+                pipeline_release_callback=pipeline_releases.append,
+            )
 
         if capture_events:
-            return store, adspower, handoffs, events
+            result = (store, adspower, handoffs, events)
+            if capture_pipeline_release:
+                return (*result, pipeline_releases)
+            return result
         if capture_handoff_state:
-            return store, adspower, handoffs, handoff_observations, context, playwright
+            result = (store, adspower, handoffs, handoff_observations, context, playwright)
+            if capture_pipeline_release:
+                return (*result, pipeline_releases)
+            return result
+        if capture_pipeline_release:
+            return store, adspower, handoffs, pipeline_releases
         return store, adspower, handoffs
 
     async def test_cookie_warmup_is_visible_step_before_signup_handoff(self):
@@ -494,6 +521,47 @@ class NyxifyContinuousModeTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("rename unavailable" in update.get("error", "") for _task_id, update in store.updates))
         self.assertTrue(any(update.get("last_step") == "queued_for_nyx" for _task_id, update in store.updates))
         self.assertTrue(any(update.get("status") == "DONE" for _task_id, update in store.updates))
+
+    async def test_continuous_mode_does_not_release_slot_on_rename_when_parallel_disabled(self):
+        _store, _adspower, _handoffs, releases = await self._run_task(
+            True,
+            capture_pipeline_release=True,
+            parallel_continuous_pipeline=False,
+        )
+
+        self.assertEqual(releases, [])
+
+    async def test_continuous_mode_releases_slot_on_rename_only_when_parallel_enabled(self):
+        _store, _adspower, _handoffs, releases = await self._run_task(
+            True,
+            capture_pipeline_release=True,
+            parallel_continuous_pipeline=True,
+        )
+
+        self.assertEqual(releases, [123])
+
+    async def test_full_auto_username_retry_is_saved_to_nyxify_store(self):
+        async def signup_with_username_retry(**kwargs):
+            retry_username = await kwargs["username_retry_provider"](
+                "seeduser",
+                "signup_username_already_taken",
+            )
+            self.assertEqual(retry_username, "freshretry")
+            await kwargs["username_detected_callback"](retry_username)
+            return {"final_username": retry_username, "otp_entered": True}
+
+        with mock.patch.object(
+            nyxify_runner,
+            "_request_next_full_auto_username",
+            mock.AsyncMock(return_value="freshretry"),
+        ):
+            store, _adspower, _handoffs = await self._run_task(
+                True,
+                signup_side_effect=signup_with_username_retry,
+                full_auto_mode=True,
+            )
+
+        self.assertIn(("snapboard:123", "freshretry"), store.usernames)
 
     async def test_continuous_wait_guard_detects_active_nyx_handoff(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -32,3 +32,18 @@ def test_dashboard_update_actions_are_single_flight_with_loading_states():
     assert "if (updateCheckInFlight || updateApplyInFlight) return;" in js
     assert "button.btn.is-loading" in css
     assert "dashboardButtonSpin" in css
+
+
+def test_developer_device_fleet_dashboard_is_minimal():
+    js = (ROOT / "webui" / "dashboard.js").read_text(encoding="utf-8")
+    css = (ROOT / "webui" / "dashboard.css").read_text(encoding="utf-8")
+
+    assert "Device Fleet" in js
+    assert "Enable Device Heartbeat" in js
+    assert "<th>Status</th><th>Device Name</th><th>OS</th><th>Version</th><th>Last Seen</th>" in js
+    assert "device_fleet_status" in js
+    assert "device_fleet_ping" in js
+    assert "fleet-dot-active" in css
+    assert "fleet-dot-inactive" in css
+    assert "<th>Nyx" not in js
+    assert "<th>Nyxify" not in js

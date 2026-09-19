@@ -15,7 +15,7 @@ from core.nyxify_alarm import play_alarm_sound, play_alarm_voice
 
 hide_macos_dock_icon()
 
-from core.adspower import AdsPowerManager
+from core.adspower import AdsPowerManager, classify_adspower_gui_error
 from core.adspower_extension_cleanup import (
     clear_unrelated_tabs_except_adspower,
     disable_profile_extensions,
@@ -69,10 +69,16 @@ NYXIFY_COMPLETION_SOUND_ENABLED = str(os.getenv("NYXIFY_COMPLETION_SOUND", "1"))
     "no",
     "off",
 }
+# Normal proxy validation may need several rotations, but replacement-account
+# recovery must not monopolize the only Nyxify slot forever when SnapBoard's
+# rotate control is unavailable.
 MAX_PROXY_ROTATION_ATTEMPTS = 300
+MAX_FORCED_PROXY_ROTATION_ATTEMPTS = 5
+PROXY_ROTATION_UI_FAILURE_LIMIT = 3
 PRIORITY_PREFETCH_MAX_ROWS = 5
 WAITING_FOR_FORCED_PROXY_ROTATION_STEP = "waiting_for_forced_proxy_rotation"
 FORCING_PROXY_ROTATION_STEP = "forcing_proxy_rotation_before_create"
+PROXY_ROTATION_UNAVAILABLE_STEP = "proxy_rotation_unavailable"
 
 _LOCAL_API_TOKEN_CACHED = False
 
@@ -293,6 +299,10 @@ def _classify_failure_last_step(created, last_step, error_message):
     normalized_error = str(error_message or "").strip().lower()
     normalized_step = str(last_step or "").strip()
 
+    gui_stage = classify_adspower_gui_error(error_message, default="")
+    if gui_stage:
+        return gui_stage
+
     if _is_macos_accessibility_permission_error(error_message):
         return "adspower_accessibility_permission_missing"
 
@@ -402,7 +412,12 @@ def _classify_failure_last_step(created, last_step, error_message):
     if last_step == "running_signup":
         return "signup_automation_failed"
 
-    if created and last_step in {"opening_profile", "extensions_disabled"}:
+    if normalized_step in {"opening_profile", "profile_open_failed", "browser_attach_failed"}:
+        if normalized_step == "opening_profile":
+            return "profile_open_failed"
+        return normalized_step
+
+    if normalized_step == "disabling_extensions":
         return "extensions_disable_failed"
 
     if created:
@@ -497,6 +512,11 @@ def _should_cleanup_failed_created_profile(failure_last_step, error_message):
     ):
         return True
     if normalized_step in {
+        "profile_open_failed",
+        "browser_attach_failed",
+        "adspower_profile_not_visible",
+        "adspower_open_click_failed",
+        "adspower_cdp_timeout",
         "adspower_profile_creation_failed",
         "adspower_account_limit_reached",
         "adspower_api_unreachable",
@@ -593,6 +613,7 @@ def _request_snapboard_rotation_sync(
     blocked_patterns=None,
     proxy_type="off",
     force=False,
+    return_details=False,
 ):
     """Ask the SnapBoard content script (via local API) to click the rotate button and return the new proxy."""
     request_id = _queue_snapboard_rotation_request(
@@ -604,8 +625,10 @@ def _request_snapboard_rotation_sync(
         force=force,
     )
     if not request_id:
-        return None
+        result = {"proxy": "", "error": "Could not queue SnapBoard proxy rotation request."}
+        return result if return_details else None
 
+    last_error = ""
     for _ in range(timeout_seconds):
         time.sleep(1)
         try:
@@ -620,15 +643,23 @@ def _request_snapboard_rotation_sync(
             data = resp.json()
             if data.get("done"):
                 if data.get("error"):
-                    logger.warning(f"SnapBoard proxy rotation error for {row_key}: {data['error']}")
-                    return None
+                    last_error = str(data.get("error") or "").strip()
+                    logger.warning(f"SnapBoard proxy rotation error for {row_key}: {last_error}")
+                    result = {"proxy": "", "error": last_error}
+                    return result if return_details else None
                 new_proxy = str(data.get("proxy") or "").strip()
-                return new_proxy or None
-        except Exception:
-            pass
+                result = {
+                    "proxy": new_proxy,
+                    "error": "" if new_proxy else "SnapBoard returned no proxy after rotation.",
+                }
+                return result if return_details else (new_proxy or None)
+        except Exception as exc:
+            last_error = str(exc).strip() or last_error
 
-    logger.warning(f"SnapBoard proxy rotation timed out for {row_key}")
-    return None
+    timeout_error = last_error or f"SnapBoard proxy rotation timed out for {row_key}."
+    logger.warning(f"SnapBoard proxy rotation timed out for {row_key}: {timeout_error}")
+    result = {"proxy": "", "error": timeout_error}
+    return result if return_details else None
 
 
 async def _request_snapboard_rotation(
@@ -639,6 +670,7 @@ async def _request_snapboard_rotation(
     blocked_patterns=None,
     proxy_type="off",
     force=False,
+    return_details=False,
 ):
     return await asyncio.to_thread(
         _request_snapboard_rotation_sync,
@@ -649,6 +681,7 @@ async def _request_snapboard_rotation(
         blocked_patterns,
         proxy_type,
         force,
+        return_details,
     )
 
 
@@ -1429,7 +1462,22 @@ def _task_requires_forced_proxy_rotation(task):
     last_step = str((task or {}).get("last_step") or "").strip()
     return (
         last_step == WAITING_FOR_FORCED_PROXY_ROTATION_STEP
+        or last_step == PROXY_ROTATION_UNAVAILABLE_STEP
         or last_step.startswith("retry_pending_after_")
+    )
+
+
+def _is_proxy_rotation_ui_unavailable(error_message):
+    normalized = str(error_message or "").strip().lower()
+    return any(
+        marker in normalized
+        for marker in (
+            "no rotate button found",
+            "snapboard row not visible",
+            "rotate control not found",
+            "proxy rotation timed out",
+            "could not queue snapboard proxy rotation request",
+        )
     )
 
 
@@ -1439,7 +1487,7 @@ async def _force_proxy_rotation_before_create(
     store,
     proxy_value,
     blocked_proxies,
-    max_rotation_attempts=MAX_PROXY_ROTATION_ATTEMPTS,
+    max_rotation_attempts=MAX_FORCED_PROXY_ROTATION_ATTEMPTS,
 ):
     old_proxy = str(proxy_value or "").strip()
     if not task_row_key:
@@ -1455,8 +1503,10 @@ async def _force_proxy_rotation_before_create(
     )
 
     store.update_task_state(task_id, status="RUNNING", last_step=FORCING_PROXY_ROTATION_STEP, error="")
+    ui_failure_streak = 0
+    rotation_error = ""
     for attempt in range(1, max(1, int(max_rotation_attempts or 1)) + 1):
-        new_proxy = await _request_snapboard_rotation(
+        rotation_result = await _request_snapboard_rotation(
             task_row_key,
             timeout_seconds=55,
             max_clicks=1,
@@ -1464,7 +1514,17 @@ async def _force_proxy_rotation_before_create(
             blocked_patterns=blocked_patterns or None,
             proxy_type=proxy_type,
             force=True,
+            return_details=True,
         ) or ""
+        rotation_error = ""
+        if isinstance(rotation_result, dict):
+            new_proxy = str(rotation_result.get("proxy") or "").strip()
+            rotation_error = str(rotation_result.get("error") or "").strip()
+        else:
+            # Keep compatibility with test doubles and older injected bridge
+            # implementations that return only the proxy string.
+            new_proxy = str(rotation_result or "").strip()
+
         normalized_new_proxy = str(new_proxy or "").strip()
         if (
             normalized_new_proxy
@@ -1479,6 +1539,33 @@ async def _force_proxy_rotation_before_create(
             )
             return True, normalized_new_proxy
 
+        if _is_proxy_rotation_ui_unavailable(rotation_error):
+            ui_failure_streak += 1
+        elif not normalized_new_proxy or normalized_new_proxy == old_proxy:
+            # A completed request that still produces no different proxy is
+            # the same no-progress condition as a missing rotate button. Do
+            # not keep re-running the 300-attempt legacy loop for it.
+            ui_failure_streak += 1
+        else:
+            ui_failure_streak = 0
+
+        if ui_failure_streak >= PROXY_ROTATION_UI_FAILURE_LIMIT:
+            unavailable_error = (
+                rotation_error
+                or "SnapBoard rotate control is unavailable for this row."
+            )
+            store.update_task_state(
+                task_id,
+                status="PENDING",
+                last_step=PROXY_ROTATION_UNAVAILABLE_STEP,
+                error=unavailable_error,
+            )
+            logger.error(
+                f"Task {task_id}: stopping forced proxy rotation after "
+                f"{ui_failure_streak} consecutive SnapBoard UI failures: {unavailable_error}"
+            )
+            return False, old_proxy
+
         logger.warning(
             f"Task {task_id}: forced proxy rotation before replacement account attempt "
             f"{attempt}/{max_rotation_attempts} did not produce a usable different proxy."
@@ -1490,7 +1577,7 @@ async def _force_proxy_rotation_before_create(
         task_id,
         status="PENDING",
         last_step=WAITING_FOR_FORCED_PROXY_ROTATION_STEP,
-        error="",
+        error=rotation_error,
     )
     return False, old_proxy
 
@@ -1866,13 +1953,21 @@ async def process_task(task, store, adspower, pipeline_release_callback=None):
         # Extension turn-off during account creation is now opt-in and OFF by
         # default (users asked to stop disabling extensions while creating the
         # account). The browser open + context attach still happen either way.
-        disable_extensions_enabled = bool(config.get("disable_extensions_enabled", False))
+        disable_extensions_enabled = str(
+            config.get("disable_extensions_enabled", False)
+        ).strip().lower() in {"true", "1", "on"}
+
+        def report_browser_prep_stage(stage):
+            nonlocal last_step
+            last_step = str(stage or "").strip() or last_step
+            store.update_task_state(task_id, last_step=last_step)
 
         # keep_playwright=True — we own the playwright instance and use it for signup too
         cleanup_result = await disable_profile_extensions(
             adspower, created.get("profile_id"), logger,
             keep_open=True, keep_playwright=True, open_signup=False,
             disable_extensions=disable_extensions_enabled,
+            stage_callback=report_browser_prep_stage,
         )
 
         playwright_instance = cleanup_result.get("playwright_instance")
@@ -2050,6 +2145,12 @@ async def process_task(task, store, adspower, pipeline_release_callback=None):
                 )
                 if retry_username:
                     username = retry_username
+                    task["username"] = retry_username
+                    updated_rows = store.update_task_username(task_row_key, retry_username)
+                    logger.info(
+                        f"Task {task_id}: saved Full Auto username retry "
+                        f"{retry_username!r} to Nyxify DB (rows={updated_rows})."
+                    )
                 return retry_username
 
             async def _rename_final_profile_if_pending(reason: str = ""):
@@ -2085,12 +2186,19 @@ async def process_task(task, store, adspower, pipeline_release_callback=None):
                     task_id,
                     adspower_name=final_adspower_name,
                 )
-                if pipeline_release_callback is not None and continuous_mode_enabled:
+                if (
+                    pipeline_release_callback is not None
+                    and continuous_mode_enabled
+                    and parallel_continuous_pipeline_enabled
+                ):
                     # In the rename-gated continuous pipeline, this is the
                     # handoff point for the next account.  The current task
                     # may still be finishing SnapBoard/Nyx bookkeeping, but
                     # its AdsPower profile is already safely identified and
-                    # renamed.
+                    # renamed. When parallel mode is disabled, keep the slot
+                    # occupied until enqueue_profile_for_nyx succeeds and the
+                    # process_task finishes; otherwise the next account can
+                    # start before Nyx has registered this handoff.
                     pipeline_release_callback(task_id)
                 suffix = f" {reason}" if reason else ""
                 logger.info(
@@ -2334,6 +2442,10 @@ async def process_task(task, store, adspower, pipeline_release_callback=None):
             )
     except Exception as exc:
         error_message = str(exc) or f"{type(exc).__name__}: {exc!r}"
+        exception_stage = str(getattr(exc, "nyx_stage", "") or "").strip()
+        if exception_stage:
+            last_step = exception_stage
+            store.update_task_state(task_id, last_step=last_step)
         failure_last_step = _classify_failure_last_step(created, last_step, error_message)
         # Proxy-ranking telemetry (best-effort): attribute account bans and
         # creation failures to the proxy's subnet, skipping host-side infra

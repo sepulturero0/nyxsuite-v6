@@ -112,7 +112,7 @@ if [[ -f "$SETUP_README" ]]; then
 fi
 
 ROOT_FILES=(
-  bridge_app.py main.py nyxify_runner.py requirements.txt
+  bridge_app.py main.py nyxify_runner.py CHANGELOG.md requirements.txt
   run_nyx_suite.bat run_nyx_suite.sh run_nyx_suite.command
   portable_launch_nyx.ps1 portable_launch_nyx.sh
   .env.example icons8-origami-50.ico icons8-origami-50.png

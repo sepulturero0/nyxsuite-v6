@@ -140,7 +140,16 @@ def _updated_str(updates, current, key, *, allow_blank=True, blank_default=None)
 def _safe_bool(value, default):
     if value is None:
         return default
-    return bool(value)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
+    normalized = str(value).strip().lower()
+    if normalized in {"false", "0", "off"}:
+        return False
+    if normalized in {"true", "1", "on"}:
+        return True
+    return default
 
 
 def _safe_verification_priority(value, default="auto"):

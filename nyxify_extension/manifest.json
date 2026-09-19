@@ -12,7 +12,7 @@
     "nativeMessaging"
   ],
   "host_permissions": [
-    "https://snapboard.onrender.com/*",
+    "https://snapboard-production.up.railway.app/*",
     "https://www.snapchat.com/*",
     "http://127.0.0.1/*",
     "http://localhost/*"
@@ -29,7 +29,7 @@
   "content_scripts": [
     {
       "matches": [
-        "https://snapboard.onrender.com/*"
+        "https://snapboard-production.up.railway.app/*"
       ],
       "js": [
         "content.js"

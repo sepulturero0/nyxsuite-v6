@@ -61,6 +61,39 @@ async def unexpected_rotation(*_args, **_kwargs):
 
 
 class NyxifyCleanupTests(unittest.TestCase):
+    def test_adspower_gui_profile_open_errors_keep_distinct_stages(self):
+        cases = {
+            "macOS Accessibility permission is required for AdsPower no-API GUI automation.":
+                "adspower_accessibility_permission_missing",
+            "AdsPower Global is running, but no accessible AdsPower window was found.":
+                "adspower_window_unavailable",
+            "profile does not exist: k1missing": "adspower_profile_not_visible",
+            "AdsPower Open click failed for profile k1abc: AXPress failed":
+                "adspower_open_click_failed",
+            "Opened profile k1abc in the GUI but could not resolve its CDP endpoint.":
+                "adspower_cdp_timeout",
+        }
+        for error, expected in cases.items():
+            with self.subTest(error=error):
+                self.assertEqual(
+                    nyxify_runner._classify_failure_last_step(
+                        {"profile_id": "k1abc"}, "opening_profile", error
+                    ),
+                    expected,
+                )
+
+    def test_profile_open_and_attach_failures_are_cleanup_eligible(self):
+        self.assertTrue(
+            nyxify_runner._should_cleanup_failed_created_profile(
+                "profile_open_failed", ""
+            )
+        )
+        self.assertTrue(
+            nyxify_runner._should_cleanup_failed_created_profile(
+                "browser_attach_failed", ""
+            )
+        )
+
     def test_accessibility_permission_failure_does_not_requeue_forever(self):
         error = (
             "macOS Accessibility permission is required for AdsPower no-API GUI "
@@ -297,6 +330,46 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(calls[0].get("force"), True)
         self.assertEqual(calls[0].get("proxy_type"), "http")
 
+    def test_forced_proxy_rotation_stops_when_snapboard_rotate_control_is_missing(self):
+        store = FakeStore()
+        calls = []
+
+        async def rotation_button_missing(*_args, **_kwargs):
+            calls.append(True)
+            return {
+                "proxy": "",
+                "error": "No rotate button found for row.",
+            }
+
+        with mock.patch.object(
+            nyxify_runner,
+            "_request_snapboard_rotation",
+            side_effect=rotation_button_missing,
+        ), mock.patch.object(
+            nyxify_runner.asyncio,
+            "sleep",
+            new=mock.AsyncMock(),
+        ), mock.patch.object(nyxify_runner, "load_nyxify_config", return_value={}):
+            ok, proxy = asyncio.run(
+                nyxify_runner._force_proxy_rotation_before_create(
+                    task_id=2113,
+                    task_row_key="row-force-ui",
+                    store=store,
+                    proxy_value="1.2.3.4:1:u:p",
+                    blocked_proxies=[],
+                )
+            )
+
+        self.assertFalse(ok)
+        self.assertEqual(proxy, "1.2.3.4:1:u:p")
+        self.assertEqual(len(calls), nyxify_runner.PROXY_ROTATION_UI_FAILURE_LIMIT)
+        self.assertEqual(store.state["status"], "PENDING")
+        self.assertEqual(
+            store.state["last_step"],
+            nyxify_runner.PROXY_ROTATION_UNAVAILABLE_STEP,
+        )
+        self.assertIn("No rotate button found", store.state["error"])
+
     def test_retry_pending_task_forces_proxy_rotation_before_create(self):
         store = FakeStore()
         adspower = FakeAdsPower()
@@ -381,6 +454,45 @@ class NyxifyCleanupTests(unittest.TestCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], task_id)
         self.assertEqual(rows[0]["adspower_profile_id"], "k1old")
+
+    def test_proxy_rotation_unavailable_row_waits_until_proxy_changes(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            store = NyxifyTaskStore(db_path=Path(temp_dir) / "nyxify_tasks.db")
+            task_id, _status = store.upsert_task(
+                row_key="row-proxy-ui",
+                model="Snapchat",
+                ip_address="1.2.3.4",
+                proxy_address="1.2.3.4:1:u:p",
+                username="realuser",
+            )
+            store.update_task_state(
+                task_id,
+                status="PENDING",
+                last_step=nyxify_runner.PROXY_ROTATION_UNAVAILABLE_STEP,
+                error="No rotate button found for row.",
+            )
+
+            self.assertEqual(store.claim_pending_tasks(limit=5), [])
+
+            store.upsert_task(
+                row_key="row-proxy-ui",
+                model="Snapchat",
+                ip_address="1.2.3.4",
+                proxy_address="1.2.3.4:1:u:p",
+                username="realuser",
+            )
+            self.assertEqual(store.claim_pending_tasks(limit=5), [])
+
+            store.upsert_task(
+                row_key="row-proxy-ui",
+                model="Snapchat",
+                ip_address="5.6.7.8",
+                proxy_address="5.6.7.8:1:u:p",
+                username="realuser",
+            )
+            claimable = store.claim_pending_tasks(limit=5)
+
+        self.assertEqual([row["row_key"] for row in claimable], ["row-proxy-ui"])
 
 
 if __name__ == "__main__":

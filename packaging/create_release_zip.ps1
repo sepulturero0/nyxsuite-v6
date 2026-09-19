@@ -137,6 +137,7 @@ $rootFiles = @(
     "bridge_app.py",
     "main.py",
     "nyxify_runner.py",
+    "CHANGELOG.md",
     "requirements.txt",
     "run_nyx_suite.bat",
     "run_nyx_suite.sh",

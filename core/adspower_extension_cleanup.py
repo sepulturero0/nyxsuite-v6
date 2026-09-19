@@ -1180,30 +1180,61 @@ async def disable_profile_extensions(
     keep_playwright=False,
     open_signup=True,
     disable_extensions=True,
+    stage_callback=None,
 ):
+    def report_stage(stage):
+        if callable(stage_callback):
+            stage_callback(stage)
+
+    def mark_stage(error, stage):
+        try:
+            setattr(error, "nyx_stage", stage)
+        except Exception:
+            pass
+        return error
+
     normalized_profile_id = str(profile_id or "").strip()
     if not normalized_profile_id:
         raise ValueError("AdsPower profile id is required.")
 
-    ws_endpoint = await asyncio.to_thread(adspower.open_profile, normalized_profile_id)
-    playwright = await async_playwright().start()
+    report_stage("opening_profile")
+    try:
+        ws_endpoint = await asyncio.to_thread(adspower.open_profile, normalized_profile_id)
+    except Exception as exc:
+        try:
+            from core.adspower import classify_adspower_gui_error
+            stage = classify_adspower_gui_error(exc, default="profile_open_failed")
+        except Exception:
+            stage = "profile_open_failed"
+        raise mark_stage(exc, stage)
+
+    playwright = None
     browser = None
 
     try:
-        browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
+        try:
+            playwright = await async_playwright().start()
+            browser = await playwright.chromium.connect_over_cdp(ws_endpoint)
 
-        context = None
-        for _ in range(20):
-            if browser.contexts:
-                context = browser.contexts[0]
-                break
-            await asyncio.sleep(0.25)
+            context = None
+            for _ in range(20):
+                if browser.contexts:
+                    context = browser.contexts[0]
+                    break
+                await asyncio.sleep(0.25)
 
-        if context is None:
-            raise RuntimeError("Connected to AdsPower browser, but no context became available.")
+            if context is None:
+                raise RuntimeError("Connected to AdsPower browser, but no context became available.")
+        except Exception as exc:
+            raise mark_stage(exc, "browser_attach_failed")
 
-        await maximize_browser_window(browser, logger=logger)
-        await apply_dark_mode_preferences(context, logger=logger)
+        report_stage("browser_context_ready")
+
+        try:
+            await maximize_browser_window(browser, logger=logger)
+            await apply_dark_mode_preferences(context, logger=logger)
+        except Exception as exc:
+            raise mark_stage(exc, "browser_attach_failed")
 
         # The extension turn-off step is now opt-in. When it is skipped we still
         # do all the browser/context plumbing (open profile, attach CDP, dark
@@ -1211,6 +1242,7 @@ async def disable_profile_extensions(
         # we just leave the profile's extensions exactly as AdsPower configured
         # them instead of visiting chrome://extensions/ to toggle them off.
         if not disable_extensions:
+            report_stage("extension_disable_skipped")
             if logger:
                 logger.info(
                     f"Skipping AdsPower extension turn-off for {normalized_profile_id} "
@@ -1241,9 +1273,12 @@ async def disable_profile_extensions(
                 playwright = None
             return payload
 
+        extension_phase = False
+        report_stage("disabling_extensions")
         page = await context.new_page()
         await apply_dark_mode_to_page(page, logger=logger)
         await page.goto("chrome://extensions/", wait_until="domcontentloaded")
+        extension_phase = True
         await page.wait_for_timeout(1500)
 
         last_result = None
@@ -1455,6 +1490,7 @@ async def disable_profile_extensions(
                 if keep_playwright:
                     # Caller owns playwright lifetime — do NOT stop it in finally
                     playwright = None
+                report_stage("extensions_disabled")
                 return payload
 
             await page.wait_for_timeout(800)
@@ -1496,7 +1532,15 @@ async def disable_profile_extensions(
         }
         if keep_playwright:
             playwright = None
+        report_stage("extensions_disabled")
         return payload
+    except Exception as exc:
+        if "extension_phase" in locals():
+            raise mark_stage(
+                exc,
+                "extensions_disable_failed" if extension_phase else "browser_attach_failed",
+            )
+        raise
     finally:
         if browser and not keep_open:
             try:

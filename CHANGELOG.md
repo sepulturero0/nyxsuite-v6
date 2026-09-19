@@ -16,6 +16,9 @@
 - Added focused regression coverage for replacement-value verification state,
   SnapBoard handler invocation, no-countdown reclick exhaustion, and stuck
   loading-shell recovery.
+- The dashboard now shows a version-aware What's New dialog once after a new
+  update, with the release version and bundled change details. It uses the
+  NyxSuite theme, animated entry, a close button, and backdrop-click dismiss.
 
 ## 6.7.14 - Outfit scan completion
 

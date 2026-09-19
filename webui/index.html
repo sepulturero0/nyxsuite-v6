@@ -38,6 +38,10 @@
           <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8.5 14a4.5 4.5 0 0 0 7 0"/><line x1="9" y1="9.5" x2="9.01" y2="9.5"/><line x1="15" y1="9.5" x2="15.01" y2="9.5"/></svg>
           Nyxmoji Studio
         </button>
+        <button class="tab" data-tab="dailyreport" type="button" title="Create and edit a daily report">
+          <svg class="tab-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="8" y1="13" x2="16" y2="13"/><line x1="8" y1="17" x2="16" y2="17"/><line x1="8" y1="9" x2="10" y2="9"/></svg>
+          Daily Report
+        </button>
         <div class="nav-section">Tools</div>
         <div class="action-tools" id="actions-top-suite">
           <button id="proxyrank-toggle-btn" class="tab" data-tab="proxyrank" type="button" title="Proxy subnet scores and bans">
@@ -157,6 +161,7 @@
               <div class="proxyrank-head-actions">
                 <button id="proxyrank-ban-red" class="btn bad" type="button" disabled>Ban all red proxies</button>
                 <button id="proxyrank-refresh" class="btn" type="button">Refresh</button>
+                <button id="proxyrank-reset" class="btn bad" type="button">Reset ranking</button>
               </div>
             </div>
             <p class="hint">Ranked from how often each subnet needed a retry, failed a creation, or hit a ban. Updates every time a proxy is used.</p>
@@ -202,6 +207,47 @@
         <section class="panel hidden" id="panel-nyxifyconfig">
           <div id="nyxify-advanced" class="advanced-panel">
             <div id="nyxify-advanced-body"></div>
+          </div>
+        </section>
+
+        <section class="panel hidden" id="panel-dailyreport">
+          <div class="card daily-report-card">
+            <div class="daily-report-head">
+              <div>
+                <h2>Daily Report</h2>
+                <p class="hint">Get the latest SnapBoard data, generate the report, then edit the text before copying it.</p>
+              </div>
+              <span id="daily-report-status" class="detail" role="status" aria-live="polite"></span>
+            </div>
+            <div class="daily-report-fields">
+              <label class="setting-field">
+                <span class="label">Start AdsPower ID</span>
+                <input id="daily-report-start-id" class="input" type="text" autocomplete="off" placeholder="k1aygxxc">
+              </label>
+              <label class="setting-field">
+                <span class="label">Top AdsPower ID</span>
+                <input id="daily-report-top-id" class="input" type="text" autocomplete="off" placeholder="Auto from SnapBoard">
+              </label>
+              <label class="setting-field">
+                <span class="label">Accounts / hour</span>
+                <input id="daily-report-accounts-hour" class="input" type="number" min="0.1" step="0.1" value="7">
+              </label>
+              <label class="setting-field">
+                <span class="label">Model separator</span>
+                <select id="daily-report-separator" class="input">
+                  <option value="-">Model - count</option>
+                  <option value=":">Model: count</option>
+                </select>
+              </label>
+            </div>
+            <label class="label daily-report-label" for="daily-report-text">Customizable report text</label>
+            <textarea id="daily-report-text" class="input daily-report-textarea" rows="18" spellcheck="true" placeholder="Write your daily report here..."></textarea>
+            <div class="toolbar compact-toolbar daily-report-actions">
+              <button id="daily-report-get-data" class="btn primary" type="button">Get Data</button>
+              <button id="daily-report-template" class="btn" type="button">Save Template</button>
+              <button id="daily-report-copy" class="btn" type="button">Copy Report</button>
+              <button id="daily-report-clear" class="btn bad" type="button">Clear</button>
+            </div>
           </div>
         </section>
 
@@ -306,6 +352,7 @@
               </div>
               <div class="btn-row">
                 <button id="update-check-btn" class="btn" type="button">Check for Update</button>
+                <button id="whats-new-settings-btn" class="btn btn-ghost" type="button">View Release Notes</button>
                 <button id="update-apply-btn" class="btn primary" type="button" style="display:none">Apply Update</button>
               </div>
               <div class="setting-row" id="update-rollback-row" style="display:none">
@@ -391,6 +438,32 @@
         </section>
       </main>
     </div>
+  </div>
+
+  <div id="whats-new-modal" class="whats-new-modal" hidden aria-hidden="true">
+    <div class="whats-new-backdrop" data-whats-new-close="backdrop"></div>
+    <section class="whats-new-dialog" role="dialog" aria-modal="true" aria-labelledby="whats-new-title" aria-describedby="whats-new-summary">
+      <button id="whats-new-close" class="whats-new-close" type="button" aria-label="Close What's New" title="Close">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div class="whats-new-orb" aria-hidden="true">
+        <svg viewBox="0 0 24 24"><path d="M12 3l1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3z"/><path d="M19 16l.7 2.3L22 19l-2.3.7L19 22l-.7-2.3L16 19l2.3-.7L19 16z"/></svg>
+      </div>
+      <div class="whats-new-eyebrow">WHAT'S NEW</div>
+      <h2 id="whats-new-title">Nyx Suite update</h2>
+      <p id="whats-new-summary" class="whats-new-summary">The latest improvements are ready.</p>
+      <div class="whats-new-meta">
+        <span id="whats-new-version" class="whats-new-version">v—</span>
+        <span class="whats-new-meta-label">installed release</span>
+      </div>
+      <div class="whats-new-divider"></div>
+      <div class="whats-new-section-label">Release highlights</div>
+      <ul id="whats-new-details" class="whats-new-details"></ul>
+      <div class="whats-new-footer">
+        <span>You're seeing this once for this version.</span>
+        <button id="whats-new-done" class="btn primary" type="button">Got it</button>
+      </div>
+    </section>
   </div>
 
   <div id="toast" class="toast"></div>

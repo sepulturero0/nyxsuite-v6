@@ -1,10 +1,10 @@
 # Nyxify Chrome Extension v6
 
-Watches `https://snapboard.onrender.com/`, detects new top rows, and creates AdsPower profiles through the Nyxify Runner.
+Watches `https://snapboard-production.up.railway.app/`, detects new top rows, and creates AdsPower profiles through the Nyxify Runner.
 
 ## What it does
 
-- Runs on `snapboard.onrender.com` and Snapchat profile pages.
+- Runs on `snapboard-production.up.railway.app` and Snapchat profile pages.
 - Detects SnapBoard rows and pushes them into the local Nyxify app over `http://127.0.0.1:8866`.
 - Reads the live local queue back so the popup shows current runner status.
 - "Open Web App" button opens the Nyx Suite dashboard (`:8870`).

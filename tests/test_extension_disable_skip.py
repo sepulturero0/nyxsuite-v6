@@ -157,6 +157,7 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
         context = _FakeContext()
         browser = _FakeBrowser(context)
         playwright = _FakePlaywright(browser)
+        stages = []
 
         adspower = mock.Mock()
         adspower.open_profile.return_value = "ws://fake"
@@ -177,11 +178,12 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
                 adspower, "k1abc", logger=None,
                 keep_open=True, keep_playwright=True, open_signup=True,
                 disable_extensions=disable_extensions,
+                stage_callback=stages.append,
             )
-        return result, context, open_signup_calls
+        return result, context, open_signup_calls, stages
 
     async def test_skip_does_not_visit_extensions_page(self):
-        result, context, open_signup_calls = await self._run(disable_extensions=False)
+        result, context, open_signup_calls, stages = await self._run(disable_extensions=False)
 
         # No page navigated to chrome://extensions/.
         visited = [url for page in context.new_pages for url in page.goto_calls]
@@ -193,12 +195,19 @@ class ExtensionDisableSkipTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(open_signup_calls, ["k1abc"])
         self.assertIs(result["context"], context)
         self.assertIsNotNone(result["playwright_instance"])
+        self.assertEqual(
+            stages,
+            ["opening_profile", "browser_context_ready", "extension_disable_skipped"],
+        )
+        self.assertNotIn("disabling_extensions", stages)
 
     async def test_enabled_path_visits_extensions_page(self):
-        result, context, _calls = await self._run(disable_extensions=True)
+        result, context, _calls, stages = await self._run(disable_extensions=True)
 
         visited = [url for page in context.new_pages for url in page.goto_calls]
         self.assertIn("chrome://extensions/", visited)
+        self.assertEqual(stages[:3], ["opening_profile", "browser_context_ready", "disabling_extensions"])
+        self.assertIn("extensions_disabled", stages)
 
     async def test_blank_signup_shell_refreshes_during_initial_handoff(self):
         page = _BlankSignupPage()

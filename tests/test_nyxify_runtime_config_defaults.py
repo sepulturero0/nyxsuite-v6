@@ -1,6 +1,8 @@
 import tempfile
+import json
 from pathlib import Path
 from unittest import mock
+from unittest.mock import patch
 
 from core import nyxify_runtime_config as nrc
 
@@ -67,6 +69,28 @@ def test_disable_extensions_flag_round_trips_through_save():
             nrc.save_nyxify_config({"disable_extensions_enabled": False})
             reloaded = nrc.load_nyxify_config()
             assert reloaded["disable_extensions_enabled"] is False
+
+
+def test_boolean_strings_are_normalized_for_extension_toggle():
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        config_path = data_dir / "nyxify_config.json"
+
+        with mock.patch.object(nrc, "DATA_DIR", data_dir), \
+                mock.patch.object(nrc, "CONFIG_PATH", config_path):
+            for raw_value, expected in (
+                ("false", False),
+                ("0", False),
+                ("off", False),
+                ("true", True),
+                ("1", True),
+                ("on", True),
+            ):
+                config_path.write_text(
+                    json.dumps({"disable_extensions_enabled": raw_value}),
+                    encoding="utf-8",
+                )
+                assert nrc.load_nyxify_config()["disable_extensions_enabled"] is expected
 
 
 def test_keep_profile_open_after_signup_flag_round_trips_through_save():

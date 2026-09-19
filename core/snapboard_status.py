@@ -7,7 +7,7 @@ Bitmoji. This module:
   1. maps the AdsPower profile id to its SnapBoard row (via NyxifyTaskStore),
   2. marks that local Nyxify row BANNED so it is never re-signed-up, and
   3. asks the SnapBoard content script — through the Nyxify local API relay —
-     to flip the row's status cell to "Banned" on snapboard.onrender.com.
+     to flip the row's status cell to "Banned" on snapboard-production.up.railway.app.
 
 Everything here is best-effort: the SnapBoard tab may not be open, or the row
 may not exist locally (e.g. an account created outside Nyxify). Failures are

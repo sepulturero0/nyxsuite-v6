@@ -518,10 +518,6 @@ details[open] .chevron {
   margin-bottom: 8px;
 }
 
-#dailyUpdatePreview {
-  max-height: 170px;
-}
-
 .queue-action-row {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));

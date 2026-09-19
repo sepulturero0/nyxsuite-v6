@@ -1064,7 +1064,7 @@ class NyxifySnapboardBridgeTests(unittest.TestCase):
         self.assertIn('"/snapboard_refresh/result"', background)
         self.assertIn("await refreshSnapboardTab({ force: true })", background)
         self.assertIn("chrome.tabs.query", background)
-        self.assertIn("https://snapboard.onrender.com/*", background)
+        self.assertIn("https://snapboard-production.up.railway.app/*", background)
 
         self.assertIn("function startSnapboardRefreshPoll()", content)
         self.assertIn('"/snapboard_refresh/pending"', content)

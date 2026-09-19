@@ -1183,6 +1183,19 @@ class NyxifyLocalApiServer:
                     return
 
                 parsed_path = urlparse(self.path)
+                if parsed_path.path == "/daily_report/rows":
+                    rows, updated_at = outer.replace_banned_scan_store.rows()
+                    self._write_json(
+                        200,
+                        {
+                            "ok": True,
+                            "rows": rows,
+                            "count": len(rows),
+                            "updated_at": updated_at,
+                            "message": f"Loaded {len(rows)} SnapBoard row(s) for Daily Report.",
+                        },
+                    )
+                    return
                 if parsed_path.path == "/replace_banned/scan":
                     rows, updated_at = outer.replace_banned_scan_store.banned_rows()
                     self._write_json(
@@ -1991,6 +2004,25 @@ class NyxifyLocalApiServer:
                             updates["blocked_proxies"] = payload.get("banned_proxies")
                     config = save_nyxify_config(updates)
                     self._write_json(200, {"ok": True, "config": config, "message": "Nyxify config saved locally."})
+                    return
+
+                if self.path == "/proxy_ranking/reset":
+                    if outer.proxy_ranking_store is None:
+                        self._write_json(500, {"ok": False, "error": "Proxy ranking store is unavailable."})
+                        return
+                    try:
+                        outer.proxy_ranking_store.reset()
+                        config = save_nyxify_config({"blocked_proxies": []})
+                        self._write_json(
+                            200,
+                            {
+                                "ok": True,
+                                "config": config,
+                                "message": "Proxy ranking history and blocked proxy list were reset.",
+                            },
+                        )
+                    except Exception as exc:
+                        self._write_json(500, {"ok": False, "error": str(exc)})
                     return
 
                 if self.path == "/proxy_ranking/ban_many":

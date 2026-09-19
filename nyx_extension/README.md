@@ -1,10 +1,10 @@
 # Nyx Chrome Extension v6
 
-Watches `https://snapboard.onrender.com/`, detects `AdsPower ID` and `Model`, and syncs those rows directly into the local Nyx queue.
+Watches `https://snapboard-production.up.railway.app/`, detects `AdsPower ID` and `Model`, and syncs those rows directly into the local Nyx queue.
 
 ## What it does
 
-- Runs on `snapboard.onrender.com` and Snapchat profile pages used by the workflow.
+- Runs on `snapboard-production.up.railway.app` and Snapchat profile pages used by the workflow.
 - Detects SnapBoard rows and pushes them into the local Nyx app over `http://127.0.0.1:8865`.
 - Reads the live local queue back so the popup shows current runner status and queue rows.
 - "Open Web App" button opens the Nyx Suite dashboard (`:8870`).

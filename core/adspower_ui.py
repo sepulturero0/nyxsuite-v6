@@ -334,6 +334,10 @@ class AdsPowerProfileNotFoundError(AdsPowerUIError):
         super().__init__(message or f"profile does not exist: {profile_id}")
 
 
+class AdsPowerCdpTimeoutError(AdsPowerUIError):
+    """The GUI click completed but the profile's CDP endpoint never appeared."""
+
+
 @dataclass
 class AdsPowerUIConfig:
     # GUI pacing. The waits below are the dominant "it doesn't immediately act"
@@ -540,6 +544,15 @@ class AdsPowerUIController:
         self._a11y_depth = getattr(self, "_a11y_depth", 0)
         self._prev_fg = getattr(self, "_prev_fg", None)
         return self._win
+
+    def preflight_check(self):
+        """Check Accessibility and a usable AdsPower window without a click."""
+        if self._backend is not None:
+            checker = getattr(self._backend, "preflight_check", None)
+            if callable(checker):
+                return checker()
+        self._connect()
+        return True
 
     def _refresh_window(self) -> bool:
         backend = getattr(self, "_backend", None)
@@ -2329,9 +2342,25 @@ class AdsPowerUIController:
         # Already open? Use the cheap direct cache-dir match (deep_scan=False) —
         # the deep fallback HTTP-probes every open browser and is pathologically
         # slow when many profiles are open and this one isn't.
-        endpoint = find_open_profile_cdp_endpoint(profile_id, deep_scan=False)
+        browser_started = False
+
+        def _on_browser_started(port):
+            nonlocal browser_started
+            if browser_started:
+                return
+            browser_started = True
+            logger.info(
+                f"AdsPower browser process started for profile {profile_id}; "
+                f"CDP port={port}."
+            )
+
+        endpoint = find_open_profile_cdp_endpoint(
+            profile_id,
+            deep_scan=False,
+            on_browser_started=_on_browser_started,
+        )
         if endpoint:
-            logger.info(f"Profile {profile_id} already open: {endpoint}")
+            logger.info(f"CDP endpoint resolved for already-open profile {profile_id}: {endpoint}")
             return endpoint
 
         # Ensure the profile row is visible (scan current view first, search if
@@ -2339,8 +2368,18 @@ class AdsPowerUIController:
         with _GUI_LOCK:
             self._a11y_enter()
             try:
-                self._ensure_row_visible(profile_id)
-                self._click_row_action(profile_id, "Open", template_name="open_profile_by_id")
+                visible = self._ensure_row_visible(profile_id)
+                if visible is False:
+                    raise AdsPowerProfileNotFoundError(profile_id)
+                try:
+                    self._click_row_action(profile_id, "Open", template_name="open_profile_by_id")
+                except AdsPowerProfileNotFoundError:
+                    raise
+                except Exception as exc:
+                    raise AdsPowerUIError(
+                        f"AdsPower Open click failed for profile {profile_id}: {exc}"
+                    ) from exc
+                logger.info(f"AdsPower Open clicked for profile {profile_id}.")
             finally:
                 self._a11y_exit()
 
@@ -2348,13 +2387,17 @@ class AdsPowerUIController:
         attempts = 0
         while time.time() < deadline:
             deep_scan = attempts >= 10 and (attempts % 5 == 0)
-            endpoint = find_open_profile_cdp_endpoint(profile_id, deep_scan=deep_scan)
+            endpoint = find_open_profile_cdp_endpoint(
+                profile_id,
+                deep_scan=deep_scan,
+                on_browser_started=_on_browser_started,
+            )
             if endpoint:
-                logger.info(f"Profile {profile_id} opened via GUI; CDP: {endpoint}")
+                logger.info(f"CDP endpoint resolved for profile {profile_id}: {endpoint}")
                 return endpoint
             attempts += 1
             time.sleep(0.8)
-        raise AdsPowerUIError(
+        raise AdsPowerCdpTimeoutError(
             f"Opened profile {profile_id} in the GUI but could not resolve its CDP "
             f"endpoint. Is the browser still launching?")
 

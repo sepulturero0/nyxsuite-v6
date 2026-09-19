@@ -27,3 +27,26 @@ def test_updater_refreshes_native_host_registration_after_update():
     assert "install_host" in updater
     assert "register()" in updater
     assert "native messaging" in updater.lower()
+
+
+def test_current_release_notes_reads_matching_changelog_entry(tmp_path, monkeypatch):
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n"
+        "## 2.0.0 - Dashboard polish\n\n"
+        "- Added the What's New dialog.\n"
+        "- Added version-aware first-open behavior.\n\n"
+        "## 1.9.0 - Older release\n\n"
+        "- Older item.\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(release_updater, "_install_root", lambda: tmp_path)
+
+    result = release_updater.get_current_release_notes("2.0.0")
+
+    assert result["version"] == "2.0.0"
+    assert result["title"] == "Dashboard polish"
+    assert result["bullets"] == [
+        "Added the What's New dialog.",
+        "Added version-aware first-open behavior.",
+    ]
+    assert result["source"] == "CHANGELOG.md"

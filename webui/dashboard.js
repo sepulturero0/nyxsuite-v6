@@ -96,10 +96,15 @@ const state = {
   bridge: { settings: { transparent_tray_icon: false, nyxify_failure_alarm_enabled: false } },
   version: "",
   update: { checked: false, available: false, current: "", latest: "", latest_name: "", notes: "", backups: [], availableVersions: [] },
+  whatsNew: { loadedVersion: "" },
 };
 let active = "nyxify";
 let developerSession = "";
 const selected = { suite: null, nyx: null, nyxify: null };
+const WHATS_NEW_STORAGE_PREFIX = "nyxsuite-whats-new-seen:";
+const whatsNewSeenMemory = new Set();
+let whatsNewPreviousFocus = null;
+let whatsNewPreviousOverflow = "";
 
 const el = id => document.getElementById(id);
 const keyOf = (p, row) => String(row[PRODUCTS[p].key] || row.profile_id || row.row_key || "");
@@ -148,7 +153,10 @@ function onMessage(data) {
   let ev; try { ev = JSON.parse(data); } catch (e) { return; }
   if (ev.type === "snapshot") {
     const st = ev.status || {};
-    state.version = (st.bridge || {}).version || "";
+    const bridgeVersion = (st.bridge || {}).version || "";
+    const versionChanged = bridgeVersion && bridgeVersion !== state.version;
+    state.version = bridgeVersion;
+    if (versionChanged) requestWhatsNewNotice(bridgeVersion);
     state.bridge.settings = (st.bridge || {}).settings || state.bridge.settings;
     const prods = st.products || {};
     Object.keys(PRODUCTS).forEach(p => { if (prods[p]) applyProductSnapshot(p, prods[p]); });
@@ -305,6 +313,114 @@ async function callBridge(action, payload) {
   } catch (e) { return { ok: false, error: String(e) }; }
 }
 
+function normalizeReleaseVersion(value) {
+  return String(value || "").trim().replace(/^v/i, "");
+}
+
+function whatsNewStorageKey(version) {
+  return WHATS_NEW_STORAGE_PREFIX + normalizeReleaseVersion(version);
+}
+
+function hasSeenWhatsNew(version) {
+  const key = whatsNewStorageKey(version);
+  if (whatsNewSeenMemory.has(key)) return true;
+  try { return localStorage.getItem(key) === "1"; } catch (_) { return false; }
+}
+
+function markWhatsNewSeen(version) {
+  const key = whatsNewStorageKey(version);
+  whatsNewSeenMemory.add(key);
+  try { localStorage.setItem(key, "1"); } catch (_) {}
+}
+
+function closeWhatsNew() {
+  const modal = el("whats-new-modal");
+  if (!modal || modal.hidden) return;
+  modal.hidden = true;
+  modal.setAttribute("aria-hidden", "true");
+  document.body.classList.remove("whats-new-open");
+  document.body.style.overflow = whatsNewPreviousOverflow;
+  if (whatsNewPreviousFocus && typeof whatsNewPreviousFocus.focus === "function") {
+    whatsNewPreviousFocus.focus();
+  }
+  whatsNewPreviousFocus = null;
+}
+
+function showWhatsNew(notice, fallbackVersion, force = false) {
+  const version = normalizeReleaseVersion(notice && notice.version) || normalizeReleaseVersion(fallbackVersion);
+  if (!version || (!force && hasSeenWhatsNew(version))) return;
+
+  const modal = el("whats-new-modal");
+  const details = el("whats-new-details");
+  if (!modal || !details) return;
+
+  const title = String((notice && notice.title) || "Nyx Suite update").trim();
+  const notes = String((notice && notice.notes) || "").trim();
+  const bullets = Array.isArray(notice && notice.bullets)
+    ? notice.bullets.map(item => String(item || "").trim()).filter(Boolean)
+    : [];
+  const items = bullets.length ? bullets : (notes ? [notes] : ["This release contains the latest Nyx Suite improvements."]);
+
+  el("whats-new-title").textContent = title;
+  el("whats-new-summary").textContent = `Version ${version} is now installed with the latest improvements.`;
+  el("whats-new-version").textContent = "v" + version;
+  details.innerHTML = "";
+  items.forEach(item => {
+    const li = document.createElement("li");
+    li.textContent = item;
+    details.appendChild(li);
+  });
+
+  markWhatsNewSeen(version);
+  whatsNewPreviousFocus = document.activeElement;
+  whatsNewPreviousOverflow = document.body.style.overflow || "";
+  modal.hidden = false;
+  modal.setAttribute("aria-hidden", "false");
+  document.body.classList.add("whats-new-open");
+  document.body.style.overflow = "hidden";
+  requestAnimationFrame(() => el("whats-new-close")?.focus());
+}
+
+function requestWhatsNewNotice(version) {
+  const normalizedVersion = normalizeReleaseVersion(version);
+  if (!normalizedVersion || state.whatsNew.loadedVersion === normalizedVersion) return;
+  state.whatsNew.loadedVersion = normalizedVersion;
+  callBridge("whats_new").then(notice => {
+    if (!notice || notice.ok === false) return;
+    const noticeVersion = normalizeReleaseVersion(notice.version) || normalizedVersion;
+    if (noticeVersion !== normalizedVersion) return;
+    showWhatsNew(notice, normalizedVersion);
+  }).catch(() => {});
+}
+
+async function openWhatsNewFromSettings() {
+  const button = el("whats-new-settings-btn");
+  const version = normalizeReleaseVersion(state.version || state.update.current);
+  if (!version) {
+    toast("Release notes are not available until the bridge version is loaded.", false);
+    return;
+  }
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+    button.textContent = "Loading…";
+  }
+  try {
+    const notice = await callBridge("whats_new");
+    if (!notice || notice.ok === false) {
+      toast((notice && (notice.message || notice.error)) || "Release notes unavailable.", false);
+      return;
+    }
+    showWhatsNew(notice, version, true);
+  } finally {
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+      button.textContent = "View Release Notes";
+    }
+  }
+}
+
 function render() {
   el("version").textContent = state.version ? ("v" + state.version) : "v…";
   // The runner Start/Stop buttons live in the global sidebar dock, so keep them
@@ -335,6 +451,13 @@ function sortRows(rows, field, dir) {
 // When nothing that affects the table has changed we skip the rebuild entirely,
 // so steady-state ticks become free.
 const panelRenderSig = {};
+const DAILY_REPORT_STORAGE_KEY = "nyxSuiteDailyReportDraft";
+const DAILY_REPORT_SETTINGS_KEY = "nyxSuiteDailyReportSettings";
+const DAILY_REPORT_TEMPLATE_STORAGE_KEY = "nyxSuiteDailyReportTemplate";
+const DAILY_REPORT_TEMPLATE = `Daily Report
+Total working hours: 0.0 hrs
+
+✅ Snapchat created accounts: 0`;
 // Separate memo for the status card + tiles so a row-only change (or a bot-only
 // change) does not rebuild the table, and vice-versa. This is what makes
 // steady-state SSE ticks free even though the runners update every ~0.5s.
@@ -891,14 +1014,314 @@ function setActive(p) {
   if (p === "fullauto") renderFullAuto();
   if (p === "nyxconfig") refreshConfig("nyx").then(renderNyxAdvanced);
   if (p === "nyxifyconfig") refreshConfig("nyxify").then(renderNyxifyAdvanced);
+  if (p === "dailyreport") loadDailyReportDraft();
   if (p === "developer") renderDeveloperSettings();
   if (p === "suite") {
     render();
   }
 }
 
+let dailyReportSaveTimer = null;
+let latestDailyReportRows = [];
+
+function dailyReportTextElement() {
+  return el("daily-report-text");
+}
+
+function dailyReportSettings() {
+  let saved = {};
+  try { saved = JSON.parse(localStorage.getItem(DAILY_REPORT_SETTINGS_KEY) || "{}"); } catch (_) {}
+  return {
+    startId: String(saved.startId || ""),
+    topId: String(saved.topId || ""),
+    accountsPerHour: Number(saved.accountsPerHour) > 0 ? Number(saved.accountsPerHour) : 7,
+    separator: saved.separator === ":" ? ":" : "-",
+  };
+}
+
+function saveDailyReportSettings() {
+  const payload = {
+    startId: String(el("daily-report-start-id")?.value || "").trim(),
+    topId: String(el("daily-report-top-id")?.value || "").trim(),
+    accountsPerHour: Math.max(0.1, Number(el("daily-report-accounts-hour")?.value) || 7),
+    separator: el("daily-report-separator")?.value === ":" ? ":" : "-",
+  };
+  try { localStorage.setItem(DAILY_REPORT_SETTINGS_KEY, JSON.stringify(payload)); } catch (_) {}
+}
+
+function setDailyReportStatus(message) {
+  const status = el("daily-report-status");
+  if (status) status.textContent = message || "";
+}
+
+function loadDailyReportDraft() {
+  const textarea = dailyReportTextElement();
+  if (!textarea || document.activeElement === textarea) return;
+  const settings = dailyReportSettings();
+  const startInput = el("daily-report-start-id");
+  const topInput = el("daily-report-top-id");
+  const hoursInput = el("daily-report-accounts-hour");
+  const separatorInput = el("daily-report-separator");
+  if (startInput && document.activeElement !== startInput) startInput.value = settings.startId;
+  if (topInput && document.activeElement !== topInput) topInput.value = settings.topId;
+  if (hoursInput && document.activeElement !== hoursInput) hoursInput.value = String(settings.accountsPerHour);
+  if (separatorInput && document.activeElement !== separatorInput) separatorInput.value = settings.separator;
+  let saved = "";
+  try { saved = String(localStorage.getItem(DAILY_REPORT_STORAGE_KEY) || ""); } catch (_) {}
+  textarea.value = saved || DAILY_REPORT_TEMPLATE;
+  setDailyReportStatus(saved ? "Saved draft" : "Template ready");
+}
+
+function saveDailyReportDraft() {
+  const textarea = dailyReportTextElement();
+  if (!textarea) return;
+  try { localStorage.setItem(DAILY_REPORT_STORAGE_KEY, textarea.value); } catch (_) {}
+  setDailyReportStatus("Saved");
+}
+
+function loadDailyReportTemplate() {
+  try {
+    return String(localStorage.getItem(DAILY_REPORT_TEMPLATE_STORAGE_KEY) || "").trim() || DAILY_REPORT_TEMPLATE;
+  } catch (_) {
+    return DAILY_REPORT_TEMPLATE;
+  }
+}
+
+function saveDailyReportTemplate() {
+  const textarea = dailyReportTextElement();
+  if (!textarea || !textarea.value.trim()) {
+    setDailyReportStatus("Write a report before saving the template.");
+    return;
+  }
+  try { localStorage.setItem(DAILY_REPORT_TEMPLATE_STORAGE_KEY, textarea.value.trim()); } catch (_) {}
+  setDailyReportStatus("Template saved");
+  toast("Daily report template saved.", true);
+}
+
+function scheduleDailyReportSave() {
+  saveDailyReportSettings();
+  setDailyReportStatus("Saving...");
+  clearTimeout(dailyReportSaveTimer);
+  dailyReportSaveTimer = setTimeout(saveDailyReportDraft, 250);
+}
+
+function normalizeDailyReportId(value) {
+  const normalized = String(value || "")
+    .trim()
+    .replace(/^adspower\s*id[:#-]?\s*/i, "")
+    .replace(/^profile\s*id[:#-]?\s*/i, "")
+    .trim();
+  if (!normalized) return "";
+  if (/^(id|adspower id|profile id|n\/a|na|none|null|undefined|-|--)$/i.test(normalized)) return "";
+  return /^(?=.*\d)[A-Za-z0-9_-]{4,}$/.test(normalized) ? normalized : "";
+}
+
+function normalizeDailyReportRows(rows) {
+  return (Array.isArray(rows) ? rows : [])
+    .map((row, index) => ({
+      id: normalizeDailyReportId(row && (row.adspower_id || row.adspower_profile_id || row.profile_id)),
+      model: String(row && (row.model || row.last_known_model) || "").trim() || "Unknown",
+      sourceRank: Number.isFinite(Number(row && row.source_rank)) ? Number(row.source_rank) : index,
+    }))
+    .filter(row => row.id)
+    .sort((a, b) => a.sourceRank - b.sourceRank);
+}
+
+function renderDailyReportTemplate(template, hours, total, modelLines, modelNames) {
+  let report = String(template || DAILY_REPORT_TEMPLATE);
+  report = report
+    .replace(/\{hours\}/gi, hours)
+    .replace(/\{total\}/gi, String(total));
+  report = report.replace(/Total working hours\s*:\s*.*(?:hrs|hours)?/i, `Total working hours: ${hours} hrs`);
+  report = report.replace(/✅\s*Snapchat created accounts\s*:\s*.*$/mi, `✅ Snapchat created accounts: ${total}`);
+
+  if (report.includes("{models}")) {
+    return report.replace(/\{models\}/gi, modelLines.join("\n"));
+  }
+
+  // Keep a saved custom layout while replacing old generated model counts.
+  const lines = report.split("\n").filter(line => {
+    const match = line.match(/^\s*(.*?)\s*(?::|-)\s*\d+\s*$/);
+    return !match || !modelNames.has(String(match[1] || "").trim().toLowerCase());
+  });
+  const totalIndex = lines.findIndex(line => /Snapchat created accounts\s*:/i.test(line));
+  if (totalIndex >= 0) lines.splice(totalIndex + 1, 0, ...modelLines);
+  else lines.push(...modelLines);
+  return lines.join("\n");
+}
+
+function regenerateDailyReportFromSnapshot(showToast = false) {
+  const rows = latestDailyReportRows;
+  const startId = normalizeDailyReportId(el("daily-report-start-id")?.value);
+  const requestedTopId = normalizeDailyReportId(el("daily-report-top-id")?.value);
+  const accountsPerHour = Math.max(0.1, Number(el("daily-report-accounts-hour")?.value) || 7);
+  const separator = el("daily-report-separator")?.value === ":" ? ":" : "-";
+  const topId = requestedTopId || (rows[0] && rows[0].id) || "";
+  const topIndex = rows.findIndex(row => row.id.toLowerCase() === topId.toLowerCase());
+  const startIndex = rows.findIndex(row => row.id.toLowerCase() === startId.toLowerCase());
+  if (!rows.length) throw new Error("No SnapBoard rows with valid AdsPower IDs were found.");
+  if (!startId) throw new Error("Enter a Start AdsPower ID first.");
+  if (topIndex === -1) throw new Error("Top AdsPower ID was not found in the loaded SnapBoard data.");
+  if (startIndex === -1) throw new Error("Start AdsPower ID was not found in the loaded SnapBoard data.");
+  if (startIndex < topIndex) throw new Error("Start AdsPower ID must be below the Top AdsPower ID.");
+
+  const range = rows.slice(topIndex, startIndex + 1);
+  const counts = range.reduce((result, row) => {
+    result[row.model] = (result[row.model] || 0) + 1;
+    return result;
+  }, {});
+  const total = range.length;
+  const sortedModels = Object.keys(counts).sort((a, b) => a.localeCompare(b));
+  const modelLines = sortedModels.map(model => (
+    separator === ":" ? `${model}: ${counts[model]}` : `${model} - ${counts[model]}`
+  ));
+  const report = renderDailyReportTemplate(
+    loadDailyReportTemplate(),
+    (total / accountsPerHour).toFixed(1),
+    total,
+    modelLines,
+    new Set(sortedModels.map(model => model.toLowerCase())),
+  );
+  const textarea = dailyReportTextElement();
+  if (textarea) textarea.value = report;
+  saveDailyReportSettings();
+  saveDailyReportDraft();
+  setDailyReportStatus(`Using loaded data: ${total} accounts.`);
+  if (showToast) toast("Daily report generated from SnapBoard data.", true);
+  return { total, rows: rows.length };
+}
+
+async function refreshSnapboardForDailyReport() {
+  const requestResponse = await fetch(PRODUCTS.nyxify.base + "/snapboard_refresh/request", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...tokenHeaders() },
+    body: JSON.stringify({ reason: "daily_report_get_data", token: TOKEN }),
+  });
+  const request = await requestResponse.json().catch(() => ({}));
+  if (!requestResponse.ok || request.ok === false || !request.request_id) {
+    throw new Error(request.error || "Could not request a SnapBoard refresh.");
+  }
+
+  const deadline = Date.now() + 45000;
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 500));
+    const statusResponse = await fetch(
+      PRODUCTS.nyxify.base + "/snapboard_refresh/status?request_id=" + encodeURIComponent(request.request_id),
+      { headers: tokenHeaders() },
+    );
+    const status = await statusResponse.json().catch(() => ({}));
+    if (!statusResponse.ok) continue;
+    if (status.done) {
+      if (!status.success) throw new Error(status.error || "SnapBoard refresh failed.");
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      return;
+    }
+  }
+  throw new Error("SnapBoard refresh timed out. Keep the SnapBoard tab open and try again.");
+}
+
+async function getDailyReportData() {
+  const button = el("daily-report-get-data");
+  if (button) button.disabled = true;
+  setDailyReportStatus("Refreshing SnapBoard...");
+  try {
+    await refreshSnapboardForDailyReport();
+    setDailyReportStatus("Reading updated SnapBoard data...");
+    const response = await fetch(PRODUCTS.nyxify.base + "/daily_report/rows", { headers: tokenHeaders() });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || data.ok === false) throw new Error(data.error || "Could not load SnapBoard data.");
+
+    latestDailyReportRows = normalizeDailyReportRows(data.rows);
+    regenerateDailyReportFromSnapshot(true);
+  } catch (error) {
+    setDailyReportStatus(error.message || "Could not get SnapBoard data.");
+    toast(error.message || "Daily report data failed.", false);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
+async function copyDailyReport() {
+  const textarea = dailyReportTextElement();
+  if (!textarea) return;
+  const text = textarea.value;
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (_) {
+    textarea.focus();
+    textarea.select();
+    document.execCommand("copy");
+    textarea.setSelectionRange(text.length, text.length);
+  }
+  setDailyReportStatus("Copied");
+  toast("Daily report copied.", true);
+}
+
 async function developerBridge(action, payload) {
   return callBridge(action, { ...(payload || {}), developer_session: developerSession });
+}
+
+function formatFleetLastSeen(value) {
+  if (!value) return "Never";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return date.toLocaleString();
+}
+
+function renderDeviceFleetRows(devices) {
+  const tbody = el("device-fleet-tbody");
+  const summary = el("device-fleet-summary");
+  if (!tbody || !summary) return;
+  const rows = Array.isArray(devices) ? devices : [];
+  const activeCount = rows.filter(device => device && device.active).length;
+  const inactiveCount = Math.max(0, rows.length - activeCount);
+  summary.innerHTML = `
+    <span class="proxyrank-chip proxyrank-chip-good"><b>${activeCount}</b> Active</span>
+    <span class="proxyrank-chip proxyrank-chip-bad"><b>${inactiveCount}</b> Inactive</span>
+    <span class="proxyrank-chip"><b>${rows.length}</b> Total</span>`;
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td class="empty" colspan="5">No devices reported yet.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(device => {
+    const active = !!device.active;
+    const statusText = active ? "Active" : "Inactive";
+    const dotClass = active ? "fleet-dot-active" : "fleet-dot-inactive";
+    return `<tr>
+      <td><span class="fleet-status"><span class="fleet-dot ${dotClass}" aria-hidden="true"></span>${statusText}</span></td>
+      <td>${escapeHtml(device.device_name || "Unnamed device")}</td>
+      <td>${escapeHtml(device.os || "unknown")}</td>
+      <td>${escapeHtml(device.app_version || "")}</td>
+      <td>${escapeHtml(formatFleetLastSeen(device.last_seen))}</td>
+    </tr>`;
+  }).join("");
+}
+
+async function refreshDeviceFleet() {
+  const status = el("device-fleet-status");
+  if (status) status.textContent = "Refreshing devices...";
+  const reply = await developerBridge("device_fleet_status");
+  if (!reply.ok) {
+    if (reply.locked) developerSession = "";
+    if (status) status.textContent = reply.error || "Could not load device fleet.";
+    renderDeviceFleetRows([]);
+    return;
+  }
+  renderDeviceFleetRows(reply.devices || []);
+  if (status) status.textContent = "Device fleet refreshed.";
+}
+
+async function testDeviceFleetHeartbeat() {
+  const status = el("device-fleet-status");
+  if (status) status.textContent = "Sending heartbeat...";
+  const reply = await developerBridge("device_fleet_ping");
+  if (!reply.ok) {
+    if (reply.locked) developerSession = "";
+    if (status) status.textContent = reply.error || "Heartbeat failed.";
+    return;
+  }
+  if (status) status.textContent = reply.message || "Heartbeat sent.";
+  refreshDeviceFleet();
 }
 
 async function renderDeveloperSettings() {
@@ -928,6 +1351,7 @@ async function renderDeveloperSettings() {
   }
   const settings = result.settings || {};
   const slots = Math.min(5, Math.max(2, parseInt(settings.parallel_continuous_slots) || 2));
+  const tokenConfigured = !!settings.fleet_token_configured;
   body.innerHTML = `
     <div class="config-topbar"><h2>Developer Settings</h2><div class="config-actions"><span id="developer-feedback" class="feedback"></span><button id="developer-save" class="btn primary" type="button">Save Changes</button></div></div>
     <section class="config-section">
@@ -936,16 +1360,52 @@ async function renderDeveloperSettings() {
       <div class="adv-grid">
         <div class="adv-field toggle-row"><span class="toggle-text">Enable Rename-Gated Continuous Pipeline</span><label class="toggle-switch"><input id="developer-parallel-enabled" type="checkbox" ${settings.parallel_continuous_pipeline_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
       </div>
+    </section>
+    <section class="config-section device-fleet-section">
+      <div class="device-fleet-head">
+        <div>
+          <h3>Device Fleet</h3>
+          <p class="hint">Lightweight heartbeat for NyxSuite devices. Only device name, OS, app version, and last seen are sent.</p>
+        </div>
+        <div class="toolbar compact-toolbar">
+          <button id="device-fleet-test" class="btn" type="button">Test</button>
+          <button id="device-fleet-refresh" class="btn" type="button">Refresh</button>
+        </div>
+      </div>
+      <div class="adv-grid">
+        <div class="adv-field toggle-row"><span class="toggle-text">Enable Device Heartbeat</span><label class="toggle-switch"><input id="developer-device-heartbeat-enabled" type="checkbox" ${settings.device_heartbeat_enabled ? "checked" : ""}><span class="toggle-slider"></span></label></div>
+        <label class="adv-field"><span>Fleet API URL</span><input id="developer-fleet-api-url" class="input" type="url" value="${escapeAttr(settings.fleet_api_url || "")}" placeholder="https://project.supabase.co/functions/v1/nyxsuite-devices"></label>
+        <label class="adv-field"><span>Fleet Token ${tokenConfigured ? "(configured)" : ""}</span><input id="developer-fleet-token" class="input" type="password" value="" autocomplete="off" placeholder="${tokenConfigured ? "Leave blank to keep current token" : "Paste fleet token"}"></label>
+        <label class="adv-field"><span>Device Name</span><input id="developer-device-name" class="input" value="${escapeAttr(settings.device_name || "")}" placeholder="Use this machine name"></label>
+      </div>
+      <label class="setting-row device-fleet-clear-token"><input id="developer-fleet-token-clear" type="checkbox"> <span class="setting-value">Clear saved fleet token</span></label>
+      <div id="device-fleet-summary" class="proxyrank-summary"></div>
+      <span id="device-fleet-status" class="feedback" aria-live="polite"></span>
+      <div class="tablewrap device-fleet-tablewrap">
+        <table class="queue device-fleet-table">
+          <thead><tr><th>Status</th><th>Device Name</th><th>OS</th><th>Version</th><th>Last Seen</th></tr></thead>
+          <tbody id="device-fleet-tbody"><tr><td class="empty" colspan="5">Refresh to load devices.</td></tr></tbody>
+        </table>
+      </div>
     </section>`;
   el("developer-save").addEventListener("click", async () => {
     const feedback = el("developer-feedback");
     const reply = await developerBridge("save_developer_settings", {
       parallel_continuous_pipeline_enabled: el("developer-parallel-enabled").checked,
       parallel_continuous_slots: slots,
+      device_heartbeat_enabled: el("developer-device-heartbeat-enabled").checked,
+      fleet_api_url: el("developer-fleet-api-url").value,
+      fleet_token: el("developer-fleet-token").value,
+      fleet_token_clear: el("developer-fleet-token-clear").checked,
+      device_name: el("developer-device-name").value,
     });
     if (!reply.ok) { developerSession = ""; feedback.textContent = reply.error || "Developer session expired."; return; }
     feedback.textContent = "Developer settings saved. The new behavior applies on the next scheduler check.";
+    renderDeveloperSettings();
   });
+  el("device-fleet-refresh").addEventListener("click", refreshDeviceFleet);
+  el("device-fleet-test").addEventListener("click", testDeviceFleetHeartbeat);
+  refreshDeviceFleet();
 }
 
 function renderBannedPanel() {
@@ -1311,7 +1771,7 @@ function renderNyxifyAdvanced() {
         <div class="adv-field toggle-row"><span class="toggle-text">Disable extensions on create</span><label class="toggle-switch"><input id="ncfg-disable_extensions_enabled" type="checkbox" ${v.disable_extensions_enabled === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
         <div class="adv-field toggle-row"><span class="toggle-text">Keep Profile Open</span><label class="toggle-switch"><input id="ncfg-keep_profile_open_after_signup" type="checkbox" ${v.keep_profile_open_after_signup === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
         <div class="adv-field toggle-row"><span class="toggle-text">Auto-Fill Row</span><label class="toggle-switch toggle-switch-warning"><input id="ncfg-auto_fill_row" type="checkbox" ${v.auto_fill_row === true ? "checked" : ""}><span class="toggle-slider"></span></label></div>
-        <label class="adv-field"><span>Top rows to detect</span><input id="ncfg-top_rows_to_detect" class="input" type="number" min="1" max="200" step="1" value="${escapeAttr(v.top_rows_to_detect || 20)}"></label>
+        <label class="adv-field"><span>Row Limit</span><input id="ncfg-top_rows_to_detect" class="input" type="number" min="1" max="200" step="1" value="${escapeAttr(v.top_rows_to_detect || 20)}"></label>
       </div>
     </section>
     <section class="config-section">
@@ -1424,6 +1884,8 @@ el("update-check-btn").addEventListener("click", async () => {
   el("update-feedback").textContent = "Checking…";
   await runUpdateCheck(true);
 });
+
+el("whats-new-settings-btn").addEventListener("click", openWhatsNewFromSettings);
 
 el("update-indicator").addEventListener("click", () => setActive("settings"));
 
@@ -1689,6 +2151,33 @@ el("fullauto-save-signup").addEventListener("click", async () => {
 });
 
 el("tabs").addEventListener("click", e => { const b = e.target.closest(".tab"); if (b && b.dataset.tab) setActive(b.dataset.tab); });
+el("daily-report-text").addEventListener("input", scheduleDailyReportSave);
+el("daily-report-get-data").addEventListener("click", getDailyReportData);
+["daily-report-start-id", "daily-report-top-id", "daily-report-accounts-hour", "daily-report-separator"].forEach(id => {
+  const field = el(id);
+  if (!field) return;
+  const updateFromLoadedSnapshot = () => {
+    saveDailyReportSettings();
+    if (!latestDailyReportRows.length) return;
+    try {
+      regenerateDailyReportFromSnapshot(false);
+    } catch (error) {
+      setDailyReportStatus(error.message || "Update the report inputs.");
+    }
+  };
+  field.addEventListener("input", updateFromLoadedSnapshot);
+  field.addEventListener("change", updateFromLoadedSnapshot);
+});
+el("daily-report-template").addEventListener("click", saveDailyReportTemplate);
+el("daily-report-copy").addEventListener("click", copyDailyReport);
+el("daily-report-clear").addEventListener("click", () => {
+  const textarea = dailyReportTextElement();
+  if (!textarea) return;
+  if (textarea.value && !window.confirm("Clear the current daily report?")) return;
+  textarea.value = "";
+  saveDailyReportDraft();
+  setDailyReportStatus("Cleared");
+});
 
 function applyTheme(dark) {
   document.body.classList.toggle("dark", dark);
@@ -1933,8 +2422,33 @@ async function banBadProxyRows() {
   renderProxyRanking();
 }
 
+async function resetProxyRanking() {
+  if (!window.confirm("Reset all proxy ranking history and clear the Proxy Blocker list?")) return;
+  const btn = el("proxyrank-reset");
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = "Resetting...";
+  }
+  const res = await fetch(`http://${HOST}:8866/proxy_ranking/reset`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...tokenHeaders() },
+    body: JSON.stringify({ token: TOKEN }),
+  }).then(r => r.json()).catch(() => ({ ok: false }));
+  toast(res.ok ? (res.message || "Proxy ranking reset.") : (res.error || "Proxy ranking reset failed."), res.ok);
+  if (res.ok && res.config) {
+    state.nyxify.config = res.config;
+    if (typeof renderNyxifyAdvanced === "function") renderNyxifyAdvanced();
+  }
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = "Reset ranking";
+  }
+  renderProxyRanking();
+}
+
 el("proxyrank-refresh").addEventListener("click", () => renderProxyRanking());
 el("proxyrank-ban-red").addEventListener("click", banBadProxyRows);
+el("proxyrank-reset").addEventListener("click", resetProxyRanking);
 
   // ---------- Configure Nyxmoji (editor) ----------
 const bm = {
@@ -2814,6 +3328,16 @@ el("bm-import-file").addEventListener("change", e => {
   e.target.value = "";
 });
 
+el("whats-new-close").addEventListener("click", closeWhatsNew);
+el("whats-new-done").addEventListener("click", closeWhatsNew);
+el("whats-new-modal").addEventListener("click", e => {
+  if (e.target && e.target.dataset.whatsNewClose === "backdrop") closeWhatsNew();
+});
+document.addEventListener("keydown", e => {
+  const modal = el("whats-new-modal");
+  if (e.key === "Escape" && modal && !modal.hidden) closeWhatsNew();
+});
+
 connect();
 render();
 // Auto-check for updates on launch so the indicator lights up without the user
@@ -2826,6 +3350,7 @@ function handleHashRoute() {
   if (location.hash === "#nyx") { setActive("nyx"); return; }
   if (location.hash === "#nyxify") { setActive("nyxify"); return; }
   if (location.hash === "#suite") { setActive("suite"); return; }
+  if (location.hash === "#dailyreport") { setActive("dailyreport"); return; }
   if (location.hash === "#setup") {
     setActive("settings");
     setTimeout(() => {

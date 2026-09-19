@@ -136,7 +136,7 @@ def _http_get_json(session, port, path):
         return None
 
 
-def _browser_ws_endpoint(session, port, ws_path):
+def _browser_ws_endpoint(session, port, ws_path, on_browser_started=None):
     """Confirm the port hosts a live CDP browser and return its ``ws://`` URL.
 
     Prefers the path from DevToolsActivePort; falls back to the
@@ -144,6 +144,8 @@ def _browser_ws_endpoint(session, port, ws_path):
     """
     if not _port_is_listening(port):
         return ""
+    if callable(on_browser_started):
+        on_browser_started(port)
     version = _http_get_json(session, port, "/json/version")
     if not isinstance(version, dict):
         return ""
@@ -227,7 +229,12 @@ def _recent_live_candidates(session, limit=_SCAN_LIMIT):
             yield cache_dir, port, ws_path
 
 
-def find_open_profile_cdp_endpoint(profile_id, session=None, deep_scan=True):
+def find_open_profile_cdp_endpoint(
+    profile_id,
+    session=None,
+    deep_scan=True,
+    on_browser_started=None,
+):
     """Return a live ``ws://`` CDP endpoint for an already-open AdsPower profile,
     or ``""`` if the profile is not currently open.
 
@@ -261,7 +268,12 @@ def find_open_profile_cdp_endpoint(profile_id, session=None, deep_scan=True):
             parsed = _read_devtools_active_port(cache_dir)
             if not parsed:
                 continue
-            endpoint = _browser_ws_endpoint(session, parsed[0], parsed[1])
+            endpoint = _browser_ws_endpoint(
+                session,
+                parsed[0],
+                parsed[1],
+                on_browser_started=on_browser_started,
+            )
             if endpoint:
                 return endpoint
 
@@ -271,7 +283,12 @@ def find_open_profile_cdp_endpoint(profile_id, session=None, deep_scan=True):
             for _cache_dir, port, ws_path in _recent_live_candidates(session):
                 if _open_serial_for_port(session, port) != wanted:
                     continue
-                endpoint = _browser_ws_endpoint(session, port, ws_path)
+                endpoint = _browser_ws_endpoint(
+                    session,
+                    port,
+                    ws_path,
+                    on_browser_started=on_browser_started,
+                )
                 if endpoint:
                     return endpoint
 

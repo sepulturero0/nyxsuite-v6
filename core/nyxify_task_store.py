@@ -11,6 +11,7 @@ from core.process_utils import APP_DATA_DIR
 DATA_DIR = APP_DATA_DIR / "data"
 DB_PATH = DATA_DIR / "nyxify_tasks.db"
 OTP_DISPATCH_LEASE_SECONDS = 185.0
+PROXY_ROTATION_UNAVAILABLE_STEP = "proxy_rotation_unavailable"
 
 
 def utc_now_iso():
@@ -294,11 +295,12 @@ class NyxifyTaskStore:
                 WHERE status = 'PENDING'
                   AND TRIM(COALESCE(username, '')) <> ''
                   AND LOWER(TRIM(COALESCE(username, ''))) NOT LIKE 'temp%'
+                  AND COALESCE(last_step, '') <> ?
                   {priority_clause}
                 ORDER BY created_at ASC, id ASC
                 LIMIT ?
                 """,
-                (*priority_values, safe_limit)
+                (PROXY_ROTATION_UNAVAILABLE_STEP, *priority_values, safe_limit)
             ).fetchall()
 
             if not rows:
@@ -361,8 +363,20 @@ class NyxifyTaskStore:
                     next_error = ""
                     next_step = ""
 
-                if next_status == "PENDING":
+                current_proxy = str(existing["proxy_address"] or "").strip()
+                incoming_proxy_changed = bool(
+                    normalized_proxy and normalized_proxy != current_proxy
+                )
+                rotation_unavailable_wait = bool(
+                    next_status == "PENDING"
+                    and str(existing["last_step"] or "").strip()
+                    == PROXY_ROTATION_UNAVAILABLE_STEP
+                    and not incoming_proxy_changed
+                )
+                if next_status == "PENDING" and not rotation_unavailable_wait:
                     next_step = waiting_step
+                    if incoming_proxy_changed:
+                        next_error = ""
                 proxy_locked = _is_proxy_locked_for_extension_resync(existing)
                 next_ip = (
                     str(existing["ip_address"] or "").strip()

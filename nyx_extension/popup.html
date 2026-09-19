@@ -43,9 +43,6 @@
       </div>
       <p id="statusLine">Loading...</p>
       <p id="runnerLine" class="muted">Checking Nyx runner...</p>
-      <div class="button-row button-row-compact button-row-single quick-nav-row">
-        <button id="jumpDailyUpdateButton" class="button button-secondary" type="button">Daily Update</button>
-      </div>
       <div id="botControlsPanel" class="bot-controls-panel bot-state-stopped">
         <div id="botStatePill" class="bot-state-pill" title="Nyx runner state">
           <span id="botStateDot" class="bot-state-dot" aria-hidden="true"></span>
@@ -94,7 +91,7 @@
               </select>
           </div>
           <div class="setting-field">
-            <label class="label" for="popupRowLimit">Top rows to detect</label>
+            <label class="label" for="popupRowLimit">Row Limit</label>
             <input id="popupRowLimit" class="input" type="number" min="1" max="500" step="1" placeholder="100">
           </div>
           <div class="setting-field">
@@ -120,33 +117,6 @@
       </div>
     </div>
     <div class="scroll-area scroll-area-tall">
-      <section class="card" id="dailyUpdateSection">
-        <h2>Daily Update</h2>
-        <div class="rename-grid">
-          <div class="setting-field">
-            <label class="label" for="dailyStartAdspowerIdInput">Start AdsPower ID</label>
-            <input id="dailyStartAdspowerIdInput" class="input" type="text" placeholder="k1aygxxc">
-          </div>
-          <div class="setting-field">
-            <label class="label" for="dailyTopAdspowerIdInput">Top AdsPower ID</label>
-            <input id="dailyTopAdspowerIdInput" class="input" type="text" placeholder="Auto">
-          </div>
-          <div class="setting-field">
-            <label class="label" for="dailyAccountsPerHourInput">Accounts / hour</label>
-            <input id="dailyAccountsPerHourInput" class="input" type="number" min="0.1" step="0.1" placeholder="7">
-          </div>
-        </div>
-        <div id="dailyUpdateSummary" class="rename-summary">Loading daily update...</div>
-        <pre id="dailyUpdatePreview">Loading daily update...</pre>
-        <div class="button-row button-row-compact rename-button-row">
-          <button id="refreshDailyRowsButton" class="button button-secondary" type="button">Refresh Rows</button>
-          <button id="copyDailyUpdateButton" class="button button-secondary" type="button">Copy Daily Report</button>
-          <button id="saveDailyStartButton" class="button button-secondary" type="button">Save Start ID</button>
-          <button id="dailyScrapeButton" class="button" type="button">Scrape</button>
-          <button id="openScrapePageButton" class="button button-secondary" type="button">Open Scrape Page</button>
-        </div>
-        <p id="dailyUpdateStatusLine" class="muted">Counts from Start AdsPower ID up to the current top valid ID.</p>
-      </section>
       <section class="card" id="nyxScrapeSection">
         <h2>Nyx Scrape</h2>
         <p class="muted">Checks every row on the open SnapBoard for an existing Snapchat account / Bitmoji.</p>

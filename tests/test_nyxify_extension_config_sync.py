@@ -1027,7 +1027,7 @@ const chromeStub = {
   },
   tabs: {
     onRemoved: { addListener: () => {} },
-    query: async () => [{ id: 77, url: "https://snapboard.onrender.com/" }],
+    query: async () => [{ id: 77, url: "https://snapboard-production.up.railway.app/" }],
     create: async () => ({ id: 1 }),
     remove: async () => {},
     get: async () => ({}),

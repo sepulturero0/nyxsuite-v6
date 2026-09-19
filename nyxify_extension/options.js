@@ -102,6 +102,16 @@ function loadOptions() {
       document.getElementById("snapboardLoginName").value = creds.name || "";
       document.getElementById("snapboardLoginPassword").value = creds.password || "";
     });
+
+    // Refresh the displayed row limit from the runner so this page does not
+    // show a stale cached value after the Dashboard changes Nyxify config.
+    chrome.runtime.sendMessage({ type: "NYXIFY_GET_STATUS", force: true }, (response) => {
+      const latestConfig = response && response.ok && response.status && response.status.config;
+      const latestRowLimit = latestConfig && Number.parseInt(latestConfig.rowLimit, 10);
+      if (Number.isFinite(latestRowLimit) && latestRowLimit > 0) {
+        document.getElementById("rowLimit").value = latestRowLimit;
+      }
+    });
   });
 }
 

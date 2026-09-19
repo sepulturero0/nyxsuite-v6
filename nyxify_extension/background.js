@@ -221,6 +221,10 @@ function normalizeConfig(config) {
   const safeConfig = config || {};
   const verificationPriority = String(safeConfig.verificationPriority || DEFAULT_VERIFICATION_PRIORITY).trim().toLowerCase();
   const parsedRowLimit = normalizePositiveInteger(safeConfig.rowLimit, 20);
+  const parsedTopRowsToDetect = normalizePositiveInteger(
+    safeConfig.topRowsToDetect != null ? safeConfig.topRowsToDetect : safeConfig.rowLimit,
+    20
+  );
   const parsedMaxParallel = normalizePositiveInteger(safeConfig.maxParallelProfiles, 1);
   const hasBlockedProxies = Object.prototype.hasOwnProperty.call(safeConfig, "blockedProxies");
   const hasBannedProxies = Object.prototype.hasOwnProperty.call(safeConfig, "bannedProxies");
@@ -248,7 +252,7 @@ function normalizeConfig(config) {
     tagTwo: String(safeConfig.tagTwo || "").trim(),
     adspowerTagsEnabled: safeConfig.adspowerTagsEnabled === true,
     maxParallelProfiles: parsedMaxParallel,
-    topRowsToDetect: normalizePositiveInteger(safeConfig.topRowsToDetect, 20),
+    topRowsToDetect: parsedTopRowsToDetect,
     bannedProxies: bannedProxies.map((item) => String(item || "").trim()).filter(Boolean),
     blockedProxies: bannedProxies.map((item) => String(item || "").trim()).filter(Boolean),
     proxyBlockerEnabled: safeConfig.proxyBlockerEnabled !== false,
@@ -280,6 +284,7 @@ function extensionConfigFromRunnerConfig(runnerConfig, baseConfig = {}) {
   return normalizeConfig({
     ...base,
     maxParallelProfiles: runner.max_parallel_profiles,
+    rowLimit: runner.top_rows_to_detect,
     topRowsToDetect: runner.top_rows_to_detect,
     temporaryProfileName: runner.temporary_profile_name,
     adspowerGroup: runner.adspower_group,
@@ -1786,7 +1791,7 @@ async function findSnapboardTabId() {
     return connectedTabId;
   }
   try {
-    const tabs = await chrome.tabs.query({ url: "https://snapboard.onrender.com/*" });
+    const tabs = await chrome.tabs.query({ url: "https://snapboard-production.up.railway.app/*" });
     const tab = (tabs || []).find((candidate) => candidate && candidate.id != null);
     return tab ? tab.id : null;
   } catch (_error) {

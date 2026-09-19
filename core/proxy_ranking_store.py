@@ -126,6 +126,11 @@ class ProxyRankingStore:
     def record_ban_hit(self, proxy_value):
         self._bump(proxy_value, "ban_hits")
 
+    def reset(self):
+        """Clear all ranking history so the next proxy use starts a new baseline."""
+        with self._connect() as conn:
+            conn.execute("DELETE FROM proxy_subnets")
+
     def ranked(self):
         """All subnets with a computed score, sorted good -> bad."""
         with self._connect() as conn:

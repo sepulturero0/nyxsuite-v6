@@ -358,6 +358,66 @@ def _trim_release_notes(body: str) -> str:
     return notes[:MAX_RELEASE_NOTES_CHARS].rstrip() + "\n..."
 
 
+def get_current_release_notes(version: str = "") -> dict:
+    """Read the installed version's local CHANGELOG entry for the dashboard.
+
+    Release notes are bundled with the app so the What's New dialog remains
+    useful immediately after an update, even before GitHub is reachable.
+    """
+    current_version = str(version or get_current_version()).strip().lstrip("vV")
+    changelog_path = _install_root() / "CHANGELOG.md"
+    title = "Nyx Suite update"
+    notes = "This release contains the latest Nyx Suite improvements."
+
+    try:
+        changelog = changelog_path.read_text(encoding="utf-8-sig")
+        headings = list(
+            re.finditer(
+                r"^##\s+v?([^\s-]+)\s*(?:-\s*(.*?))?\s*$",
+                changelog,
+                flags=re.MULTILINE,
+            )
+        )
+        target = _normalize_notice_tag(current_version)
+        for index, match in enumerate(headings):
+            if _normalize_notice_tag(match.group(1)) != target:
+                continue
+            start = match.end()
+            end = headings[index + 1].start() if index + 1 < len(headings) else len(changelog)
+            body = changelog[start:end].strip()
+            title = str(match.group(2) or "").strip() or title
+            notes = _trim_release_notes(body)
+            break
+    except Exception:
+        pass
+
+    bullets = []
+    current_bullet = ""
+    for line in str(notes or "").splitlines():
+        cleaned = line.strip()
+        if not cleaned or cleaned == "...":
+            continue
+        match = re.match(r"^[-*]\s+(.*)$", cleaned)
+        if match:
+            if current_bullet:
+                bullets.append(current_bullet)
+            current_bullet = match.group(1).strip()
+        elif current_bullet:
+            current_bullet = f"{current_bullet} {cleaned}"
+        else:
+            current_bullet = cleaned
+    if current_bullet:
+        bullets.append(current_bullet)
+
+    return {
+        "version": current_version,
+        "title": title,
+        "notes": notes,
+        "bullets": bullets,
+        "source": "CHANGELOG.md" if changelog_path.exists() else "built-in release notice",
+    }
+
+
 def format_release_notice(app_name: str, release: ReleaseInfo, current_version: str, phase: str) -> tuple[str, str]:
     tag = str(release.tag_name or "").strip() or "latest"
     title = f"{app_name} Update {tag}"
@@ -788,6 +848,7 @@ ROOT_FILES_TO_SYNC = [
     "bridge_app.py",
     "main.py",
     "nyxify_runner.py",
+    "CHANGELOG.md",
     "requirements.txt",
     "run_nyx_suite.bat",
     "run_nyx_suite.sh",

@@ -84,7 +84,7 @@ function getActiveSnapboardTab(callback) {
     const activeTab = tabs && tabs.length ? tabs[0] : null;
     const activeUrl = String((activeTab && activeTab.url) || "");
 
-    if (!activeTab || !activeTab.id || activeUrl.indexOf("snapboard.onrender.com") === -1) {
+    if (!activeTab || !activeTab.id || activeUrl.indexOf("snapboard-production.up.railway.app") === -1) {
       callback(null);
       return;
     }
@@ -463,7 +463,7 @@ function refreshDailyRowsFromActiveTab(onComplete, shouldShowError, options = {}
     const activeTab = tabs && tabs.length ? tabs[0] : null;
     const activeUrl = String((activeTab && activeTab.url) || "");
 
-    if (!activeTab || !activeTab.id || activeUrl.indexOf("snapboard.onrender.com") === -1) {
+    if (!activeTab || !activeTab.id || activeUrl.indexOf("snapboard-production.up.railway.app") === -1) {
       if (shouldShowError) {
         document.getElementById("dailyUpdateStatusLine").textContent = "Open a SnapBoard tab to refresh daily update rows.";
       }
@@ -896,12 +896,8 @@ const runnerStatus = safeStatus.runnerStatus || {};
   if (scrapeRows.length) {
     syncLatestDailyRows(scrapeRows);
   }
-  renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
   renderNyxScrapeSection(scrapeStatus);
   persistLastRunnerStatus(runnerStatus);
-  if (!latestDailyRows.length || Date.now() - lastDailyRowsRefreshAt > DAILY_ROWS_AUTO_REFRESH_MS) {
-    maybeAutoRefreshDailyRows(false);
-  }
 }
 
 function compactRunnerStatus(runnerStatus) {
@@ -1134,7 +1130,7 @@ function warmupAllInaccessibleFromSnapboard() {
     const activeTab = tabs && tabs.length ? tabs[0] : null;
     const activeUrl = String((activeTab && activeTab.url) || "");
 
-    if (!activeTab || !activeTab.id || !activeUrl.includes("snapboard.onrender.com")) {
+    if (!activeTab || !activeTab.id || !activeUrl.includes("snapboard-production.up.railway.app")) {
       setPrimaryStatus("Open a SnapBoard tab first, then use Warm Up All.", 2500);
       return;
     }
@@ -1337,116 +1333,12 @@ document.getElementById("popupAutomationSpeed").addEventListener("blur", flushPo
   }
 });
 document.getElementById("headerRefreshButton").addEventListener("click", handleHeaderRefreshClick);
-let dailyStartSaveTimer = null;
-const dailyStartInputEl = document.getElementById("dailyStartAdspowerIdInput");
-dailyStartInputEl.addEventListener("input", () => {
-  lastDailyRenderSignature = "";
-  renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
-  // Auto-save (debounced) so the start AdsPower ID persists without clicking
-  // Save. renderDailyUpdatePanel resets the field to the last-saved value
-  // whenever it isn't focused, so a periodic refresh (or blur) would otherwise
-  // drop whatever was typed but not yet saved.
-  if (dailyStartSaveTimer) {
-    clearTimeout(dailyStartSaveTimer);
-  }
-  dailyStartSaveTimer = setTimeout(() => {
-    const startId = String(dailyStartInputEl.value || "").trim();
-    chrome.runtime.sendMessage(
-      { type: "NYX_SCRAPE_SAVE_CONFIG", config: { dailyStartAdspowerId: startId } },
-      (response) => {
-        if (response && response.ok) {
-          latestScrapeConfig = response.config || latestScrapeConfig;
-        }
-      }
-    );
-  }, 400);
-});
-// Persist immediately when focus leaves the field, covering the case where the
-// popup is closed right after typing, before the debounce timer fires.
-dailyStartInputEl.addEventListener("change", () => {
-  if (dailyStartSaveTimer) {
-    clearTimeout(dailyStartSaveTimer);
-    dailyStartSaveTimer = null;
-  }
-  saveDailyStartAdspowerId();
-});
-document.getElementById("dailyTopAdspowerIdInput").addEventListener("input", () => {
-  lastDailyRenderSignature = "";
-  renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
-});
-let dailyPerHourSaveTimer = null;
-const dailyPerHourInputEl = document.getElementById("dailyAccountsPerHourInput");
-if (dailyPerHourInputEl) {
-  dailyPerHourInputEl.addEventListener("input", () => {
-    lastDailyRenderSignature = "";
-    renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
-    // Debounce the persist so every keystroke doesn't hit storage.
-    if (dailyPerHourSaveTimer) {
-      clearTimeout(dailyPerHourSaveTimer);
-    }
-    dailyPerHourSaveTimer = setTimeout(() => {
-      const perHour = normalizeAccountsPerHour(dailyPerHourInputEl.value);
-      chrome.runtime.sendMessage(
-        { type: "NYX_SCRAPE_SAVE_CONFIG", config: { dailyAccountsPerHour: perHour } },
-        (response) => {
-          if (response && response.ok) {
-            latestScrapeConfig = response.config || latestScrapeConfig;
-          }
-        }
-      );
-    }, 600);
-  });
-  // Normalize the field to the stored/clamped value once focus leaves it.
-  dailyPerHourInputEl.addEventListener("blur", () => {
-    dailyPerHourInputEl.value = String(activeAccountsPerHour());
-    lastDailyRenderSignature = "";
-    renderDailyUpdatePanel(latestDailyRows, latestScrapeConfig);
-  });
-}
-document.getElementById("refreshDailyRowsButton").addEventListener("click", () => {
-  document.getElementById("dailyUpdateStatusLine").textContent = "Refreshing daily update rows from SnapBoard...";
-  refreshDailyRowsFromActiveTab((ok, message) => {
-    if (ok) {
-      const count = latestDailyRows.length;
-      document.getElementById("dailyUpdateStatusLine").textContent = count
-        ? `Loaded ${count} SnapBoard row(s) for daily update.`
-        : "No valid AdsPower IDs were found in the visible SnapBoard rows.";
-      return;
-    }
-    document.getElementById("dailyUpdateStatusLine").textContent = message || "Could not refresh daily update rows.";
-  }, true, { force: true, saveToStorage: true });
-});
-document.getElementById("copyDailyUpdateButton").addEventListener("click", async () => {
-  const startId = String(document.getElementById("dailyStartAdspowerIdInput").value || "").trim();
-  const manualTopId = String(document.getElementById("dailyTopAdspowerIdInput").value || "").trim();
-  const stats = getDailyUpdateStats(latestDailyRows, startId, manualTopId, activeAccountsPerHour());
-  const statusLine = document.getElementById("dailyUpdateStatusLine");
-  if (!stats.found) {
-    statusLine.textContent = stats.message || "Daily report is not ready yet.";
-    return;
-  }
-
-  const reportText = buildDailyReportText(stats);
-  try {
-    await navigator.clipboard.writeText(reportText);
-    statusLine.textContent = "Daily report copied.";
-  } catch (error) {
-    statusLine.textContent = "Could not copy daily report.";
-  }
-});
-document.getElementById("saveDailyStartButton").addEventListener("click", saveDailyStartAdspowerId);
-document.getElementById("dailyScrapeButton").addEventListener("click", runDailyRangeScrape);
-document.getElementById("openScrapePageButton").addEventListener("click", openScrapePage);
 document.getElementById("nyxScanAllButton").addEventListener("click", scanAllSnapboardRows);
 document.getElementById("nyxScrapePauseButton").addEventListener("click", () => nyxScrapeRunnerAction("pause", "Pausing scan…", "Scan paused."));
 document.getElementById("nyxScrapeResumeButton").addEventListener("click", () => nyxScrapeRunnerAction("resume", "Resuming scan…", "Scan resumed."));
 document.getElementById("nyxScrapeStopButton").addEventListener("click", () => nyxScrapeRunnerAction("stop", "Stopping scan…", "Scan stopped."));
 document.getElementById("nyxScrapeClearButton").addEventListener("click", clearNyxScrapeData);
 document.getElementById("nyxScrapeOpenPageButton").addEventListener("click", openScrapePage);
-document.getElementById("jumpDailyUpdateButton").addEventListener("click", () => {
-  scrollToPopupSection("dailyUpdateSection");
-});
-
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) {
     flushPopupSettingsSave();
@@ -1456,7 +1348,6 @@ document.addEventListener("visibilitychange", () => {
     connectLiveStatus();
     refreshPopupStatus("Refreshing Nyx queue...", { force: true });
     syncBitmojiShowButtonState();
-    maybeAutoRefreshDailyRows(true);
   }
 });
 
@@ -1727,4 +1618,3 @@ document.getElementById("runnerStatusCard").open = false;
 syncBitmojiShowButtonState();
 renderStoredRunnerStatus();
 connectLiveStatus();
-maybeAutoRefreshDailyRows(true);

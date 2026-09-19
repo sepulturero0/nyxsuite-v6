@@ -93,6 +93,50 @@ class AdsPowerProfileNotOpenError(AdsPowerError):
     flag that pauses the whole queue. See [[core/adspower_cdp.py]]."""
 
 
+ADSPOWER_GUI_ERROR_STAGES = frozenset({
+    "adspower_accessibility_permission_missing",
+    "adspower_window_unavailable",
+    "adspower_profile_not_visible",
+    "adspower_open_click_failed",
+    "adspower_cdp_timeout",
+})
+
+
+def classify_adspower_gui_error(error, default=""):
+    """Map a GUI profile-open error to a stable, user-facing stage."""
+    text = str(error or "").strip().lower()
+    error_name = type(error).__name__.lower() if error is not None else ""
+    for stage in ADSPOWER_GUI_ERROR_STAGES:
+        if stage in text:
+            return stage
+    if "accessibility permission is required" in text or "macosaccessibilitypermissionerror" in error_name:
+        return "adspower_accessibility_permission_missing"
+    if (
+        "macosadspowernotfounderror" in error_name
+        or "adspowerwindownotfounderror" in error_name
+        or "not running" in text
+        or "no accessible adspower window" in text
+        or "window unavailable" in text
+    ):
+        return "adspower_window_unavailable"
+    if (
+        "adspowerprofilenotfounderror" in error_name
+        or "profile does not exist" in text
+        or "profile not visible" in text
+    ):
+        return "adspower_profile_not_visible"
+    if (
+        "adspowercdptimeouterror" in error_name
+        or "could not resolve its cdp endpoint" in text
+        or "cdp endpoint timeout" in text
+        or "browser still launching" in text
+    ):
+        return "adspower_cdp_timeout"
+    if "open click failed" in text or "click open" in text:
+        return "adspower_open_click_failed"
+    return default
+
+
 def _is_permission_error(payload):
     """True when an AdsPower JSON error means 'no Local API permission'."""
     if isinstance(payload, dict):
@@ -530,7 +574,10 @@ class AdsPowerManager:
         return False
 
     def preflight_check(self):
-        """Lightweight auto-connect probe for the AdsPower Local API.
+        """Check AdsPower readiness for the selected control mode.
+
+        GUI mode checks macOS Accessibility/window readiness directly; it does
+        not use the Local API or desktop HTTP ports as its readiness signal.
 
         Hits the keyless root ``/status`` endpoint — the canonical "is AdsPower
         up" check — across the host candidates (127.0.0.1, local.adspower.net,
@@ -552,11 +599,23 @@ class AdsPowerManager:
             self._respect_rate_limit()
             last_error = None
 
-            if self._is_gui_control_mode() and self._desktop_app_http_running(timeout=2):
+            if self._is_gui_control_mode():
+                try:
+                    self._ui_controller().preflight_check()
+                except Exception as exc:
+                    stage = classify_adspower_gui_error(
+                        exc,
+                        default="adspower_window_unavailable",
+                    )
+                    return {
+                        "ok": False,
+                        "code": stage,
+                        "message": f"AdsPower GUI preflight failed ({stage}): {exc}",
+                    }
                 return {
                     "ok": True,
                     "code": "ok",
-                    "message": "AdsPower desktop app OK (GUI control mode selected).",
+                    "message": "AdsPower Accessibility permission and GUI window are available.",
                 }
 
             for host in self._iter_hosts():
@@ -713,23 +772,48 @@ class AdsPowerManager:
     def _open_profile_via_gui_first(self, profile_id):
         """GUI-selected mode: skip /browser/start and open through AdsPower UI."""
         endpoint = ""
+        browser_started = False
+
+        def _on_browser_started(port):
+            nonlocal browser_started
+            if browser_started:
+                return
+            browser_started = True
+            logger.info(
+                f"AdsPower browser process started for profile {profile_id}; CDP port={port}."
+            )
         try:
             from core.adspower_cdp import find_open_profile_cdp_endpoint
 
-            endpoint = find_open_profile_cdp_endpoint(profile_id, session=self.session)
+            endpoint = find_open_profile_cdp_endpoint(
+                profile_id,
+                session=self.session,
+                on_browser_started=_on_browser_started,
+            )
         except Exception as scan_error:
             logger.debug(f"GUI control mode CDP scan failed for {profile_id}: {scan_error}")
 
         if endpoint:
             self._cdp_fallback_profiles.add(str(profile_id))
-            logger.info(f"Attached to already-open AdsPower profile {profile_id} in GUI control mode: {endpoint}")
+            logger.info(
+                f"CDP endpoint resolved for already-open AdsPower profile {profile_id} "
+                f"in GUI control mode: {endpoint}"
+            )
             return endpoint
 
         ui_error_text = ""
+        ui_error_stage = ""
         try:
             endpoint = self._ui_controller().open_profile_by_id(profile_id)
         except Exception as ui_error:
-            logger.error(f"AdsPower GUI open failed for {profile_id} in GUI control mode: {ui_error}")
+            ui_error_stage = classify_adspower_gui_error(
+                ui_error,
+                default="adspower_open_click_failed",
+            )
+            logger.error(
+                f"AdsPower GUI open failed for {profile_id} in GUI control mode; "
+                f"stage={ui_error_stage}: {ui_error}"
+            )
             ui_error_text = str(ui_error)
             endpoint = ""
 
@@ -741,7 +825,8 @@ class AdsPowerManager:
         raise AdsPowerProfileNotOpenError(
             f"GUI control mode is selected, but profile {profile_id} could not be opened "
             f"through the AdsPower desktop app. Make sure AdsPower is open and visible. "
-            f"(UI error: {ui_error_text or 'n/a'})"
+            f"(stage: {ui_error_stage or 'adspower_open_click_failed'}; "
+            f"UI error: {ui_error_text or 'n/a'})"
         )
 
     def _open_profile_via_cdp_fallback(self, profile_id, api_error):

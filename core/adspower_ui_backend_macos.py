@@ -281,6 +281,28 @@ class MacOSAdsPowerBackend:
             return "Python"
         return name or "Python or Nyx Suite"
 
+    def preflight_check(self) -> bool:
+        """Verify Accessibility trust and an accessible AdsPower window.
+
+        This deliberately does not foreground the app: preflight should report
+        readiness without stealing focus from the user's current window.
+        """
+        if not self._ax_is_trusted(prompt=False):
+            raise MacOSAccessibilityPermissionError(self._accessibility_app_name())
+        app = self._find_adspower_app()
+        if app is None:
+            raise MacOSAdsPowerNotFoundError(
+                "AdsPower Global is not running. Launch AdsPower and sign in."
+            )
+        app_ref = self._as.AXUIElementCreateApplication(int(app.processIdentifier()))
+        self.set_attr(app_ref, "AXManualAccessibility", True)
+        windows = self.attr(app_ref, "AXWindows") or []
+        if self._choose_window(windows) is None:
+            raise MacOSAdsPowerNotFoundError(
+                "AdsPower Global is running, but no accessible AdsPower window was found."
+            )
+        return True
+
     def connect(self) -> MacOSControl:
         self._attr_cache = {}
         if self._cached_window_is_usable():
