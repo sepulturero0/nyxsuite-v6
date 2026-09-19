@@ -71,6 +71,35 @@ class DeveloperSettingsTests(unittest.TestCase):
         self.assertEqual(device_fleet.HEARTBEAT_INTERVAL_SECONDS, 300.0)
         self.assertEqual(device_fleet.ACTIVE_WINDOW_SECONDS, 660.0)
 
+    def test_device_fleet_enrollment_does_not_need_an_existing_token(self):
+        with mock.patch.object(device_fleet, "_request_json", return_value={
+                    "ok": True,
+                    "device_token": "device-only-token",
+                }) as request:
+            result = device_fleet.enroll_device({"fleet_api_url": "https://fleet.example"}, version="6.7.16")
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["device_token"], "device-only-token")
+        self.assertEqual(request.call_args.kwargs["require_token"], False)
+
+    def test_bridge_stores_auto_enrolled_device_token(self):
+        app = bridge_app.BridgeApp()
+        configured = {"device_heartbeat_enabled": True, "fleet_token": "device-only-token"}
+        with mock.patch.object(bridge_app, "load_developer_settings", return_value={
+                    "device_heartbeat_enabled": True,
+                    "fleet_token": "",
+                }), \
+                mock.patch.object(bridge_app, "enroll_device", return_value={
+                    "ok": True,
+                    "device_token": "device-only-token",
+                }), \
+                mock.patch.object(bridge_app, "save_developer_settings", return_value=configured) as save:
+            settings, error = app._fleet_settings_with_enrollment(version="6.7.16")
+
+        self.assertIsNone(error)
+        self.assertEqual(settings["fleet_token"], "device-only-token")
+        save.assert_called_once_with({"fleet_token": "device-only-token"})
+
     def test_settings_require_fixed_pin_session_before_read_or_save(self):
         app = bridge_app.BridgeApp()
         self.assertTrue(app._action_developer_settings({})["locked"])

@@ -74,17 +74,17 @@ def _join_url(base_url, path):
     return base + "/" + path.lstrip("/")
 
 
-def _request_json(method, base_url, path, token, payload=None):
+def _request_json(method, base_url, path, token, payload=None, require_token=True):
     url = _join_url(base_url, path)
     if not url:
         return {"ok": False, "error": "Fleet API URL is not configured."}
-    if not str(token or "").strip():
+    token = str(token or "").strip()
+    if require_token and not token:
         return {"ok": False, "error": "Fleet token is not configured."}
     data = None
-    headers = {
-        "Content-Type": "application/json",
-        "X-NyxSuite-Fleet-Token": str(token or "").strip(),
-    }
+    headers = {"Content-Type": "application/json"}
+    if token:
+        headers["X-NyxSuite-Fleet-Token"] = token
     if payload is not None:
         data = json.dumps(payload).encode("utf-8")
     request = urllib.request.Request(url, data=data, headers=headers, method=method)
@@ -111,6 +111,23 @@ def _request_json(method, base_url, path, token, payload=None):
     if not isinstance(body, dict):
         return {"ok": False, "error": "Fleet API returned an unexpected response."}
     return body
+
+
+def enroll_device(settings, version=""):
+    """Request a write-only per-device fleet credential without an admin token."""
+    payload = build_heartbeat_payload(settings, version=version)
+    result = _request_json(
+        "POST",
+        (settings or {}).get("fleet_api_url"),
+        "enroll",
+        "",
+        payload=payload,
+        require_token=False,
+    )
+    device_token = str(result.get("device_token") or "").strip()
+    if result.get("ok") and not device_token:
+        return {"ok": False, "error": "Fleet enrollment did not return a device credential."}
+    return result
 
 
 def send_heartbeat(settings, version=""):

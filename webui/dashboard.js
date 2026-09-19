@@ -382,6 +382,8 @@ function showWhatsNew(notice, fallbackVersion, force = false) {
 }
 
 function requestWhatsNewNotice(version) {
+  // The version-scoped key makes the notice automatic for every newly
+  // installed release, while preventing repeated popups during reconnects.
   const normalizedVersion = normalizeReleaseVersion(version);
   if (!normalizedVersion || state.whatsNew.loadedVersion === normalizedVersion) return;
   state.whatsNew.loadedVersion = normalizedVersion;

@@ -7,6 +7,16 @@ The dashboard updater reads `update_config.json`, calls GitHub Releases for that
 repo, and downloads the newest non-draft release asset matching
 `NyxSuite-v*.zip`.
 
+## NyxSuite v6.8.0
+
+- The dashboard now automatically opens the bundled What's New release notes
+  after each newly installed version, with the notes still available from
+  Settings.
+- Release packaging and update handling now keep the installed version,
+  bundled notes, and update workflow aligned more reliably.
+- Added focused regression coverage for the per-version release-notice
+  behavior and workflow reliability.
+
 ## NyxSuite v6.7.16
 
 - Added Dashboard Daily Report, Proxy Ranking reset, and version-aware What's

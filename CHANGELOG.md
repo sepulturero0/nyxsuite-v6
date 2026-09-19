@@ -1,5 +1,15 @@
 # Changelog
 
+## 6.8.0 - Release notes and workflow resilience
+
+- The dashboard now automatically opens the bundled What's New release notes
+  after each newly installed version, while keeping the notes available from
+  Settings.
+- Release packaging and update handling now keep the installed version,
+  bundled notes, and update workflow aligned more reliably.
+- Added focused coverage for the per-version release-notice behavior and the
+  latest workflow reliability improvements.
+
 ## 6.7.16 - Dashboard and workflow resilience
 
 - Added a full Dashboard Daily Report workspace, a Proxy Ranking reset action,

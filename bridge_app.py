@@ -36,7 +36,12 @@ from core.developer_settings import (
     public_developer_settings,
     save_developer_settings,
 )
-from core.device_fleet import HEARTBEAT_INTERVAL_SECONDS, fetch_devices, send_heartbeat
+from core.device_fleet import (
+    HEARTBEAT_INTERVAL_SECONDS,
+    enroll_device,
+    fetch_devices,
+    send_heartbeat,
+)
 from core.agent_token import get_or_create_token
 from core.process_utils import ensure_logs_dir
 from core.runner_lock import RunnerLock
@@ -280,10 +285,26 @@ class BridgeApp:
             return {"ok": False, "error": "Developer PIN required.", "locked": True}
         return fetch_devices(load_developer_settings())
 
+    def _fleet_settings_with_enrollment(self, version=""):
+        settings = load_developer_settings()
+        if not bool(settings.get("device_heartbeat_enabled")) or str(settings.get("fleet_token") or "").strip():
+            return settings, None
+        enrollment = enroll_device(settings, version=version)
+        if not enrollment.get("ok"):
+            return settings, enrollment
+        device_token = str(enrollment.get("device_token") or "").strip()
+        if not device_token:
+            return settings, {"ok": False, "error": "Fleet enrollment did not return a device credential."}
+        settings = save_developer_settings({"fleet_token": device_token})
+        return settings, None
+
     def _action_device_fleet_ping(self, payload=None) -> dict:
         if not self._developer_session_valid(payload):
             return {"ok": False, "error": "Developer PIN required.", "locked": True}
-        return send_heartbeat(load_developer_settings(), version=self._version())
+        settings, enrollment_error = self._fleet_settings_with_enrollment(version=self._version())
+        if enrollment_error:
+            return enrollment_error
+        return send_heartbeat(settings, version=self._version())
 
     def _bridge_settings_snapshot(self) -> dict:
         return {
@@ -352,9 +373,9 @@ class BridgeApp:
         def loop():
             while not self._stop.is_set():
                 try:
-                    settings = load_developer_settings()
+                    settings, enrollment_error = self._fleet_settings_with_enrollment(version=self._version())
                     if bool(settings.get("device_heartbeat_enabled")):
-                        result = send_heartbeat(settings, version=self._version())
+                        result = enrollment_error or send_heartbeat(settings, version=self._version())
                         if result.get("ok"):
                             log("Device fleet heartbeat sent.")
                         elif not result.get("skipped"):

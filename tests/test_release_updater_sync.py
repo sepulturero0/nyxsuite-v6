@@ -6,6 +6,15 @@ from core import release_updater
 ROOT = Path(__file__).resolve().parents[1]
 
 
+def test_dashboard_opens_whats_new_once_for_each_installed_version():
+    dashboard = (ROOT / "webui" / "dashboard.js").read_text(encoding="utf-8")
+
+    assert 'const WHATS_NEW_STORAGE_PREFIX = "nyxsuite-whats-new-seen:";' in dashboard
+    assert "if (versionChanged) requestWhatsNewNotice(bridgeVersion);" in dashboard
+    assert "state.whatsNew.loadedVersion === normalizedVersion" in dashboard
+    assert "markWhatsNewSeen(version);" in dashboard
+
+
 def test_empty_staged_agent_host_does_not_wipe_installed_bridge_files(tmp_path):
     staging = tmp_path / "staging"
     install = tmp_path / "install"
